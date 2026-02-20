@@ -3,7 +3,7 @@ const fs = require('fs');
 const path = require('path');
 const { pool } = require('../src/database/pool');
 
-const seedsPath = path.join(__dirname, '../src/database/seeds');
+const seedsPath = path.join(__dirname, '../src/database/seeders');
 
 async function runSeeds() {
   try {
