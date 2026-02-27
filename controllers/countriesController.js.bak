@@ -1,0 +1,290 @@
+// controllers/countriesController.js
+const sequelize = require('../config/db');
+const { QueryTypes } = require('sequelize');
+const path = require('path');
+const fs = require('fs');
+
+// ==================== PUBLIC METHODS ====================
+
+/**
+ * Get all countries
+ */
+const getAll = async (req, res) => {
+    try {
+        const countries = await sequelize.query(
+            'SELECT * FROM countries ORDER BY name',
+            { type: QueryTypes.SELECT }
+        );
+        res.json(countries);
+    } catch (error) {
+        console.error('Error in getAll:', error);
+        res.status(500).json({ error: 'Failed to fetch countries' });
+    }
+};
+
+/**
+ * Get featured countries
+ */
+const getFeatured = async (req, res) => {
+    try {
+        const countries = await sequelize.query(
+            'SELECT * FROM countries WHERE is_featured = true ORDER BY name LIMIT 6',
+            { type: QueryTypes.SELECT }
+        );
+        res.json(countries);
+    } catch (error) {
+        console.error('Error in getFeatured:', error);
+        res.status(500).json({ error: 'Failed to fetch featured countries' });
+    }
+};
+
+/**
+ * Get single country by ID or slug
+ */
+const getOne = async (req, res) => {
+    try {
+        const { idOrSlug } = req.params;
+        
+        // Check if it's a number (ID) or string (slug)
+        const isId = /^\d+$/.test(idOrSlug);
+        
+        let query;
+        if (isId) {
+            query = 'SELECT * FROM countries WHERE id = $1';
+        } else {
+            query = 'SELECT * FROM countries WHERE slug = $1';
+        }
+        
+        const country = await sequelize.query(query, {
+            bind: [idOrSlug],
+            type: QueryTypes.SELECT
+        });
+        
+        if (country.length === 0) {
+            return res.status(404).json({ error: 'Country not found' });
+        }
+        
+        res.json(country[0]);
+    } catch (error) {
+        console.error('Error in getOne:', error);
+        res.status(500).json({ error: 'Failed to fetch country' });
+    }
+};
+
+/**
+ * Get destinations in a country
+ */
+const getDestinations = async (req, res) => {
+    try {
+        const { idOrSlug } = req.params;
+        
+        // First get the country ID
+        const isId = /^\d+$/.test(idOrSlug);
+        let countryId;
+        
+        if (isId) {
+            countryId = idOrSlug;
+        } else {
+            const country = await sequelize.query(
+                'SELECT id FROM countries WHERE slug = $1',
+                { 
+                    bind: [idOrSlug],
+                    type: QueryTypes.SELECT 
+                }
+            );
+            
+            if (country.length === 0) {
+                return res.status(404).json({ error: 'Country not found' });
+            }
+            countryId = country[0].id;
+        }
+        
+        const destinations = await sequelize.query(
+            'SELECT * FROM destinations WHERE country_id = $1 ORDER BY name',
+            { 
+                bind: [countryId],
+                type: QueryTypes.SELECT 
+            }
+        );
+        
+        res.json(destinations);
+    } catch (error) {
+        console.error('Error in getDestinations:', error);
+        res.status(500).json({ error: 'Failed to fetch destinations' });
+    }
+};
+
+// ==================== ADMIN METHODS ====================
+
+/**
+ * Create new country
+ */
+const create = async (req, res) => {
+    try {
+        const { name, code, continent, description, is_featured } = req.body;
+        
+        // Generate slug from name
+        const slug = name.toLowerCase()
+            .replace(/[^\w\s]/gi, '')
+            .replace(/\s+/g, '-');
+        
+        // Handle image upload
+        let image_url = null;
+        if (req.file) {
+            image_url = `/uploads/countries/${req.file.filename}`;
+        }
+        
+        const result = await sequelize.query(
+            `INSERT INTO countries (name, slug, code, continent, description, image_url, is_featured) 
+             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+            {
+                bind: [name, slug, code, continent, description, image_url, is_featured || false],
+                type: QueryTypes.INSERT
+            }
+        );
+        
+        res.status(201).json(result[0][0]);
+    } catch (error) {
+        console.error('Error in create:', error);
+        res.status(500).json({ error: 'Failed to create country' });
+    }
+};
+
+/**
+ * Update country
+ */
+const update = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { name, code, continent, description, is_featured } = req.body;
+        
+        // Build update query
+        let updates = [];
+        let values = [];
+        let paramIndex = 1;
+        
+        if (name) {
+            updates.push(`name = $${paramIndex}`);
+            values.push(name);
+            paramIndex++;
+            
+            // Update slug
+            const slug = name.toLowerCase()
+                .replace(/[^\w\s]/gi, '')
+                .replace(/\s+/g, '-');
+            updates.push(`slug = $${paramIndex}`);
+            values.push(slug);
+            paramIndex++;
+        }
+        
+        if (code) {
+            updates.push(`code = $${paramIndex}`);
+            values.push(code);
+            paramIndex++;
+        }
+        
+        if (continent) {
+            updates.push(`continent = $${paramIndex}`);
+            values.push(continent);
+            paramIndex++;
+        }
+        
+        if (description !== undefined) {
+            updates.push(`description = $${paramIndex}`);
+            values.push(description);
+            paramIndex++;
+        }
+        
+        if (is_featured !== undefined) {
+            updates.push(`is_featured = $${paramIndex}`);
+            values.push(is_featured);
+            paramIndex++;
+        }
+        
+        if (req.file) {
+            const image_url = `/uploads/countries/${req.file.filename}`;
+            updates.push(`image_url = $${paramIndex}`);
+            values.push(image_url);
+            paramIndex++;
+        }
+        
+        updates.push(`updated_at = CURRENT_TIMESTAMP`);
+        
+        if (updates.length === 1) { // Only updated_at
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        
+        values.push(id);
+        
+        const result = await sequelize.query(
+            `UPDATE countries SET ${updates.join(', ')} WHERE id = $${paramIndex} RETURNING *`,
+            {
+                bind: values,
+                type: QueryTypes.UPDATE
+            }
+        );
+        
+        if (result[1] === 0) {
+            return res.status(404).json({ error: 'Country not found' });
+        }
+        
+        res.json(result[0][0]);
+    } catch (error) {
+        console.error('Error in update:', error);
+        res.status(500).json({ error: 'Failed to update country' });
+    }
+};
+
+/**
+ * Delete country
+ */
+const remove = async (req, res) => {
+    try {
+        const { id } = req.params;
+        
+        // Get country to delete image
+        const country = await sequelize.query(
+            'SELECT image_url FROM countries WHERE id = $1',
+            { 
+                bind: [id],
+                type: QueryTypes.SELECT 
+            }
+        );
+        
+        const result = await sequelize.query(
+            'DELETE FROM countries WHERE id = $1 RETURNING *',
+            {
+                bind: [id],
+                type: QueryTypes.DELETE
+            }
+        );
+        
+        if (result[1] === 0) {
+            return res.status(404).json({ error: 'Country not found' });
+        }
+        
+        // Delete image file if exists
+        if (country.length > 0 && country[0].image_url) {
+            const imagePath = path.join(__dirname, '..', country[0].image_url);
+            if (fs.existsSync(imagePath)) {
+                fs.unlinkSync(imagePath);
+            }
+        }
+        
+        res.json({ message: 'Country deleted successfully' });
+    } catch (error) {
+        console.error('Error in remove:', error);
+        res.status(500).json({ error: 'Failed to delete country' });
+    }
+};
+
+// EXPORT ALL METHODS - THIS IS CRITICAL!
+module.exports = {
+    getAll,
+    getFeatured,
+    getOne,
+    getDestinations,
+    create,
+    update,
+    remove
+};
