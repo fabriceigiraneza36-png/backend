@@ -8,14 +8,40 @@ const toNumber = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
-const serializeDestination = (row) => ({
-  ...row,
-  countryId: row.country_slug || row.country_id,
-  mapPosition: {
-    lat: toNumber(row.latitude),
-    lng: toNumber(row.longitude),
-  },
-});
+const normalizeImageUrls = (value) => {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.filter(Boolean);
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+      } catch {
+        return [];
+      }
+    }
+    return trimmed.split(",").map((v) => v.trim()).filter(Boolean);
+  }
+  return [];
+};
+
+const serializeDestination = (row) => {
+  const imageUrls = normalizeImageUrls(row.image_urls);
+  const resolvedImageUrls = imageUrls.length ? imageUrls : (row.image_url ? [row.image_url] : []);
+
+  return {
+    ...row,
+    image_urls: resolvedImageUrls,
+    primary_image_url: resolvedImageUrls[0] || null,
+    countryId: row.country_slug || row.country_id,
+    mapPosition: {
+      lat: toNumber(row.latitude),
+      lng: toNumber(row.longitude),
+    },
+  };
+};
 
 const resolveCountryDbId = async (countryIdOrSlug) => {
   if (countryIdOrSlug === null || countryIdOrSlug === undefined || countryIdOrSlug === "") {
@@ -129,13 +155,13 @@ exports.getMapData = async (req, res, next) => {
   try {
     const result = await query(
       `SELECT d.id, d.name, d.slug, d.latitude, d.longitude, d.category,
-              d.image_url, d.short_description, d.rating,
+              d.image_url, d.image_urls, d.short_description, d.rating,
               c.name AS country_name
        FROM destinations d
        LEFT JOIN countries c ON d.country_id = c.id
        WHERE d.is_active = true AND d.latitude IS NOT NULL`
     );
-    res.json({ data: result.rows });
+    res.json({ data: result.rows.map(serializeDestination) });
   } catch (err) {
     next(err);
   }
@@ -164,8 +190,18 @@ exports.getOne = async (req, res, next) => {
       "SELECT * FROM destination_images WHERE destination_id = $1 ORDER BY sort_order",
       [result.rows[0].id]
     );
+    const serialized = serializeDestination(result.rows[0]);
+    const fallbackImages = serialized.image_urls.map((imageUrl, index) => ({
+      id: `arr-${serialized.id}-${index + 1}`,
+      destination_id: serialized.id,
+      image_url: imageUrl,
+      thumbnail_url: null,
+      caption: `${serialized.name} image ${index + 1}`,
+      is_primary: index === 0,
+      sort_order: index + 1,
+    }));
 
-    res.json({ data: { ...serializeDestination(result.rows[0]), images: images.rows } });
+    res.json({ data: { ...serialized, images: images.rows.length ? images.rows : fallbackImages } });
   } catch (err) {
     next(err);
   }
@@ -180,8 +216,16 @@ exports.create = async (req, res, next) => {
     } = req.body;
 
     const slug = slugify(name);
-    const image_url = req.file ? getUploadedFileUrl(req.file) : req.body.image_url || null;
-
+    const uploadedImage = req.file ? getUploadedFileUrl(req.file) : null;
+    const bodyImageUrls = normalizeImageUrls(req.body.image_urls);
+    let image_urls = uploadedImage
+      ? [uploadedImage, ...bodyImageUrls.filter((url) => url !== uploadedImage)]
+      : bodyImageUrls;
+    if (!image_urls.length && req.body.image_url) {
+      image_urls = [req.body.image_url];
+    }
+    const image_url = image_urls[0] || null;
+    
     if (!country_id) {
       return res.status(400).json({ error: "country_id is required. Every location must belong to a country." });
     }
@@ -192,13 +236,13 @@ exports.create = async (req, res, next) => {
 
     const result = await query(
       `INSERT INTO destinations
-       (country_id, name, slug, description, short_description, image_url,
-        category, latitude, longitude, rating, duration, difficulty, 
+       (country_id, name, slug, description, short_description, image_url, image_urls,
+        category, latitude, longitude, rating, duration, difficulty,
         highlights, best_season, is_featured)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
        RETURNING *`,
-      [resolvedCountryId, name, slug, description, short_description, image_url,
-       category, latitude, longitude,       rating || 0, duration, difficulty,
+      [resolvedCountryId, name, slug, description, short_description, image_url, image_urls,
+       category, latitude, longitude, rating || 0, duration, difficulty,
        highlights ? (Array.isArray(highlights) ? highlights : JSON.parse(highlights)) : null,
        best_season, is_featured || false]
     );
@@ -226,7 +270,17 @@ exports.update = async (req, res, next) => {
     const fields = { ...req.body };
 
     if (fields.name) fields.slug = slugify(fields.name);
-    if (req.file) fields.image_url = getUploadedFileUrl(req.file);
+    if (req.file) {
+      const uploadedImage = getUploadedFileUrl(req.file);
+      fields.image_url = uploadedImage;
+      const inputUrls = normalizeImageUrls(fields.image_urls);
+      fields.image_urls = [uploadedImage, ...inputUrls.filter((url) => url !== uploadedImage)];
+    } else if (Object.prototype.hasOwnProperty.call(fields, "image_urls")) {
+      fields.image_urls = normalizeImageUrls(fields.image_urls);
+      fields.image_url = fields.image_urls[0] || null;
+    } else if (fields.image_url) {
+      fields.image_urls = [fields.image_url];
+    }
     if (fields.highlights && typeof fields.highlights === "string") {
       fields.highlights = JSON.parse(fields.highlights);
     }
@@ -241,7 +295,7 @@ exports.update = async (req, res, next) => {
       }
       fields.country_id = resolvedCountryId;
     }
-
+    
     const keys = Object.keys(fields);
     if (keys.length === 0) return res.status(400).json({ error: "No fields to update" });
 
@@ -305,14 +359,24 @@ exports.addImages = async (req, res, next) => {
     }
 
     const images = [];
+    const imageUrls = [];
     for (let i = 0; i < req.files.length; i++) {
+      const imageUrl = getUploadedFileUrl(req.files[i]);
       const result = await query(
         `INSERT INTO destination_images (destination_id, image_url, sort_order)
          VALUES ($1, $2, $3) RETURNING *`,
-        [id, getUploadedFileUrl(req.files[i]), i]
+        [id, imageUrl, i + 1]
       );
       images.push(result.rows[0]);
+      imageUrls.push(imageUrl);
     }
+    await query(
+      `UPDATE destinations
+       SET image_urls = COALESCE(image_urls, ARRAY[]::TEXT[]) || $2::TEXT[],
+           image_url = COALESCE(image_url, ($2::TEXT[])[1])
+       WHERE id = $1`,
+      [id, imageUrls]
+    );
 
     res.status(201).json({ data: images });
   } catch (err) {
@@ -329,8 +393,22 @@ exports.removeImage = async (req, res, next) => {
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Image not found" });
     }
+    const deletedImage = result.rows[0];
+    await query(
+      `UPDATE destinations
+       SET image_urls = array_remove(COALESCE(image_urls, ARRAY[]::TEXT[]), $2)
+       WHERE id = $1`,
+      [deletedImage.destination_id, deletedImage.image_url]
+    );
+    await query(
+      `UPDATE destinations
+       SET image_url = image_urls[1]
+       WHERE id = $1`,
+      [deletedImage.destination_id]
+    );
     res.json({ message: "Image deleted" });
   } catch (err) {
     next(err);
   }
 };
+

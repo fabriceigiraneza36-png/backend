@@ -162,7 +162,7 @@ const normalizeCreatePayload = (req) => {
     payload.video_url,
     payload.panorama_url
   );
-
+  
   return payload;
 };
 
@@ -203,7 +203,7 @@ const normalizeUpdatePayload = (req) => {
       payload.panorama_url || null
     );
   }
-
+  
   return payload;
 };
 
@@ -637,3 +637,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

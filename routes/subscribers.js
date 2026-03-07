@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const ctrl = require("../controllers/subscribersController");
-const { authenticate, authorize } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 const { contactLimiter } = require("../middleware/rateLimiter");
 const asyncHandler = require("../middleware/asyncHandler");
 
@@ -20,13 +20,13 @@ router.get("/unsubscribe/:email", asyncHandler(ctrl.unsubscribe));
 // ═══════════════════════════════════════════════════
 
 // Get all subscribers
-router.get("/", authenticate, authorize("admin"), asyncHandler(ctrl.getAll));
+router.get("/", protect, adminOnly, asyncHandler(ctrl.getAll));
 
 // Delete subscriber
 router.delete(
   "/:id",
-  authenticate,
-  authorize("admin"),
+  protect,
+  adminOnly,
   asyncHandler(ctrl.remove)
 );
 

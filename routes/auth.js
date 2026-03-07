@@ -14,6 +14,7 @@ const { validateEmail, validateName } = require("../utils/validators");
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
+const unifiedAuthController = require("../controllers/usersController");
 
 // ═══════════════════════════════════════════════════
 // HELPER: Generate JWT Token
@@ -458,68 +459,7 @@ router.delete("/me", protect, asyncHandler(async (req, res) => {
 router.post(
   "/google",
   authLimiter,
-  asyncHandler(async (req, res) => {
-    const { credential } = req.body;
-    
-    if (!credential) {
-      return res.status(400).json({
-        success: false,
-        error: "Google credential is required.",
-      });
-    }
-
-    try {
-      const { OAuth2Client } = require('google-auth-library');
-      const client = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
-      
-      const ticket = await client.verifyIdToken({
-        idToken: credential,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-      
-      const payload = ticket.getPayload();
-      const email = payload.email;
-      const fullName = payload.name;
-      const avatar = payload.picture;
-
-      let user = await User.findOne({ 
-        where: { email: email.toLowerCase() } 
-      });
-      
-      if (!user) {
-        user = await User.create({
-          email: email.toLowerCase(),
-          fullName,
-          avatar,
-          isVerified: true,
-          authProvider: 'google'
-        });
-      }
-
-      const token = generateToken(user.id);
-
-      res.json({
-        success: true,
-        message: "Google authentication successful!",
-        data: {
-          token,
-          user: {
-            id: user.id,
-            email: user.email,
-            fullName: user.fullName,
-            avatar: user.avatar,
-            role: user.role,
-            isVerified: user.isVerified,
-          },
-        },
-      });
-    } catch (error) {
-      return res.status(401).json({
-        success: false,
-        error: "Invalid Google credential.",
-      });
-    }
-  })
+  unifiedAuthController.googleAuth
 );
 
 // ═══════════════════════════════════════════════════
@@ -529,98 +469,7 @@ router.post(
 router.post(
   "/github",
   authLimiter,
-  asyncHandler(async (req, res) => {
-    const { code } = req.body;
-    
-    if (!code) {
-      return res.status(400).json({
-        success: false,
-        error: "GitHub code is required.",
-      });
-    }
-
-    try {
-      const tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        },
-        body: JSON.stringify({
-          client_id: process.env.GITHUB_CLIENT_ID,
-          client_secret: process.env.GITHUB_CLIENT_SECRET,
-          code,
-        }),
-      });
-      
-      const tokenData = await tokenResponse.json();
-      
-      if (tokenData.error) {
-        throw new Error(tokenData.error_description || 'GitHub authentication failed');
-      }
-
-      const userResponse = await fetch('https://api.github.com/user', {
-        headers: {
-          'Authorization': `Bearer ${tokenData.access_token}`,
-        },
-      });
-      
-      const githubUser = await userResponse.json();
-      
-      let email = githubUser.email;
-      if (!email) {
-        const emailsResponse = await fetch('https://api.github.com/user/emails', {
-          headers: {
-            'Authorization': `Bearer ${tokenData.access_token}`,
-          },
-        });
-        const emails = await emailsResponse.json();
-        const primaryEmail = emails.find(e => e.primary && e.verified);
-        email = primaryEmail?.email;
-      }
-
-      if (!email) {
-        throw new Error('Unable to fetch email from GitHub');
-      }
-
-      let user = await User.findOne({ 
-        where: { email: email.toLowerCase() } 
-      });
-      
-      if (!user) {
-        user = await User.create({
-          email: email.toLowerCase(),
-          fullName: githubUser.name || githubUser.login,
-          avatar: githubUser.avatar_url,
-          isVerified: true,
-          authProvider: 'github'
-        });
-      }
-
-      const token = generateToken(user.id);
-
-      res.json({
-        success: true,
-        message: "GitHub authentication successful!",
-        data: {
-          token,
-          user: {
-            id: user.id,
-            email: user.email,
-            fullName: user.fullName,
-            avatar: user.avatar,
-            role: user.role,
-            isVerified: user.isVerified,
-          },
-        },
-      });
-    } catch (error) {
-      return res.status(401).json({
-        success: false,
-        error: error.message || "GitHub authentication failed.",
-      });
-    }
-  })
+  unifiedAuthController.githubAuth
 );
 
 // ═══════════════════════════════════════════════════

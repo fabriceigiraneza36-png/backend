@@ -41,7 +41,7 @@ exports.getOne = async (req, res, next) => {
 exports.create = async (req, res, next) => {
   try {
     const { title, description, short_description, icon, image_url, features, is_featured, sort_order } = req.body;
-    const slug = slugify(title);
+        const slug = slugify(title);
     const result = await query(
       `INSERT INTO services (title, slug, description, short_description, icon, image_url, features, is_featured, sort_order)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
@@ -59,7 +59,7 @@ exports.update = async (req, res, next) => {
   try {
     const { id } = req.params;
     const fields = { ...req.body };
-    if (fields.title) fields.slug = slugify(fields.title);
+        if (fields.title) fields.slug = slugify(fields.title);
     if (fields.features && typeof fields.features === "string") fields.features = JSON.parse(fields.features);
 
     const keys = Object.keys(fields);
@@ -88,3 +88,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

@@ -37,3 +37,10 @@ exports.bookingLimiter = rateLimit({
   max: 5,
   message: "Too many booking requests. Please try again later.",
 });
+
+// Upload endpoints
+exports.uploadLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000,
+  max: 20,
+  message: "Too many uploads. Please try again later.",
+});

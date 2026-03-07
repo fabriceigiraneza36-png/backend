@@ -26,7 +26,7 @@ exports.create = async (req, res, next) => {
   try {
     const { name, role, bio, email, phone, social_links, sort_order } = req.body;
     const image_url = req.file ? getUploadedFileUrl(req.file) : req.body.image_url || null;
-
+    
     const result = await query(
       `INSERT INTO team_members (name, role, bio, image_url, email, phone, social_links, sort_order)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
@@ -45,7 +45,7 @@ exports.update = async (req, res, next) => {
     const { id } = req.params;
     const fields = { ...req.body };
     if (req.file) fields.image_url = getUploadedFileUrl(req.file);
-    if (fields.social_links && typeof fields.social_links === "object") {
+        if (fields.social_links && typeof fields.social_links === "object") {
       fields.social_links = JSON.stringify(fields.social_links);
     }
 
@@ -75,3 +75,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

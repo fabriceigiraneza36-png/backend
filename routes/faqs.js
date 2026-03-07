@@ -1,30 +1,12 @@
 const router = require("express").Router();
-const ctrl = require("../controllers/faqsController");
-const { authenticate, authorize } = require("../middleware/auth");
-const asyncHandler = require("../middleware/asyncHandler");
-const { cacheMiddleware } = require("../middleware/cache");
+const faqs = require("../controllers/faqsController");
+const { protect, adminOnly } = require("../middleware/auth");
 
-// ═══════════════════════════════════════════════════
-// PUBLIC ROUTES
-// ═══════════════════════════════════════════════════
-
-// Get all FAQs
-router.get("/", cacheMiddleware(600), asyncHandler(ctrl.getAll));
-
-// Get FAQ categories
-router.get("/categories", cacheMiddleware(600), asyncHandler(ctrl.getCategories));
-
-// ═══════════════════════════════════════════════════
-// ADMIN ROUTES
-// ═══════════════════════════════════════════════════
-
-// Create FAQ
-router.post("/", authenticate, authorize("admin"), asyncHandler(ctrl.create));
-
-// Update FAQ
-router.put("/:id", authenticate, authorize("admin"), asyncHandler(ctrl.update));
-
-// Delete FAQ
-router.delete("/:id", authenticate, authorize("admin"), asyncHandler(ctrl.remove));
+router.get("/", faqs.getAll);
+router.get("/:id", faqs.getOne);
+router.post("/", protect, adminOnly, faqs.create);
+router.put("/:id", protect, adminOnly, faqs.update);
+router.delete("/:id", protect, adminOnly, faqs.remove);
 
 module.exports = router;
+

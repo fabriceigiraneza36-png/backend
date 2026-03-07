@@ -201,7 +201,7 @@ exports.create = async (req, res, next) => {
     const slug = slugify(name);
     const uploadedImage = req.file ? getUploadedFileUrl(req.file) : null;
     const finalImageUrl = uploadedImage || image_url || null;
-
+    
     const result = await query(
       `INSERT INTO countries
        (name, slug, description, short_description, image_url, cover_image_url, flag_url,
@@ -253,7 +253,7 @@ exports.update = async (req, res, next) => {
     if (req.file) {
       updates.image_url = getUploadedFileUrl(req.file);
     }
-
+    
     const keys = Object.keys(updates);
     if (keys.length === 0) {
       return res.status(400).json({ error: "No fields to update." });
@@ -305,3 +305,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

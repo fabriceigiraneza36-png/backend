@@ -32,6 +32,16 @@ exports.getCategories = async (req, res, next) => {
   }
 };
 
+exports.getOne = async (req, res, next) => {
+  try {
+    const result = await query("SELECT * FROM faqs WHERE id = $1", [req.params.id]);
+    if (result.rows.length === 0) return res.status(404).json({ error: "FAQ not found" });
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
 exports.create = async (req, res, next) => {
   try {
     const { question, answer, category, sort_order } = req.body;

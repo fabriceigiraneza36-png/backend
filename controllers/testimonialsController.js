@@ -77,7 +77,7 @@ exports.create = async (req, res, next) => {
     if (!name || !testimonial_text) {
       return res.status(400).json({ error: "name and testimonial_text are required" });
     }
-
+    
     const result = await query(
       `INSERT INTO testimonials
        (name, location, avatar_url, rating, trip, date_text, testimonial_text, is_featured, is_active, sort_order)
@@ -95,7 +95,7 @@ exports.create = async (req, res, next) => {
 exports.update = async (req, res, next) => {
   try {
     const fields = { ...req.body };
-    const keys = Object.keys(fields);
+        const keys = Object.keys(fields);
     if (keys.length === 0) {
       return res.status(400).json({ error: "No fields to update" });
     }
@@ -131,3 +131,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

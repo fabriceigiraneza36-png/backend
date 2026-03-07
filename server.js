@@ -38,14 +38,21 @@ const CONFIG = {
   version: "4.0.0",
   port: parseInt(process.env.PORT, 10) || 5000,
   env: process.env.NODE_ENV || "development",
-  get isDev() { return this.env === "development"; },
-  get isProd() { return this.env === "production"; },
+  get isDev() {
+    return this.env === "development";
+  },
+  get isProd() {
+    return this.env === "production";
+  },
   startTime: new Date(),
 
   // CORS
-  corsOrigins: (process.env.CORS_ORIGINS || "http://localhost:5173,http://localhost:3000,http://localhost:3001")
+  corsOrigins: (
+    process.env.CORS_ORIGINS ||
+    "http://localhost:5173,http://localhost:3000,http://localhost:3001"
+  )
     .split(",")
-    .map(s => s.trim())
+    .map((s) => s.trim())
     .filter(Boolean),
 
   // File Upload
@@ -56,13 +63,14 @@ const CONFIG = {
 
   // Cluster
   clusterMode: process.env.CLUSTER_MODE === "true",
-  workersCount: parseInt(process.env.WORKERS_COUNT, 10) || Math.max(2, os.cpus().length),
+  workersCount:
+    parseInt(process.env.WORKERS_COUNT, 10) || Math.max(2, os.cpus().length),
 
   // Performance
   keepAliveTimeout: 65000,
   headersTimeout: 66000,
   requestTimeout: 30000,
-  
+
   // Rate Limiting
   rateLimit: {
     windowMs: 15 * 60 * 1000, // 15 minutes
@@ -115,7 +123,9 @@ const Logger = {
 
   _format(level, color, emoji, message, meta = null) {
     const timestamp = this._getTimestamp();
-    const metaStr = meta ? ` ${COLORS.dim}${JSON.stringify(meta)}${COLORS.reset}` : "";
+    const metaStr = meta
+      ? ` ${COLORS.dim}${JSON.stringify(meta)}${COLORS.reset}`
+      : "";
     return `${COLORS.dim}[${timestamp}]${COLORS.reset} ${color}${emoji} ${level}${COLORS.reset}: ${message}${metaStr}`;
   },
 
@@ -161,8 +171,11 @@ const Logger = {
 
   request(req, res, duration) {
     const status = res.statusCode;
-    const color = status >= 500 ? COLORS.red : status >= 400 ? COLORS.yellow : COLORS.green;
-    console.log(`${color}${req.method} ${req.originalUrl} ${status} ${duration}ms${COLORS.reset}`);
+    const color =
+      status >= 500 ? COLORS.red : status >= 400 ? COLORS.yellow : COLORS.green;
+    console.log(
+      `${color}${req.method} ${req.originalUrl} ${status} ${duration}ms${COLORS.reset}`,
+    );
   },
 };
 
@@ -194,7 +207,6 @@ class SystemMonitor extends EventEmitter {
   }
 
   _startMetricsCollection() {
-    // Memory samples every 30 seconds
     this._memoryInterval = setInterval(() => {
       const mem = process.memoryUsage();
       this.metrics.memory.samples.push({
@@ -204,13 +216,11 @@ class SystemMonitor extends EventEmitter {
         rss: mem.rss,
         external: mem.external,
       });
-      // Keep last 100 samples (50 minutes)
       if (this.metrics.memory.samples.length > 100) {
         this.metrics.memory.samples.shift();
       }
     }, 30000);
 
-    // CPU samples every 10 seconds
     this._cpuInterval = setInterval(() => {
       const cpuUsage = process.cpuUsage();
       this.metrics.cpu.samples.push({
@@ -227,7 +237,7 @@ class SystemMonitor extends EventEmitter {
   recordRequest(req) {
     this.metrics.requests.total++;
     this.metrics.requests.active++;
-    
+
     const routeKey = `${req.method} ${req.baseUrl}${req.path}`;
     if (!this.metrics.routes.has(routeKey)) {
       this.metrics.routes.set(routeKey, {
@@ -241,7 +251,10 @@ class SystemMonitor extends EventEmitter {
   }
 
   recordResponse(req, res, duration) {
-    this.metrics.requests.active = Math.max(0, this.metrics.requests.active - 1);
+    this.metrics.requests.active = Math.max(
+      0,
+      this.metrics.requests.active - 1,
+    );
 
     if (res.statusCode >= 400) {
       this.metrics.requests.failed++;
@@ -249,23 +262,21 @@ class SystemMonitor extends EventEmitter {
       this.metrics.requests.success++;
     }
 
-    // Record response time (keep last 1000)
     this.metrics.response.times.push(duration);
     if (this.metrics.response.times.length > 1000) {
       this.metrics.response.times.shift();
     }
 
-    // Calculate statistics
     this._updateResponseStats();
 
-    // Route-specific stats
     const routeKey = `${req.method} ${req.baseUrl}${req.path}`;
     const routeStats = this.metrics.routes.get(routeKey);
     if (routeStats) {
       if (res.statusCode >= 400) routeStats.errors++;
       routeStats.times.push(duration);
       if (routeStats.times.length > 100) routeStats.times.shift();
-      routeStats.avgTime = routeStats.times.reduce((a, b) => a + b, 0) / routeStats.times.length;
+      routeStats.avgTime =
+        routeStats.times.reduce((a, b) => a + b, 0) / routeStats.times.length;
     }
   }
 
@@ -306,7 +317,11 @@ class SystemMonitor extends EventEmitter {
 
   recordSecurityEvent(type, details) {
     Logger.warn(`Security Event: ${type}`, details);
-    this.emit("security", { type, details, timestamp: new Date().toISOString() });
+    this.emit("security", {
+      type,
+      details,
+      timestamp: new Date().toISOString(),
+    });
   }
 
   async getHealthStatus() {
@@ -316,7 +331,6 @@ class SystemMonitor extends EventEmitter {
     let status = "healthy";
     const issues = [];
 
-    // Memory check
     if (memUsagePercent > 90) {
       status = "unhealthy";
       issues.push("Memory usage critical (>90%)");
@@ -325,19 +339,20 @@ class SystemMonitor extends EventEmitter {
       issues.push("Memory usage high (>75%)");
     }
 
-    // Error rate check
-    const errorRate = this.metrics.requests.total > 0
-      ? (this.metrics.requests.failed / this.metrics.requests.total) * 100
-      : 0;
+    const errorRate =
+      this.metrics.requests.total > 0
+        ? (this.metrics.requests.failed / this.metrics.requests.total) * 100
+        : 0;
     if (errorRate > 10) {
       status = status === "healthy" ? "degraded" : status;
       issues.push(`High error rate (${errorRate.toFixed(1)}%)`);
     }
 
-    // Response time check
     if (this.metrics.response.avg > 2000) {
       status = status === "healthy" ? "degraded" : status;
-      issues.push(`Slow avg response (${this.metrics.response.avg.toFixed(0)}ms)`);
+      issues.push(
+        `Slow avg response (${this.metrics.response.avg.toFixed(0)}ms)`,
+      );
     }
 
     return {
@@ -350,7 +365,10 @@ class SystemMonitor extends EventEmitter {
         requests: { ...this.metrics.requests },
         responseTime: {
           avg: Math.round(this.metrics.response.avg),
-          min: this.metrics.response.min === Infinity ? 0 : this.metrics.response.min,
+          min:
+            this.metrics.response.min === Infinity
+              ? 0
+              : this.metrics.response.min,
           max: this.metrics.response.max,
           p95: Math.round(this.metrics.response.p95),
           p99: Math.round(this.metrics.response.p99),
@@ -384,7 +402,10 @@ class SystemMonitor extends EventEmitter {
       requests: { ...this.metrics.requests },
       responseTime: {
         avg: Math.round(this.metrics.response.avg),
-        min: this.metrics.response.min === Infinity ? 0 : this.metrics.response.min,
+        min:
+          this.metrics.response.min === Infinity
+            ? 0
+            : this.metrics.response.min,
         max: this.metrics.response.max,
         p95: Math.round(this.metrics.response.p95),
         p99: Math.round(this.metrics.response.p99),
@@ -420,9 +441,10 @@ class SystemMonitor extends EventEmitter {
       },
       summary: {
         totalRequests: this.metrics.requests.total,
-        successRate: this.metrics.requests.total > 0
-          ? `${((this.metrics.requests.success / this.metrics.requests.total) * 100).toFixed(2)}%`
-          : "N/A",
+        successRate:
+          this.metrics.requests.total > 0
+            ? `${((this.metrics.requests.success / this.metrics.requests.total) * 100).toFixed(2)}%`
+            : "N/A",
         avgResponseTime: `${Math.round(this.metrics.response.avg)}ms`,
         errorsTotal: this.metrics.errors.length,
       },
@@ -452,13 +474,16 @@ class SystemMonitor extends EventEmitter {
       hours > 0 ? `${hours}h` : null,
       minutes > 0 ? `${minutes}m` : null,
       `${secs}s`,
-    ].filter(Boolean).join(" ");
+    ]
+      .filter(Boolean)
+      .join(" ");
   }
 }
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATABASE MANAGER - PostgreSQL with connection pooling & SSL verify-full
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DATABASE MANAGER - PostgreSQL with connection pooling
-// ═══════════════════════════════════════════════════════════════════════════════
+const { Sequelize } = require("sequelize");
 
 class DatabaseManager {
   constructor() {
@@ -466,81 +491,95 @@ class DatabaseManager {
     this.connected = false;
     this.retryCount = 0;
     this.maxRetries = 5;
-    this.retryDelay = 3000;
+    this.retryDelay = 3000; // initial delay in ms
   }
 
   async initialize() {
-    const { Sequelize } = require("sequelize");
-
     this.sequelize = new Sequelize(
-      CONFIG.db.name,
-      CONFIG.db.user,
-      CONFIG.db.password,
-      {
-        host: CONFIG.db.host,
-        port: CONFIG.db.port,
-        dialect: "postgres",
-        logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-        pool: CONFIG.db.pool,
-        dialectOptions: {
-          statement_timeout: 30000,
-          idle_in_transaction_session_timeout: 30000,
-          connectTimeout: 10000,
-        },
-        define: {
-          timestamps: true,
-          underscored: true,
-          freezeTableName: true,
-        },
-        benchmark: CONFIG.isDev,
-        retry: {
-          max: 3,
-        },
-      }
-    );
+  CONFIG.db.name,
+  CONFIG.db.user,
+  CONFIG.db.password,
+  {
+    host: CONFIG.db.host,
+    port: CONFIG.db.port,
+    dialect: "postgres",
+    protocol: "postgres",
+    logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+    pool: CONFIG.db.pool,
+    dialectOptions: {
+  statement_timeout: 30000,
+  idle_in_transaction_session_timeout: 30000,
+  connectTimeout: 10000
+},
+    define: {
+      timestamps: true,
+      underscored: true,
+      freezeTableName: true,
+    },
+    benchmark: CONFIG.isDev,
+    retry: {
+      max: 3,
+    },
+  }
+);
 
-    // Make sequelize available globally for models
-    global.sequelize = this.sequelize;
-    
+    global.sequelize = this.sequelize; // make globally accessible
     return this;
   }
 
- // Find this section in server.js (around line 460-490)
-async connect() {
-  while (this.retryCount < this.maxRetries) {
-    try {
-      await this.sequelize.authenticate();
-      this.connected = true;
-      
-      // ✅ ADD THIS - Auto-create tables in development
-      if (CONFIG.isDev) {
-        Logger.info("Synchronizing database tables...");
-        await this.sequelize.sync({ alter: true }); // ← Add this line
-        Logger.success("Database tables synchronized");
+  async connect() {
+    while (this.retryCount < this.maxRetries) {
+      try {
+        await this.sequelize.authenticate();
+        this.connected = true;
+
+        // ✅ Auto-sync tables in development
+        if (CONFIG.isDev) {
+          Logger.info("Synchronizing database schema...");
+          await this.sequelize.sync({ alter: true });
+          Logger.success("Database schema synchronized");
+        }
+
+        Logger.success("Database connected successfully", {
+          host: CONFIG.db.host || "from DATABASE_URL",
+          database: CONFIG.db.name || "from DATABASE_URL",
+          pool: CONFIG.db.pool.max,
+        });
+        return true;
+      } catch (error) {
+        this.retryCount++;
+        Logger.error(
+          `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
+          { error: error.message }
+        );
+
+        if (this.retryCount >= this.maxRetries) {
+          throw new Error(
+            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
+          );
+        }
+
+        Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
+        await this._sleep(this.retryDelay);
+        this.retryDelay *= 1.5; // exponential backoff
       }
-      
-      Logger.success("Database connected successfully", {
-        host: CONFIG.db.host,
-        database: CONFIG.db.name,
-        pool: CONFIG.db.pool.max,
-      });
-      return true;
-    } catch (error) {
-      // ... rest of error handling
     }
   }
-}
 
   async healthCheck() {
     if (!this.sequelize) {
-      return { status: "unhealthy", connected: false, error: "Not initialized" };
+      return {
+        status: "unhealthy",
+        connected: false,
+        error: "Not initialized",
+      };
     }
 
     try {
       const start = Date.now();
       await this.sequelize.query("SELECT 1");
       const latency = Date.now() - start;
-      
+
       return {
         status: latency < 100 ? "healthy" : "degraded",
         connected: true,
@@ -560,9 +599,11 @@ async connect() {
   }
 
   _sleep(ms) {
-    return new Promise(resolve => setTimeout(resolve, ms));
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
+
+module.exports = new DatabaseManager();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROUTE LOADER - Intelligent route mounting with validation
@@ -579,23 +620,79 @@ class RouteLoader {
 
   getRouteDefinitions() {
     return [
-      { path: "/admin/auth", file: "./routes/adminAuth", description: "Admin Authentication", priority: 0 },
-      { path: "/auth", file: "./routes/auth", description: "Authentication & Authorization", priority: 1 },
-      { path: "/users", file: "./routes/users", description: "User Management", optional: true },
-      { path: "/countries", file: "./routes/countries", description: "Countries Management" },
-      { path: "/destinations", file: "./routes/destinations", description: "Travel Destinations" },
+      {
+        path: "/admin/auth",
+        file: "./routes/adminAuth",
+        description: "Admin Authentication",
+        priority: 0,
+      },
+      {
+        path: "/auth",
+        file: "./routes/auth",
+        description: "User Authentication",
+        priority: 1,
+      },
+      {
+        path: "/users",
+        file: "./routes/users",
+        description: "User Management",
+        optional: true,
+      },
+      {
+        path: "/countries",
+        file: "./routes/countries",
+        description: "Countries Management",
+      },
+      {
+        path: "/destinations",
+        file: "./routes/destinations",
+        description: "Travel Destinations",
+      },
       { path: "/posts", file: "./routes/posts", description: "Blog Posts" },
       { path: "/tips", file: "./routes/tips", description: "Travel Tips" },
-      { path: "/services", file: "./routes/services", description: "Travel Services" },
+      {
+        path: "/services",
+        file: "./routes/services",
+        description: "Travel Services",
+      },
       { path: "/team", file: "./routes/team", description: "Team Members" },
-      { path: "/gallery", file: "./routes/gallery", description: "Photo Gallery" },
-      { path: "/bookings", file: "./routes/bookings", description: "Booking Management" },
+      {
+        path: "/gallery",
+        file: "./routes/gallery",
+        description: "Photo Gallery",
+      },
+      {
+        path: "/bookings",
+        file: "./routes/bookings",
+        description: "Booking Management",
+      },
       { path: "/faqs", file: "./routes/faqs", description: "FAQs" },
-      { path: "/contact", file: "./routes/contact", description: "Contact Messages" },
+      {
+        path: "/contact",
+        file: "./routes/contact",
+        description: "Contact Messages",
+      },
       { path: "/pages", file: "./routes/pages", description: "Static Pages" },
-      { path: "/virtual-tours", file: "./routes/virtualTours", description: "Virtual Tours" },
-      { path: "/subscribers", file: "./routes/subscribers", description: "Newsletter Subscribers" },
-      { path: "/settings", file: "./routes/settings", description: "Site Settings" },
+      {
+        path: "/virtual-tours",
+        file: "./routes/virtualTours",
+        description: "Virtual Tours",
+      },
+      {
+        path: "/subscribers",
+        file: "./routes/subscribers",
+        description: "Newsletter Subscribers",
+      },
+      {
+        path: "/settings",
+        file: "./routes/settings",
+        description: "Site Settings",
+      },
+      {
+        path: "/uploads",
+        file: "./routes/uploads",
+        description: "Cloudinary Uploads",
+      },
     ];
   }
 
@@ -603,8 +700,9 @@ class RouteLoader {
     Logger.startup("Loading API routes...");
     console.log("");
 
-    const definitions = this.getRouteDefinitions()
-      .sort((a, b) => (a.priority || 99) - (b.priority || 99));
+    const definitions = this.getRouteDefinitions().sort(
+      (a, b) => (a.priority || 99) - (b.priority || 99),
+    );
 
     const results = { loaded: 0, failed: 0, skipped: 0 };
 
@@ -617,23 +715,31 @@ class RouteLoader {
           this.loadedRoutes.push(result);
           Logger.route(
             `${routeDef.path.padEnd(20)} → ${routeDef.description} (${result.endpoints} endpoints)`,
-            "ok"
+            "ok",
           );
           break;
         case "skipped":
           results.skipped++;
-          Logger.route(`${routeDef.path.padEnd(20)} → Skipped (optional)`, "warn");
+          Logger.route(
+            `${routeDef.path.padEnd(20)} → Skipped (optional)`,
+            "warn",
+          );
           break;
         case "failed":
           results.failed++;
           this.failedRoutes.push(result);
-          Logger.route(`${routeDef.path.padEnd(20)} → FAILED: ${result.error}`, "error");
+          Logger.route(
+            `${routeDef.path.padEnd(20)} → FAILED: ${result.error}`,
+            "error",
+          );
           break;
       }
     }
 
     console.log("");
-    Logger.startup(`Routes: ${results.loaded} loaded ✓ | ${results.failed} failed ✗ | ${results.skipped} skipped ○`);
+    Logger.startup(
+      `Routes: ${results.loaded} loaded ✓ | ${results.failed} failed ✗ | ${results.skipped} skipped ○`,
+    );
 
     return results;
   }
@@ -643,34 +749,29 @@ class RouteLoader {
     const fullPath = `/api${routePath}`;
 
     try {
-      // Resolve file path
       const absolutePath = require.resolve(file);
       Logger.debug(`Loading: ${absolutePath}`);
 
-      // Clear cache in development for hot reload
       if (CONFIG.isDev && require.cache[absolutePath]) {
         delete require.cache[absolutePath];
       }
 
-      // Require the module
       const routeModule = require(file);
 
-      // Validate it's an Express router
       if (!routeModule || typeof routeModule !== "function") {
-        throw new Error(`Invalid export: expected express.Router(), got ${typeof routeModule}`);
+        throw new Error(
+          `Invalid export: expected express.Router(), got ${typeof routeModule}`,
+        );
       }
 
-      // Check if it has router properties
       if (!routeModule.stack) {
         throw new Error("Module is not a valid Express router (missing stack)");
       }
 
-      // Count endpoints
       const endpoints = this._countEndpoints(routeModule);
 
-      // Mount the route
       this.app.use(fullPath, routeModule);
-      
+
       Logger.debug(`Mounted: ${fullPath} with ${endpoints} endpoints`);
 
       this.routeStats[fullPath] = {
@@ -681,16 +782,32 @@ class RouteLoader {
         file: absolutePath,
       };
 
-      return { status: "loaded", path: fullPath, description, endpoints, file: absolutePath };
+      return {
+        status: "loaded",
+        path: fullPath,
+        description,
+        endpoints,
+        file: absolutePath,
+      };
     } catch (err) {
-      // Handle optional routes
-      if ((err.code === "MODULE_NOT_FOUND" || err.code === "ERR_MODULE_NOT_FOUND") && optional) {
-        return { status: "skipped", path: fullPath, description, reason: "Optional module not found" };
+      if (
+        (err.code === "MODULE_NOT_FOUND" ||
+          err.code === "ERR_MODULE_NOT_FOUND") &&
+        optional
+      ) {
+        return {
+          status: "skipped",
+          path: fullPath,
+          description,
+          reason: "Optional module not found",
+        };
       }
 
-      // Log the full error in development
       if (CONFIG.isDev) {
-        Logger.error(`Failed to load route ${routePath}:`, { error: err.message, stack: err.stack });
+        Logger.error(`Failed to load route ${routePath}:`, {
+          error: err.message,
+          stack: err.stack,
+        });
       }
 
       return {
@@ -708,9 +825,10 @@ class RouteLoader {
     if (router.stack) {
       for (const layer of router.stack) {
         if (layer.route) {
-          count += Object.keys(layer.route.methods).filter(m => layer.route.methods[m]).length;
+          count += Object.keys(layer.route.methods).filter(
+            (m) => layer.route.methods[m],
+          ).length;
         } else if (layer.name === "router" && layer.handle?.stack) {
-          // Nested router
           count += this._countEndpoints(layer.handle);
         }
       }
@@ -723,7 +841,7 @@ class RouteLoader {
       loaded: this.loadedRoutes.length,
       failed: this.failedRoutes.length,
       routes: this.routeStats,
-      failures: this.failedRoutes.map(f => ({
+      failures: this.failedRoutes.map((f) => ({
         path: f.path,
         error: f.error,
         description: f.description,
@@ -739,7 +857,6 @@ class RouteLoader {
 function createApp(monitor) {
   const app = express();
 
-  // Trust proxy (for production behind nginx/load balancer)
   app.set("trust proxy", CONFIG.isProd ? 1 : false);
   app.set("x-powered-by", false);
 
@@ -747,69 +864,82 @@ function createApp(monitor) {
   // SECURITY MIDDLEWARE
   // ═══════════════════════════════════════════════════════════════════════════
 
-  app.use(helmet({
-    contentSecurityPolicy: CONFIG.isProd ? undefined : false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: "cross-origin" },
-  }));
+  app.use(
+    helmet({
+      contentSecurityPolicy: CONFIG.isProd ? undefined : false,
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: "cross-origin" },
+    }),
+  );
 
   // CORS
-  app.use(cors({
-    origin: (origin, callback) => {
-      // Allow requests with no origin (mobile, curl, etc)
-      if (!origin) return callback(null, true);
-      
-      // Allow configured origins or all in development
-      if (CONFIG.corsOrigins.includes(origin) || CONFIG.isDev) {
-        return callback(null, true);
-      }
-      
-      monitor.recordSecurityEvent("CORS_BLOCKED", { origin });
-      callback(new Error(`CORS blocked: ${origin}`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "X-API-Key", "X-Request-ID"],
-    exposedHeaders: ["X-Total-Count", "X-Page-Count", "X-Request-ID"],
-    maxAge: 86400,
-  }));
+  app.use(
+    cors({
+      origin: (origin, callback) => {
+        if (!origin) return callback(null, true);
+
+        if (CONFIG.corsOrigins.includes(origin) || CONFIG.isDev) {
+          return callback(null, true);
+        }
+
+        monitor.recordSecurityEvent("CORS_BLOCKED", { origin });
+        callback(new Error(`CORS blocked: ${origin}`));
+      },
+      credentials: true,
+      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+      allowedHeaders: [
+        "Content-Type",
+        "Authorization",
+        "X-Requested-With",
+        "X-API-Key",
+        "X-Request-ID",
+      ],
+      exposedHeaders: ["X-Total-Count", "X-Page-Count", "X-Request-ID"],
+      maxAge: 86400,
+    }),
+  );
 
   // Compression
-  app.use(compression({
-    level: 6,
-    threshold: 1024,
-    filter: (req, res) => {
-      if (req.headers["x-no-compression"]) return false;
-      return compression.filter(req, res);
-    },
-  }));
+  app.use(
+    compression({
+      level: 6,
+      threshold: 1024,
+      filter: (req, res) => {
+        if (req.headers["x-no-compression"]) return false;
+        return compression.filter(req, res);
+      },
+    }),
+  );
 
-  // Body parsing with increased limits
-  app.use(express.json({
-    limit: CONFIG.maxJsonSize,
-    strict: true,
-    verify: (req, res, buf) => {
-      req.rawBody = buf;
-    },
-  }));
+  // ✅ CRITICAL FIX: Body parsing BEFORE routes
+  app.use(
+    express.json({
+      limit: CONFIG.maxJsonSize,
+      strict: true,
+      verify: (req, res, buf) => {
+        req.rawBody = buf;
+      },
+    }),
+  );
 
-  app.use(express.urlencoded({
-    extended: true,
-    limit: CONFIG.maxUrlEncodedSize,
-    parameterLimit: 10000,
-  }));
+  app.use(
+    express.urlencoded({
+      extended: true,
+      limit: CONFIG.maxUrlEncodedSize,
+      parameterLimit: 10000,
+    }),
+  );
 
   // ═══════════════════════════════════════════════════════════════════════════
   // REQUEST TRACKING
   // ═══════════════════════════════════════════════════════════════════════════
 
   app.use((req, res, next) => {
-    // Generate unique request ID
-    req.id = req.headers["x-request-id"] || 
-             `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 11)}`;
+    req.id =
+      req.headers["x-request-id"] ||
+      `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 11)}`;
     req.startTime = Date.now();
 
-    // Set response headers
     res.setHeader("X-Request-ID", req.id);
     res.setHeader("X-Response-Time", "pending");
     res.setHeader("X-Powered-By", `${CONFIG.name}/${CONFIG.version}`);
@@ -823,7 +953,6 @@ function createApp(monitor) {
       return originalWriteHead.apply(this, args);
     };
 
-    // Track response
     res.once("finish", () => {
       const duration = Date.now() - req.startTime;
       try {
@@ -842,10 +971,18 @@ function createApp(monitor) {
     ? ":method :url :status :response-time ms - :res[content-length]"
     : "combined";
 
-  app.use(morgan(morganFormat, {
-    stream: { write: (msg) => Logger.http(msg.trim()) },
-    skip: (req) => ["/api/health", "/api/health/live", "/api/health/ready", "/favicon.ico"].includes(req.url),
-  }));
+  app.use(
+    morgan(morganFormat, {
+      stream: { write: (msg) => Logger.http(msg.trim()) },
+      skip: (req) =>
+        [
+          "/api/health",
+          "/api/health/live",
+          "/api/health/ready",
+          "/favicon.ico",
+        ].includes(req.url),
+    }),
+  );
 
   // ═══════════════════════════════════════════════════════════════════════════
   // STATIC FILES
@@ -853,17 +990,20 @@ function createApp(monitor) {
 
   const uploadsDir = path.join(__dirname, CONFIG.uploadDir);
   if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
+    fs.mkdirSync(uploadsDir, { recursive: true});
     Logger.info("Created uploads directory", { path: uploadsDir });
   }
 
-  app.use("/uploads", express.static(uploadsDir, {
-    maxAge: CONFIG.isProd ? "7d" : 0,
-    etag: true,
-    lastModified: true,
-    index: false,
-    dotfiles: "deny",
-  }));
+  app.use(
+    "/uploads",
+    express.static(uploadsDir, {
+      maxAge: CONFIG.isProd ? "7d" : 0,
+      etag: true,
+      lastModified: true,
+      index: false,
+      dotfiles: "deny",
+    }),
+  );
 
   return app;
 }
@@ -873,7 +1013,6 @@ function createApp(monitor) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function setupSystemEndpoints(app, monitor, database, routeLoader) {
-  // Root endpoint
   app.get("/", (req, res) => {
     res.json({
       name: CONFIG.name,
@@ -886,7 +1025,6 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
     });
   });
 
-  // API root
   app.get("/api", (req, res) => {
     res.json({
       name: `${CONFIG.name} API`,
@@ -896,11 +1034,11 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
         health: "/api/health",
         docs: "/api/docs",
         auth: "/api/auth",
+        adminAuth: "/api/admin/auth",
       },
     });
   });
 
-  // Health check
   app.get("/api/health", async (req, res) => {
     try {
       const [serverHealth, dbHealth] = await Promise.all([
@@ -908,7 +1046,7 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
         database.healthCheck(),
       ]);
 
-      const overall = 
+      const overall =
         dbHealth.status === "unhealthy" || serverHealth.status === "unhealthy"
           ? "unhealthy"
           : dbHealth.status === "degraded" || serverHealth.status === "degraded"
@@ -934,12 +1072,10 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
     }
   });
 
-  // Liveness probe
   app.get("/api/health/live", (req, res) => {
     res.status(200).json({ status: "alive", timestamp: Date.now() });
   });
 
-  // Readiness probe
   app.get("/api/health/ready", async (req, res) => {
     const dbHealth = await database.healthCheck();
     const status = dbHealth.status === "healthy" ? 200 : 503;
@@ -950,21 +1086,20 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
     });
   });
 
-  // System metrics
   app.get("/api/system/metrics", (req, res) => {
     res.json(monitor.getMetrics());
   });
 
-  // System report
   app.get("/api/system/report", async (req, res) => {
     try {
       res.json(await monitor.generateReport());
     } catch (err) {
-      res.status(500).json({ error: "Failed to generate report", message: err.message });
+      res
+        .status(500)
+        .json({ error: "Failed to generate report", message: err.message });
     }
   });
 
-  // Server info
   app.get("/api/system/info", (req, res) => {
     res.json({
       name: CONFIG.name,
@@ -981,20 +1116,21 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
     });
   });
 
-  // Route status
   app.get("/api/system/routes", (req, res) => {
     res.json(routeLoader.getStatus());
   });
 
-  // Ping
   app.get("/api/monitor/ping", (req, res) => {
-    res.json({ pong: Date.now(), server: CONFIG.name, uptime: process.uptime() });
+    res.json({
+      pong: Date.now(),
+      server: CONFIG.name,
+      uptime: process.uptime(),
+    });
   });
 
-  // API Documentation
   app.get("/api/docs", (req, res) => {
     const routeStatus = routeLoader.getStatus();
-    
+
     res.json({
       name: `${CONFIG.name} API Documentation`,
       version: CONFIG.version,
@@ -1015,8 +1151,12 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
         api: Object.fromEntries(
           Object.entries(routeStatus.routes).map(([path, info]) => [
             path,
-            { description: info.description, endpoints: info.endpoints, status: info.status },
-          ])
+            {
+              description: info.description,
+              endpoints: info.endpoints,
+              status: info.status,
+            },
+          ]),
         ),
       },
       failedRoutes: routeStatus.failures,
@@ -1025,11 +1165,10 @@ function setupSystemEndpoints(app, monitor, database, routeLoader) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS SETUP - Must be called AFTER routes are loaded
+// ERROR HANDLERS SETUP
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function setupErrorHandlers(app, monitor) {
-  // 404 Handler
   app.use((req, res, next) => {
     const error = {
       success: false,
@@ -1046,24 +1185,20 @@ function setupErrorHandlers(app, monitor) {
     res.status(404).json(error);
   });
 
-  // Global Error Handler
   app.use((err, req, res, next) => {
     if (res.headersSent) {
       Logger.warn(`[${req.id}] Error after headers sent: ${err.message}`);
       return next(err);
     }
 
-    // Record error
     try {
       monitor.recordError(err, req);
     } catch (monitorErr) {
       Logger.warn(`Monitor error recording failed: ${monitorErr.message}`);
     }
 
-    // Determine status code
     const statusCode = err.statusCode || err.status || 500;
 
-    // Log error
     if (statusCode >= 500) {
       Logger.error(`[${req.id}] ${err.message}`, {
         path: req.originalUrl,
@@ -1077,22 +1212,20 @@ function setupErrorHandlers(app, monitor) {
       });
     }
 
-    // Prepare response
     const response = {
       success: false,
       error: err.name || "Error",
-      message: CONFIG.isProd && statusCode >= 500 
-        ? "Internal server error" 
-        : err.message,
+      code: err.code || "INTERNAL_ERROR",
+      message:
+        CONFIG.isProd && statusCode >= 500
+          ? "Internal server error"
+          : err.message,
       requestId: req.id,
       timestamp: new Date().toISOString(),
     };
 
-    // Add stack trace in development
-    if (CONFIG.isDev) {
-      response.stack = err.stack;
-      response.details = err.details || undefined;
-    }
+    if (err.details) response.details = err.details;
+    if (CONFIG.isDev) response.stack = err.stack;
 
     res.status(statusCode).json(response);
   });
@@ -1130,10 +1263,11 @@ ${COLORS.cyan}╔═════════════════════
 ╠═══════════════════════════════════════════════════════════════════════════════╣
 ║                                                                               ║
 ║   ${COLORS.magenta}📡 ENDPOINTS:${COLORS.cyan}                                                             ║
-║   ${COLORS.white}├─ API:      http://localhost:${CONFIG.port}/api${COLORS.cyan}                                  ║
-║   ${COLORS.white}├─ Health:   http://localhost:${CONFIG.port}/api/health${COLORS.cyan}                            ║
-║   ${COLORS.white}├─ Docs:     http://localhost:${CONFIG.port}/api/docs${COLORS.cyan}                              ║
-║   ${COLORS.white}└─ Auth:     http://localhost:${CONFIG.port}/api/auth${COLORS.cyan}                              ║
+║   ${COLORS.white}├─ API:        http://localhost:${CONFIG.port}/api${COLORS.cyan}                              ║
+║   ${COLORS.white}├─ Health:     http://localhost:${CONFIG.port}/api/health${COLORS.cyan}                        ║
+║   ${COLORS.white}├─ Docs:       http://localhost:${CONFIG.port}/api/docs${COLORS.cyan}                          ║
+║   ${COLORS.white}├─ Auth:       http://localhost:${CONFIG.port}/api/auth${COLORS.cyan}                          ║
+║   ${COLORS.white}└─ Admin Auth: http://localhost:${CONFIG.port}/api/admin/auth${COLORS.cyan}                    ║
 ║                                                                               ║
 ╚═══════════════════════════════════════════════════════════════════════════════╝${COLORS.reset}
 `;
@@ -1154,18 +1288,13 @@ function setupGracefulShutdown(server, database, monitor) {
     console.log("");
     Logger.warn(`${signal} received. Starting graceful shutdown...`);
 
-    // Stop accepting new connections
     server.close(async () => {
       Logger.info("HTTP server closed");
 
       try {
-        // Close database
         await database.close();
-        
-        // Cleanup monitor
         monitor.cleanup();
 
-        // Final report
         const report = await monitor.generateReport();
         Logger.info("Final stats:", report.summary);
 
@@ -1177,7 +1306,6 @@ function setupGracefulShutdown(server, database, monitor) {
       }
     });
 
-    // Force exit after 30 seconds
     setTimeout(() => {
       Logger.error("Forced shutdown after timeout");
       process.exit(1);
@@ -1188,14 +1316,23 @@ function setupGracefulShutdown(server, database, monitor) {
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   process.on("uncaughtException", (err) => {
-    Logger.error("Uncaught Exception:", { message: err.message, stack: err.stack });
+    Logger.error("Uncaught Exception:", {
+      message: err.message,
+      stack: err.stack,
+    });
     monitor.recordError(err, null, "UNCAUGHT_EXCEPTION");
     shutdown("UNCAUGHT_EXCEPTION");
   });
 
   process.on("unhandledRejection", (reason) => {
-    Logger.error("Unhandled Rejection:", { reason: reason?.message || String(reason) });
-    monitor.recordError(reason || new Error("Unhandled rejection"), null, "UNHANDLED_REJECTION");
+    Logger.error("Unhandled Rejection:", {
+      reason: reason?.message || String(reason),
+    });
+    monitor.recordError(
+      reason || new Error("Unhandled rejection"),
+      null,
+      "UNHANDLED_REJECTION",
+    );
   });
 }
 
@@ -1265,16 +1402,14 @@ async function startServer() {
 
     // 7. Start HTTP Server
     const server = http.createServer(app);
-    
-    // Configure server timeouts
+
     server.keepAliveTimeout = CONFIG.keepAliveTimeout;
     server.headersTimeout = CONFIG.headersTimeout;
     server.timeout = CONFIG.requestTimeout;
 
-    // Start listening
     server.listen(CONFIG.port, "0.0.0.0", () => {
       printStartupBanner(routeResults);
-      
+
       Logger.success("Server is ready and accepting connections!");
       Logger.info(`Local:   http://localhost:${CONFIG.port}`);
       Logger.info(`Network: http://${getLocalIP()}:${CONFIG.port}`);
@@ -1284,13 +1419,11 @@ async function startServer() {
     // 8. Setup Graceful Shutdown
     setupGracefulShutdown(server, database, monitor);
 
-    // Store references globally
     global.server = server;
     global.monitor = monitor;
     global.database = database;
 
     return { app, server, monitor, database };
-
   } catch (err) {
     console.log("");
     Logger.error("═".repeat(60));
@@ -1311,5 +1444,4 @@ async function startServer() {
 
 startServer();
 
-// Export for testing
 module.exports = { createApp, CONFIG, Logger };

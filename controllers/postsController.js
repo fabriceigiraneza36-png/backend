@@ -104,7 +104,7 @@ exports.create = async (req, res, next) => {
 
     const slug = slugify(title);
     const image_url = req.file ? getUploadedFileUrl(req.file) : req.body.image_url || null;
-    const read_time = calculateReadTime(content);
+        const read_time = calculateReadTime(content);
     const published_at = is_published ? new Date() : null;
 
     const result = await query(
@@ -138,7 +138,7 @@ exports.update = async (req, res, next) => {
     if (fields.title) fields.slug = slugify(fields.title);
     if (fields.content) fields.read_time = calculateReadTime(fields.content);
     if (req.file) fields.image_url = getUploadedFileUrl(req.file);
-    if (fields.tags && typeof fields.tags === "string") fields.tags = JSON.parse(fields.tags);
+        if (fields.tags && typeof fields.tags === "string") fields.tags = JSON.parse(fields.tags);
     if (fields.is_published === true || fields.is_published === "true") {
       const existing = await query("SELECT published_at FROM posts WHERE id = $1", [id]);
       if (!existing.rows[0]?.published_at) fields.published_at = new Date();
@@ -171,3 +171,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

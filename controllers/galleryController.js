@@ -62,7 +62,7 @@ exports.create = async (req, res, next) => {
   try {
     const { title, description, category, location, country_id, destination_id, photographer, is_featured } = req.body;
     const image_url = req.file ? getUploadedFileUrl(req.file) : req.body.image_url;
-
+    
     if (!image_url) return res.status(400).json({ error: "Image is required" });
 
     const result = await query(
@@ -103,8 +103,9 @@ exports.bulkCreate = async (req, res, next) => {
 exports.update = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const fields = req.body;
-    const keys = Object.keys(fields);
+    const fields = { ...req.body };
+    if (req.file) fields.image_url = getUploadedFileUrl(req.file);
+        const keys = Object.keys(fields);
     if (keys.length === 0) return res.status(400).json({ error: "No fields" });
 
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -130,3 +131,4 @@ exports.remove = async (req, res, next) => {
     next(err);
   }
 };
+

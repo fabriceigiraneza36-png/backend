@@ -34,8 +34,13 @@ const fileFilter = (req, file, cb) => {
   }
 
   const error = new Error(`Unsupported file type: ${file.mimetype || "unknown"}`);
+  error.name = "UploadError";
   error.statusCode = 400;
   error.code = "INVALID_FILE_TYPE";
+  error.details = {
+    mimeType: file.mimetype || "unknown",
+    allowedTypes: Array.from(ALLOWED_MIME_TYPES),
+  };
   cb(error);
 };
 
@@ -177,6 +182,7 @@ const mapMulterError = (err) => {
   if (!(err instanceof multer.MulterError)) return err;
 
   const mapped = new Error(err.message);
+  mapped.name = "UploadError";
   mapped.code = err.code;
   mapped.statusCode = 400;
 
@@ -185,11 +191,18 @@ const mapMulterError = (err) => {
     mapped.message = `File too large. Max size is ${Math.round(
       MAX_FILE_SIZE / (1024 * 1024)
     )}MB.`;
+    mapped.details = {
+      maxFileSizeBytes: MAX_FILE_SIZE,
+      maxFileSizeMb: Math.round(MAX_FILE_SIZE / (1024 * 1024)),
+    };
   }
 
   if (err.code === "LIMIT_FILE_COUNT") {
     mapped.code = "TOO_MANY_FILES";
     mapped.message = `Too many files in one request. Max allowed is ${MAX_FILES}.`;
+    mapped.details = {
+      maxFiles: MAX_FILES,
+    };
   }
 
   return mapped;
@@ -206,8 +219,15 @@ const withCloudinaryUpload = (multerMiddleware) => async (req, res, next) => {
       await attachCloudinaryUploads(req);
       next();
     } catch (uploadError) {
+      uploadError.name = uploadError.name || "UploadError";
       uploadError.statusCode = uploadError.statusCode || 502;
       uploadError.code = uploadError.code || "UPLOAD_FAILED";
+      if (!uploadError.details) {
+        uploadError.details = {
+          provider: "cloudinary",
+          hint: "Check Cloudinary credentials and network connectivity.",
+        };
+      }
       next(uploadError);
     }
   });

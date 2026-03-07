@@ -224,7 +224,7 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
               <p style="margin:0 0 16px;font-size:13px;font-weight:700;color:#3F5C3F;text-transform:uppercase;letter-spacing:1.5px;">
                 Your Verification Code
               </p>
-              
+                
               <!-- Code box -->
               <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 20px;">
                 <tr>

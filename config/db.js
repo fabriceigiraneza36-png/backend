@@ -1,7 +1,20 @@
+/**
+ * config/db.js
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Always-Ready, High-Performance PostgreSQL Connection Manager
+ * ═══════════════════════════════════════════════════════════════════════════
+ * - Pool pre-warmed with minimum connections
+ * - Auto-reconnect on connection drop
+ * - Health-check heartbeat keeps connections alive
+ * - Sequelize compatibility maintained
+ */
+
 require("dotenv").config();
 const { Pool } = require("pg");
 const { Sequelize } = require("sequelize");
 const logger = require("../utils/logger");
+
+// ── Connection Configuration ─────────────────────────────────────────────────
 
 const dbConfig = {
   host: process.env.DB_HOST || "localhost",
@@ -11,11 +24,88 @@ const dbConfig = {
   password: process.env.DB_PASSWORD || "2004",
 };
 
-const pool = new Pool(dbConfig);
+// ── Pool Configuration (Always-Ready) ────────────────────────────────────────
 
-pool.on("error", (error) => {
-  logger.error("Unexpected PostgreSQL pool error", { error: error.message });
+const pool = new Pool({
+  ...dbConfig,
+  max: 30, // generous pool ceiling
+  min: 5, // always keep 5 warm connections
+  idleTimeoutMillis: 300000, // 5 min idle before release
+  connectionTimeoutMillis: 10000, // 10s max wait for new connection
+  allowExitOnIdle: false, // keep pool alive even if idle
+  statement_timeout: 30000, // 30s max query execution time
 });
+
+// ── Pool Event Handlers ──────────────────────────────────────────────────────
+
+pool.on("connect", (client) => {
+  logger.info("[DB] New client connected to PostgreSQL");
+});
+
+pool.on("error", (err, client) => {
+  logger.error("[DB] Unexpected pool error:", { error: err.message });
+  // Don't crash — the pool auto-recovers
+});
+
+pool.on("remove", () => {
+  logger.debug("[DB] Client removed from pool");
+});
+
+// ── Heartbeat: Keep Connections Warm ─────────────────────────────────────────
+
+let heartbeatInterval = null;
+
+const startHeartbeat = () => {
+  if (heartbeatInterval) return;
+
+  heartbeatInterval = setInterval(async () => {
+    try {
+      await pool.query("SELECT 1");
+    } catch (err) {
+      logger.warn(
+        "[DB] Heartbeat failed, pool will auto-reconnect:",
+        err.message,
+      );
+    }
+  }, 60000); // every 60 seconds
+
+  // Don't prevent Node from exiting
+  if (heartbeatInterval.unref) heartbeatInterval.unref();
+};
+
+// ── Query Wrapper with Auto-Retry ────────────────────────────────────────────
+
+const query = async (text, params = []) => {
+  const start = Date.now();
+  try {
+    const result = await pool.query(text, params);
+    const duration = Date.now() - start;
+
+    // Log slow queries (>200ms) for debugging
+    if (duration > 200) {
+      logger.warn(
+        `[DB] Slow query (${duration}ms): ${text.substring(0, 80)}...`,
+      );
+    }
+
+    return result;
+  } catch (err) {
+    // Retry once on connection reset errors
+    if (
+      err.code === "ECONNRESET" ||
+      err.code === "57P01" || // admin_shutdown
+      err.code === "57P03" || // cannot_connect_now
+      err.message?.includes("Connection terminated")
+    ) {
+      logger.warn("[DB] Connection dropped, retrying query...");
+      const result = await pool.query(text, params);
+      return result;
+    }
+    throw err;
+  }
+};
+
+// ── Sequelize Instance (for models that still need it) ───────────────────────
 
 const sequelize = new Sequelize(
   dbConfig.database,
@@ -28,7 +118,7 @@ const sequelize = new Sequelize(
     logging: false,
     pool: {
       max: 20,
-      min: 0,
+      min: 3,
       acquire: 30000,
       idle: 10000,
     },
@@ -37,21 +127,108 @@ const sequelize = new Sequelize(
       underscored: true,
       freezeTableName: true,
     },
-  }
+    retry: {
+      max: 3, // auto-retry failed queries 3 times
+    },
+  },
 );
 
-const query = async (text, params = []) => pool.query(text, params);
+// ── Connection Test & Warm-Up ────────────────────────────────────────────────
 
 const testConnection = async () => {
   await pool.query("SELECT 1");
   await sequelize.authenticate();
-  logger.info("Connected to PostgreSQL (pg + sequelize)");
+  startHeartbeat();
+  logger.info(
+    "[DB] ✅ Connected to PostgreSQL — pool warmed and heartbeat started",
+  );
   return true;
 };
 
-const closeConnections = async () => {
-  await Promise.allSettled([pool.end(), sequelize.close()]);
+// ── Ensure Users Table Schema is Complete ────────────────────────────────────
+
+const ensureUserSchema = async () => {
+  try {
+    // Ensure the users table has all needed columns for auth
+    const columnsToEnsure = [
+      { name: "google_id", type: "VARCHAR(255)" },
+      { name: "github_id", type: "VARCHAR(255)" },
+      { name: "auth_provider", type: "VARCHAR(50) DEFAULT 'email'" },
+      { name: "is_active", type: "BOOLEAN DEFAULT true" },
+      { name: "is_verified", type: "BOOLEAN DEFAULT false" },
+      { name: "full_name", type: "VARCHAR(255)" },
+      { name: "phone", type: "VARCHAR(50)" },
+      { name: "bio", type: "TEXT" },
+      { name: "avatar_url", type: "TEXT" },
+      { name: "role", type: "VARCHAR(50) DEFAULT 'user'" },
+      { name: "last_login", type: "TIMESTAMPTZ" },
+      { name: "verification_code", type: "VARCHAR(10)" },
+      { name: "code_expiry", type: "TIMESTAMPTZ" },
+      { name: "code_attempts", type: "INTEGER DEFAULT 0" },
+      { name: "last_code_sent_at", type: "TIMESTAMPTZ" },
+      { name: "verification_token", type: "VARCHAR(255)" },
+      { name: "reset_token", type: "VARCHAR(255)" },
+      { name: "reset_token_expires", type: "TIMESTAMPTZ" },
+      { name: "preferences", type: "JSONB" },
+      { name: "password_hash", type: "VARCHAR(255)" },
+    ];
+
+    for (const col of columnsToEnsure) {
+      try {
+        await pool.query(
+          `ALTER TABLE users ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`,
+        );
+      } catch (e) {
+        // Column may already exist — ignore
+      }
+    }
+
+    // Ensure indexes for fast auth lookups
+    await pool
+      .query("CREATE INDEX IF NOT EXISTS idx_users_email ON users(email)")
+      .catch(() => {});
+    await pool
+      .query(
+        "CREATE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id)",
+      )
+      .catch(() => {});
+    await pool
+      .query(
+        "CREATE INDEX IF NOT EXISTS idx_users_github_id ON users(github_id)",
+      )
+      .catch(() => {});
+    await pool
+      .query(
+        "CREATE INDEX IF NOT EXISTS idx_users_reset_token ON users(reset_token)",
+      )
+      .catch(() => {});
+    await pool
+      .query(
+        "CREATE INDEX IF NOT EXISTS idx_users_verification_token ON users(verification_token)",
+      )
+      .catch(() => {});
+
+    logger.info("[DB] ✅ Users table schema verified & indexes ensured");
+  } catch (err) {
+    logger.warn(
+      "[DB] Schema check skipped (table may not exist yet):",
+      err.message,
+    );
+  }
 };
+
+// ── Graceful Close ───────────────────────────────────────────────────────────
+
+const closeConnections = async () => {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  await Promise.allSettled([pool.end(), sequelize.close()]);
+  logger.info("[DB] All connections closed");
+};
+
+// ── Exports ──────────────────────────────────────────────────────────────────
 
 module.exports = {
   query,
@@ -60,4 +237,5 @@ module.exports = {
   Sequelize,
   testConnection,
   closeConnections,
+  ensureUserSchema,
 };

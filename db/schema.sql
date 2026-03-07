@@ -80,6 +80,7 @@ CREATE TABLE destinations (
   description       TEXT,
   short_description TEXT,
   image_url         VARCHAR(500),
+  image_urls        TEXT[] DEFAULT ARRAY[]::TEXT[],
   cover_image_url   VARCHAR(500),
   latitude          DECIMAL(10, 8),
   longitude         DECIMAL(11, 8),
@@ -148,21 +149,38 @@ CREATE TRIGGER trg_posts_updated
 -- 6. Tips
 DROP TABLE IF EXISTS tips CASCADE;
 CREATE TABLE tips (
-  id         SERIAL PRIMARY KEY,
-  title      VARCHAR(255) NOT NULL,
-  content    TEXT,
-  category   VARCHAR(100),
-  icon       VARCHAR(100),
-  image_url  VARCHAR(500),
-  sort_order INTEGER DEFAULT 0,
-  is_active  BOOLEAN DEFAULT true,
-  created_at TIMESTAMP DEFAULT NOW(),
-  updated_at TIMESTAMP DEFAULT NOW()
+  id                SERIAL PRIMARY KEY,
+  slug              VARCHAR(255) UNIQUE NOT NULL,
+  summary           TEXT NOT NULL,
+  body              TEXT,
+  category          VARCHAR(100),
+  trip_phase        VARCHAR(80),
+  audience          VARCHAR(80) DEFAULT 'all-travelers',
+  difficulty_level  VARCHAR(40) DEFAULT 'all-levels',
+  priority_level    SMALLINT DEFAULT 3 CHECK (priority_level BETWEEN 1 AND 5),
+  read_time_minutes SMALLINT DEFAULT 3 CHECK (read_time_minutes > 0),
+  checklist         TEXT[] DEFAULT ARRAY[]::TEXT[],
+  tags              TEXT[] DEFAULT ARRAY[]::TEXT[],
+  icon              VARCHAR(100),
+  image_url         VARCHAR(500),
+  source_url        VARCHAR(500),
+  cta_text          VARCHAR(255),
+  cta_url           VARCHAR(500),
+  sort_order        INTEGER DEFAULT 0,
+  is_featured       BOOLEAN DEFAULT false,
+  is_active         BOOLEAN DEFAULT true,
+  created_at        TIMESTAMP DEFAULT NOW(),
+  updated_at        TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TRIGGER trg_tips_updated
   BEFORE UPDATE ON tips
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+CREATE INDEX idx_tips_slug ON tips(slug);
+CREATE INDEX idx_tips_category ON tips(category);
+CREATE INDEX idx_tips_trip_phase ON tips(trip_phase);
+CREATE INDEX idx_tips_featured ON tips(is_featured) WHERE is_featured = true;
 
 -- 7. Services (NO PRICES)
 DROP TABLE IF EXISTS services CASCADE;
@@ -360,6 +378,8 @@ CREATE INDEX idx_destinations_country  ON destinations(country_id);
 CREATE INDEX idx_destinations_category ON destinations(category);
 CREATE INDEX idx_destinations_featured ON destinations(is_featured) WHERE is_featured = true;
 CREATE INDEX idx_destinations_coords   ON destinations(latitude, longitude);
+CREATE INDEX idx_destinations_highlights_gin ON destinations USING GIN (highlights);
+CREATE INDEX idx_destinations_image_urls_gin ON destinations USING GIN (image_urls);
 
 CREATE INDEX idx_posts_slug            ON posts(slug);
 CREATE INDEX idx_posts_published       ON posts(is_published, published_at DESC);
