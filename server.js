@@ -560,6 +560,9 @@ async initialize() {
 // ═══════════════════════════════════════════════════════════════════════════════
 // DATABASE MANAGER - PostgreSQL with connection pooling & SSL verify-full
 // ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATABASE MANAGER - PostgreSQL with connection pooling & SSL support
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const { Sequelize } = require("sequelize");
 
@@ -573,96 +576,158 @@ class DatabaseManager {
   }
 
   async initialize() {
-    this.sequelize = new Sequelize(
-  CONFIG.db.name,
-  CONFIG.db.user,
-  CONFIG.db.password,
-  {
-    host: CONFIG.db.host,
-    port: CONFIG.db.port,
-    dialect: "postgres",
-    protocol: "postgres",
-    logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-    pool: CONFIG.db.pool,
-    dialectOptions: {
-  statement_timeout: 30000,
-  idle_in_transaction_session_timeout: 30000,
-  connectTimeout: 10000
-},
-    define: {
-      timestamps: true,
-      underscored: true,
-      freezeTableName: true,
-    },
-    benchmark: CONFIG.isDev,
-    retry: {
-      max: 3,
-    },
-  }
-);
+    // Check if DATABASE_URL exists (for cloud deployments like Render)
+    if (process.env.DATABASE_URL) {
+      Logger.info("Using DATABASE_URL for connection");
+      
+      // Log sanitized URL for debugging
+      const sanitizedUrl = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
+      Logger.debug(`Connection string: ${sanitizedUrl}`);
+      
+      this.sequelize = new Sequelize(process.env.DATABASE_URL, {
+        dialect: "postgres",
+        protocol: "postgres",
+        logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+        pool: CONFIG.db.pool,
+        dialectOptions: {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false // Critical for cloud databases like Neon
+          },
+          statement_timeout: 30000,
+          idle_in_transaction_session_timeout: 30000,
+          connectTimeout: 10000
+        },
+        define: {
+          timestamps: true,
+          underscored: true,
+          freezeTableName: true,
+        },
+        benchmark: CONFIG.isDev,
+        retry: {
+          max: 3,
+        },
+      });
+    } else {
+      // Fall back to individual connection parameters
+      Logger.info("Using individual connection parameters");
+      
+      this.sequelize = new Sequelize(
+        CONFIG.db.name,
+        CONFIG.db.user,
+        CONFIG.db.password,
+        {
+          host: CONFIG.db.host,
+          port: CONFIG.db.port,
+          dialect: "postgres",
+          protocol: "postgres",
+          logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+          pool: CONFIG.db.pool,
+          dialectOptions: {
+            statement_timeout: 30000,
+            idle_in_transaction_session_timeout: 30000,
+            connectTimeout: 10000,
+            ssl: CONFIG.isProd ? {
+              require: true,
+              rejectUnauthorized: false
+            } : false
+          },
+          define: {
+            timestamps: true,
+            underscored: true,
+            freezeTableName: true,
+          },
+          benchmark: CONFIG.isDev,
+          retry: {
+            max: 3,
+          },
+        }
+      );
+    }
 
     global.sequelize = this.sequelize; // make globally accessible
     return this;
   }
 
- async connect() {
-  while (this.retryCount < this.maxRetries) {
-    try {
-      await this.sequelize.authenticate();
-      this.connected = true;
+  async connect() {
+    while (this.retryCount < this.maxRetries) {
+      try {
+        await this.sequelize.authenticate();
+        this.connected = true;
 
-      // ✅ Auto-sync tables in development
-      if (CONFIG.isDev) {
-        Logger.info("Synchronizing database schema...");
-        await this.sequelize.sync({ alter: true });
-        Logger.success("Database schema synchronized");
-      }
-
-      // Log connection details safely
-      const connectionDetails = process.env.DATABASE_URL 
-        ? { 
-            host: 'from DATABASE_URL', 
-            database: 'from DATABASE_URL',
-            pool: CONFIG.db.pool.max 
-          }
-        : {
-            host: CONFIG.db.host,
-            database: CONFIG.db.name,
-            pool: CONFIG.db.pool.max
-          };
-
-      Logger.success("Database connected successfully", connectionDetails);
-      return true;
-    } catch (error) {
-      this.retryCount++;
-      
-      // Enhanced error logging
-      Logger.error(
-        `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
-        { 
-          error: error.message,
-          code: error.code,
-          errno: error.errno,
-          syscall: error.syscall
+        // ✅ Auto-sync tables in development
+        if (CONFIG.isDev) {
+          Logger.info("Synchronizing database schema...");
+          await this.sequelize.sync({ alter: true });
+          Logger.success("Database schema synchronized");
         }
-      );
 
-      if (error.message.includes('ssl') || error.message.includes('SSL')) {
-        Logger.warn("SSL connection issue detected. Make sure SSL is enabled for your database provider.");
-      }
+        // Log connection details safely
+        const connectionDetails = process.env.DATABASE_URL 
+          ? { 
+              host: 'from DATABASE_URL', 
+              database: 'from DATABASE_URL',
+              pool: CONFIG.db.pool.max 
+            }
+          : {
+              host: CONFIG.db.host,
+              database: CONFIG.db.name,
+              pool: CONFIG.db.pool.max
+            };
 
-      if (this.retryCount >= this.maxRetries) {
-        throw new Error(
-          `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
+        Logger.success("Database connected successfully", connectionDetails);
+        return true;
+      } catch (error) {
+        this.retryCount++;
+        
+        // Enhanced error logging
+        Logger.error(
+          `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
+          { 
+            error: error.message,
+            code: error.code,
+            errno: error.errno,
+            syscall: error.syscall
+          }
         );
-      }
 
-      Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
-      await this._sleep(this.retryDelay);
-      this.retryDelay *= 1.5; // exponential backoff
+        // Specific SSL error guidance
+        if (error.message.includes('ssl') || error.message.includes('SSL')) {
+          Logger.warn("SSL connection issue detected. Make sure SSL is enabled for your database provider.");
+          Logger.warn("Current SSL config: { require: true, rejectUnauthorized: false }");
+        }
+
+        // Connection timeout guidance
+        if (error.message.includes('timeout') || error.code === 'ETIMEDOUT') {
+          Logger.warn("Connection timeout. Check if your database allows connections from Render's IP ranges.");
+        }
+
+        // Authentication error guidance
+        if (error.message.includes('password') || error.message.includes('authentication')) {
+          Logger.warn("Authentication failed. Check your database username and password.");
+        }
+
+        if (this.retryCount >= this.maxRetries) {
+          // Log final error with full details before throwing
+          Logger.error("═".repeat(60));
+          Logger.error("FATAL: All database connection attempts failed");
+          Logger.error("═".repeat(60));
+          Logger.error(`Connection string type: ${process.env.DATABASE_URL ? 'DATABASE_URL' : 'Individual params'}`);
+          if (process.env.DATABASE_URL) {
+            const maskedUrl = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
+            Logger.error(`Connection string: ${maskedUrl}`);
+          }
+          throw new Error(
+            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
+          );
+        }
+
+        Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
+        await this._sleep(this.retryDelay);
+        this.retryDelay *= 1.5; // exponential backoff
+      }
     }
   }
-}
 
   async healthCheck() {
     if (!this.sequelize) {
@@ -701,7 +766,10 @@ class DatabaseManager {
   }
 }
 
-module.exports = new DatabaseManager();
+// Export a single instance
+const databaseManager = new DatabaseManager();
+module.exports = databaseManager;
+
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROUTE LOADER - Intelligent route mounting with validation
@@ -1542,4 +1610,4 @@ async function startServer() {
 
 startServer();
 
-module.exports = { createApp, CONFIG, Logger };
+module.exports = { createApp, CONFIG, Logger, databaseManager };
