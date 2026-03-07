@@ -28,6 +28,21 @@ const cluster = require("cluster");
 const { EventEmitter } = require("events");
 const http = require("http");
 
+
+// Add this near the top of server.js, before database connection
+console.log('🔍 ENV CHECK:');
+console.log('- DATABASE_URL exists:', !!process.env.DATABASE_URL);
+if (process.env.DATABASE_URL) {
+  // Log sanitized version (hide password)
+  const sanitized = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
+  console.log('- DATABASE_URL:', sanitized);
+  
+  // Check if there's any hidden character
+  console.log('- DATABASE_URL length:', process.env.DATABASE_URL.length);
+  console.log('- First 10 chars:', process.env.DATABASE_URL.substring(0, 10));
+}
+console.log('- NODE_ENV:', process.env.NODE_ENV);
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION - Centralized & Validated
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -199,12 +214,75 @@ class SystemMonitor extends EventEmitter {
     this.initialized = false;
   }
 
-  async initialize() {
-    this._startMetricsCollection();
-    this.initialized = true;
-    Logger.debug("System monitor initialized");
-    return this;
+async initialize() {
+  // Check if DATABASE_URL exists (for cloud deployments like Render)
+  if (process.env.DATABASE_URL) {
+    Logger.info("Using DATABASE_URL for connection");
+    
+    this.sequelize = new Sequelize(process.env.DATABASE_URL, {
+      dialect: "postgres",
+      protocol: "postgres",
+      logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+      pool: CONFIG.db.pool,
+      dialectOptions: {
+        ssl: {
+          require: true,
+          rejectUnauthorized: false // Critical for cloud databases
+        },
+        statement_timeout: 30000,
+        idle_in_transaction_session_timeout: 30000,
+        connectTimeout: 10000
+      },
+      define: {
+        timestamps: true,
+        underscored: true,
+        freezeTableName: true,
+      },
+      benchmark: CONFIG.isDev,
+      retry: {
+        max: 3,
+      },
+    });
+  } else {
+    // Fall back to individual connection parameters
+    Logger.info("Using individual connection parameters");
+    
+    this.sequelize = new Sequelize(
+      CONFIG.db.name,
+      CONFIG.db.user,
+      CONFIG.db.password,
+      {
+        host: CONFIG.db.host,
+        port: CONFIG.db.port,
+        dialect: "postgres",
+        protocol: "postgres",
+        logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+        pool: CONFIG.db.pool,
+        dialectOptions: {
+          statement_timeout: 30000,
+          idle_in_transaction_session_timeout: 30000,
+          connectTimeout: 10000,
+          ssl: CONFIG.isProd ? {
+            require: true,
+            rejectUnauthorized: false
+          } : false
+        },
+        define: {
+          timestamps: true,
+          underscored: true,
+          freezeTableName: true,
+        },
+        benchmark: CONFIG.isDev,
+        retry: {
+          max: 3,
+        },
+      }
+    );
   }
+
+  global.sequelize = this.sequelize; // make globally accessible
+  return this;
+}
 
   _startMetricsCollection() {
     this._memoryInterval = setInterval(() => {
@@ -527,44 +605,64 @@ class DatabaseManager {
     return this;
   }
 
-  async connect() {
-    while (this.retryCount < this.maxRetries) {
-      try {
-        await this.sequelize.authenticate();
-        this.connected = true;
+ async connect() {
+  while (this.retryCount < this.maxRetries) {
+    try {
+      await this.sequelize.authenticate();
+      this.connected = true;
 
-        // ✅ Auto-sync tables in development
-        if (CONFIG.isDev) {
-          Logger.info("Synchronizing database schema...");
-          await this.sequelize.sync({ alter: true });
-          Logger.success("Database schema synchronized");
-        }
-
-        Logger.success("Database connected successfully", {
-          host: CONFIG.db.host || "from DATABASE_URL",
-          database: CONFIG.db.name || "from DATABASE_URL",
-          pool: CONFIG.db.pool.max,
-        });
-        return true;
-      } catch (error) {
-        this.retryCount++;
-        Logger.error(
-          `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
-          { error: error.message }
-        );
-
-        if (this.retryCount >= this.maxRetries) {
-          throw new Error(
-            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
-          );
-        }
-
-        Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
-        await this._sleep(this.retryDelay);
-        this.retryDelay *= 1.5; // exponential backoff
+      // ✅ Auto-sync tables in development
+      if (CONFIG.isDev) {
+        Logger.info("Synchronizing database schema...");
+        await this.sequelize.sync({ alter: true });
+        Logger.success("Database schema synchronized");
       }
+
+      // Log connection details safely
+      const connectionDetails = process.env.DATABASE_URL 
+        ? { 
+            host: 'from DATABASE_URL', 
+            database: 'from DATABASE_URL',
+            pool: CONFIG.db.pool.max 
+          }
+        : {
+            host: CONFIG.db.host,
+            database: CONFIG.db.name,
+            pool: CONFIG.db.pool.max
+          };
+
+      Logger.success("Database connected successfully", connectionDetails);
+      return true;
+    } catch (error) {
+      this.retryCount++;
+      
+      // Enhanced error logging
+      Logger.error(
+        `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
+        { 
+          error: error.message,
+          code: error.code,
+          errno: error.errno,
+          syscall: error.syscall
+        }
+      );
+
+      if (error.message.includes('ssl') || error.message.includes('SSL')) {
+        Logger.warn("SSL connection issue detected. Make sure SSL is enabled for your database provider.");
+      }
+
+      if (this.retryCount >= this.maxRetries) {
+        throw new Error(
+          `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
+        );
+      }
+
+      Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
+      await this._sleep(this.retryDelay);
+      this.retryDelay *= 1.5; // exponential backoff
     }
   }
+}
 
   async healthCheck() {
     if (!this.sequelize) {
