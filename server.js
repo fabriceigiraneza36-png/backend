@@ -214,46 +214,16 @@ class SystemMonitor extends EventEmitter {
     this.initialized = false;
   }
 
+
+// In DatabaseManager.initialize() - find the DATABASE_URL usage and fix it:
+
 async initialize() {
-  // Check if DATABASE_URL exists (for cloud deployments like Render)
-  if (process.env.DATABASE_URL) {
-    Logger.info("Using DATABASE_URL for connection");
+    const databaseUrl = process.env.DATABASE_URL || null;
     
-    this.sequelize = new Sequelize(process.env.DATABASE_URL, {
-      dialect: "postgres",
-      protocol: "postgres",
-      logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-      pool: CONFIG.db.pool,
-      dialectOptions: {
-        ssl: {
-          require: true,
-          rejectUnauthorized: false // Critical for cloud databases
-        },
-        statement_timeout: 30000,
-        idle_in_transaction_session_timeout: 30000,
-        connectTimeout: 10000
-      },
-      define: {
-        timestamps: true,
-        underscored: true,
-        freezeTableName: true,
-      },
-      benchmark: CONFIG.isDev,
-      retry: {
-        max: 3,
-      },
-    });
-  } else {
-    // Fall back to individual connection parameters
-    Logger.info("Using individual connection parameters");
-    
-    this.sequelize = new Sequelize(
-      CONFIG.db.name,
-      CONFIG.db.user,
-      CONFIG.db.password,
-      {
-        host: CONFIG.db.host,
-        port: CONFIG.db.port,
+    if (databaseUrl) {
+      // Use DATABASE_URL connection string
+      Logger.info("Using DATABASE_URL for connection");
+      this.sequelize = new Sequelize(databaseUrl, {
         dialect: "postgres",
         protocol: "postgres",
         logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
@@ -262,10 +232,8 @@ async initialize() {
           statement_timeout: 30000,
           idle_in_transaction_session_timeout: 30000,
           connectTimeout: 10000,
-          ssl: CONFIG.isProd ? {
-            require: true,
-            rejectUnauthorized: false
-          } : false
+          // Only add SSL if needed (e.g., for Render, Railway, etc.)
+          // ssl: { require: true, rejectUnauthorized: false },
         },
         define: {
           timestamps: true,
@@ -273,16 +241,41 @@ async initialize() {
           freezeTableName: true,
         },
         benchmark: CONFIG.isDev,
-        retry: {
-          max: 3,
-        },
-      }
-    );
-  }
+        retry: { max: 3 },
+      });
+    } else {
+      // Use individual config values
+      Logger.info("Using individual DB config for connection");
+      this.sequelize = new Sequelize(
+        CONFIG.db.name,
+        CONFIG.db.user,
+        CONFIG.db.password,
+        {
+          host: CONFIG.db.host,
+          port: CONFIG.db.port,
+          dialect: "postgres",
+          protocol: "postgres",
+          logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
+          pool: CONFIG.db.pool,
+          dialectOptions: {
+            statement_timeout: 30000,
+            idle_in_transaction_session_timeout: 30000,
+            connectTimeout: 10000,
+          },
+          define: {
+            timestamps: true,
+            underscored: true,
+            freezeTableName: true,
+          },
+          benchmark: CONFIG.isDev,
+          retry: { max: 3 },
+        }
+      );
+    }
 
-  global.sequelize = this.sequelize; // make globally accessible
-  return this;
-}
+    global.sequelize = this.sequelize;
+    return this;
+  }
 
   _startMetricsCollection() {
     this._memoryInterval = setInterval(() => {
