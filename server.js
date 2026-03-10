@@ -15,6 +15,7 @@
 "use strict";
 
 require("dotenv").config();
+console.log("- SMTP_PASS check:", process.env.SMTP_PASS ? "FOUND" : "MISSING");
 
 const express = require("express");
 const cors = require("cors");
@@ -28,20 +29,19 @@ const cluster = require("cluster");
 const { EventEmitter } = require("events");
 const http = require("http");
 
-
 // Add this near the top of server.js, before database connection
-console.log('🔍 ENV CHECK:');
-console.log('- DATABASE_URL exists:', !!process.env.DATABASE_URL);
+console.log("🔍 ENV CHECK:");
+console.log("- DATABASE_URL exists:", !!process.env.DATABASE_URL);
 if (process.env.DATABASE_URL) {
   // Log sanitized version (hide password)
-  const sanitized = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
-  console.log('- DATABASE_URL:', sanitized);
-  
+  const sanitized = process.env.DATABASE_URL.replace(/:[^:@]*@/, ":***@");
+  console.log("- DATABASE_URL:", sanitized);
+
   // Check if there's any hidden character
-  console.log('- DATABASE_URL length:', process.env.DATABASE_URL.length);
-  console.log('- First 10 chars:', process.env.DATABASE_URL.substring(0, 10));
+  console.log("- DATABASE_URL length:", process.env.DATABASE_URL.length);
+  console.log("- First 10 chars:", process.env.DATABASE_URL.substring(0, 10));
 }
-console.log('- NODE_ENV:', process.env.NODE_ENV);
+console.log("- NODE_ENV:", process.env.NODE_ENV);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONFIGURATION - Centralized & Validated
@@ -214,12 +214,11 @@ class SystemMonitor extends EventEmitter {
     this.initialized = false;
   }
 
+  // In DatabaseManager.initialize() - find the DATABASE_URL usage and fix it:
 
-// In DatabaseManager.initialize() - find the DATABASE_URL usage and fix it:
-
-async initialize() {
+  async initialize() {
     const databaseUrl = process.env.DATABASE_URL || null;
-    
+
     if (databaseUrl) {
       // Use DATABASE_URL connection string
       Logger.info("Using DATABASE_URL for connection");
@@ -269,7 +268,7 @@ async initialize() {
           },
           benchmark: CONFIG.isDev,
           retry: { max: 3 },
-        }
+        },
       );
     }
 
@@ -572,11 +571,14 @@ class DatabaseManager {
     // Check if DATABASE_URL exists (for cloud deployments like Render)
     if (process.env.DATABASE_URL) {
       Logger.info("Using DATABASE_URL for connection");
-      
+
       // Log sanitized URL for debugging
-      const sanitizedUrl = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
+      const sanitizedUrl = process.env.DATABASE_URL.replace(
+        /:[^:@]*@/,
+        ":***@",
+      );
       Logger.debug(`Connection string: ${sanitizedUrl}`);
-      
+
       this.sequelize = new Sequelize(process.env.DATABASE_URL, {
         dialect: "postgres",
         protocol: "postgres",
@@ -585,11 +587,11 @@ class DatabaseManager {
         dialectOptions: {
           ssl: {
             require: true,
-            rejectUnauthorized: false // Critical for cloud databases like Neon
+            rejectUnauthorized: false, // Critical for cloud databases like Neon
           },
           statement_timeout: 30000,
           idle_in_transaction_session_timeout: 30000,
-          connectTimeout: 10000
+          connectTimeout: 10000,
         },
         define: {
           timestamps: true,
@@ -604,7 +606,7 @@ class DatabaseManager {
     } else {
       // Fall back to individual connection parameters
       Logger.info("Using individual connection parameters");
-      
+
       this.sequelize = new Sequelize(
         CONFIG.db.name,
         CONFIG.db.user,
@@ -620,10 +622,12 @@ class DatabaseManager {
             statement_timeout: 30000,
             idle_in_transaction_session_timeout: 30000,
             connectTimeout: 10000,
-            ssl: CONFIG.isProd ? {
-              require: true,
-              rejectUnauthorized: false
-            } : false
+            ssl: CONFIG.isProd
+              ? {
+                  require: true,
+                  rejectUnauthorized: false,
+                }
+              : false,
           },
           define: {
             timestamps: true,
@@ -634,7 +638,7 @@ class DatabaseManager {
           retry: {
             max: 3,
           },
-        }
+        },
       );
     }
 
@@ -656,48 +660,59 @@ class DatabaseManager {
         }
 
         // Log connection details safely
-        const connectionDetails = process.env.DATABASE_URL 
-          ? { 
-              host: 'from DATABASE_URL', 
-              database: 'from DATABASE_URL',
-              pool: CONFIG.db.pool.max 
+        const connectionDetails = process.env.DATABASE_URL
+          ? {
+              host: "from DATABASE_URL",
+              database: "from DATABASE_URL",
+              pool: CONFIG.db.pool.max,
             }
           : {
               host: CONFIG.db.host,
               database: CONFIG.db.name,
-              pool: CONFIG.db.pool.max
+              pool: CONFIG.db.pool.max,
             };
 
         Logger.success("Database connected successfully", connectionDetails);
         return true;
       } catch (error) {
         this.retryCount++;
-        
+
         // Enhanced error logging
         Logger.error(
           `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
-          { 
+          {
             error: error.message,
             code: error.code,
             errno: error.errno,
-            syscall: error.syscall
-          }
+            syscall: error.syscall,
+          },
         );
 
         // Specific SSL error guidance
-        if (error.message.includes('ssl') || error.message.includes('SSL')) {
-          Logger.warn("SSL connection issue detected. Make sure SSL is enabled for your database provider.");
-          Logger.warn("Current SSL config: { require: true, rejectUnauthorized: false }");
+        if (error.message.includes("ssl") || error.message.includes("SSL")) {
+          Logger.warn(
+            "SSL connection issue detected. Make sure SSL is enabled for your database provider.",
+          );
+          Logger.warn(
+            "Current SSL config: { require: true, rejectUnauthorized: false }",
+          );
         }
 
         // Connection timeout guidance
-        if (error.message.includes('timeout') || error.code === 'ETIMEDOUT') {
-          Logger.warn("Connection timeout. Check if your database allows connections from Render's IP ranges.");
+        if (error.message.includes("timeout") || error.code === "ETIMEDOUT") {
+          Logger.warn(
+            "Connection timeout. Check if your database allows connections from Render's IP ranges.",
+          );
         }
 
         // Authentication error guidance
-        if (error.message.includes('password') || error.message.includes('authentication')) {
-          Logger.warn("Authentication failed. Check your database username and password.");
+        if (
+          error.message.includes("password") ||
+          error.message.includes("authentication")
+        ) {
+          Logger.warn(
+            "Authentication failed. Check your database username and password.",
+          );
         }
 
         if (this.retryCount >= this.maxRetries) {
@@ -705,13 +720,18 @@ class DatabaseManager {
           Logger.error("═".repeat(60));
           Logger.error("FATAL: All database connection attempts failed");
           Logger.error("═".repeat(60));
-          Logger.error(`Connection string type: ${process.env.DATABASE_URL ? 'DATABASE_URL' : 'Individual params'}`);
+          Logger.error(
+            `Connection string type: ${process.env.DATABASE_URL ? "DATABASE_URL" : "Individual params"}`,
+          );
           if (process.env.DATABASE_URL) {
-            const maskedUrl = process.env.DATABASE_URL.replace(/:[^:@]*@/, ':***@');
+            const maskedUrl = process.env.DATABASE_URL.replace(
+              /:[^:@]*@/,
+              ":***@",
+            );
             Logger.error(`Connection string: ${maskedUrl}`);
           }
           throw new Error(
-            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`
+            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`,
           );
         }
 
@@ -762,7 +782,6 @@ class DatabaseManager {
 // Export a single instance
 const databaseManager = new DatabaseManager();
 module.exports = databaseManager;
-
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROUTE LOADER - Intelligent route mounting with validation
@@ -1149,7 +1168,7 @@ function createApp(monitor) {
 
   const uploadsDir = path.join(__dirname, CONFIG.uploadDir);
   if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true});
+    fs.mkdirSync(uploadsDir, { recursive: true });
     Logger.info("Created uploads directory", { path: uploadsDir });
   }
 
