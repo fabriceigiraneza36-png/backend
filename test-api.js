@@ -1,52 +1,42 @@
-// test-api.js
-// Run with: node test-api.js
+const http = require('http');
 
-const testData = {
-  name: "John Doe",
-  email: "test@example.com",
-  phone: "+1234567890",
-  subject: "Test Safari Inquiry",
-  message: "This is a test message to verify the email system is working correctly. I am interested in booking a safari.",
-  tripType: "safari",
-  travelDate: "2024-06-15",
-  travelers: "2"
-};
-
-async function testAPI() {
-  console.log('🧪 Testing API...\n');
-  
-  try {
-    // Test health endpoint
-    console.log('1️⃣ Testing health endpoint...');
-    const healthRes = await fetch('http://localhost:5000/api/health');
-    const healthData = await healthRes.json();
-    console.log('Health:', healthData);
-    
-    // Test contact endpoint
-    console.log('\n2️⃣ Testing contact endpoint...');
-    console.log('Sending:', JSON.stringify(testData, null, 2));
-    
-    const contactRes = await fetch('http://localhost:5000/api/contact', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(testData)
+function makeRequest(path) {
+  return new Promise((resolve, reject) => {
+    const req = http.request({
+      hostname: 'localhost',
+      port: 5000,
+      path: path,
+      method: 'GET'
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          resolve({ status: res.statusCode, data: JSON.parse(data) });
+        } catch(e) {
+          resolve({ status: res.statusCode, data: data });
+        }
+      });
     });
-    
-    console.log('Status:', contactRes.status);
-    const contactData = await contactRes.json();
-    console.log('Response:', JSON.stringify(contactData, null, 2));
-    
-    if (contactData.success) {
-      console.log('\n✅ SUCCESS! Check your email.');
-    } else {
-      console.log('\n❌ FAILED:', contactData.message);
-    }
-    
-  } catch (error) {
-    console.error('❌ Error:', error.message);
-  }
+    req.on('error', reject);
+    req.end();
+  });
 }
 
-testAPI();
+async function test() {
+  console.log('Testing /api/destinations...');
+  const dest = await makeRequest('/api/destinations?limit=2');
+  console.log('Status:', dest.status);
+  console.log('Data:', JSON.stringify(dest.data, null, 2));
+  
+  console.log('\nTesting /api/auth (root)...');
+  const auth = await makeRequest('/api/auth');
+  console.log('Status:', auth.status);
+  console.log('Data:', JSON.stringify(auth.data, null, 2));
+  
+  console.log('\nTesting /api/health...');
+  const health = await makeRequest('/api/health');
+  console.log('Status:', health.status);
+}
+
+test().catch(console.error);
