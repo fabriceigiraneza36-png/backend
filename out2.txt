@@ -1,0 +1,92 @@
+﻿- SMTP_PASS check: FOUND
+≡ƒöì ENV CHECK:
+- DATABASE_URL exists: true
+- DATABASE_URL: postgresql://neondb_owner:***@ep-gentle-butterfly-aii8023t-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require
+- DATABASE_URL length: 129
+- First 10 chars: postgresql
+- NODE_ENV: development
+
+[35m≡ƒÜÇ STARTUP[0m: ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+[35m≡ƒÜÇ STARTUP[0m: Starting ALTUVERA v4.0.0...
+[35m≡ƒÜÇ STARTUP[0m: ΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉΓòÉ
+
+[35m≡ƒÜÇ STARTUP[0m: Initializing system monitor...
+[2m[2026-03-10T15:58:11.830Z][0m [32mΓ£à INFO[0m: Using DATABASE_URL for connection
+[2m[2026-03-10T15:58:12.698Z][0m [32m≡ƒÄë SUCCESS[0m: System monitor ready
+[35m≡ƒÜÇ STARTUP[0m: Connecting to database...
+[2m[2026-03-10T15:58:12.699Z][0m [32mΓ£à INFO[0m: Using DATABASE_URL for connection
+[2m[2026-03-10T15:58:12.699Z][0m [34m≡ƒöì DEBUG[0m: Connection string: postgresql://neondb_owner:***@ep-gentle-butterfly-aii8023t-pooler.c-4.us-east-1.aws.neon.tech/neondb?sslmode=require
+[2m[2026-03-10T15:58:24.471Z][0m [34m≡ƒöì DEBUG[0m: Executed (default): SELECT 1+1 AS result
+[2m[2026-03-10T15:58:24.473Z][0m [32mΓ£à INFO[0m: Synchronizing database schema...
+[2m[2026-03-10T15:58:24.776Z][0m [34m≡ƒöì DEBUG[0m: Executed (default): SELECT 1+1 AS result
+[2m[2026-03-10T15:58:24.777Z][0m [32m≡ƒÄë SUCCESS[0m: Database schema synchronized
+[2m[2026-03-10T15:58:24.777Z][0m [32m≡ƒÄë SUCCESS[0m: Database connected successfully [2m{"host":"from DATABASE_URL","database":"from DATABASE_URL","pool":20}[0m
+[35m≡ƒÜÇ STARTUP[0m: Creating Express application...
+[2m[2026-03-10T15:58:24.828Z][0m [32m≡ƒÄë SUCCESS[0m: Express app created
+[2m[2026-03-10T15:58:24.830Z][0m [32m≡ƒÄë SUCCESS[0m: System endpoints configured
+
+[35m≡ƒÜÇ STARTUP[0m: Loading API routes...
+
+[2m[2026-03-10T15:58:24.845Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\auth.js
+[2m[2026-03-10T15:58:29.174Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/auth with 15 endpoints
+[32m   Γ£ô /auth                ΓåÆ User Authentication (15 endpoints)[0m
+[2m[2026-03-10T15:58:29.179Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\adminAuth.js
+[2m[2026-03-10T15:58:29.184Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/admin/auth with 9 endpoints
+[32m   Γ£ô /admin/auth          ΓåÆ Admin Authentication (9 endpoints)[0m
+[2m[2026-03-10T15:58:29.188Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\users.js
+[2m[2026-03-10T15:58:29.198Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/users with 17 endpoints
+[32m   Γ£ô /users               ΓåÆ User Management (17 endpoints)[0m
+[2m[2026-03-10T15:58:29.201Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\countries.js
+[2m[2026-03-10T15:58:29.379Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/countries with 7 endpoints
+[32m   Γ£ô /countries           ΓåÆ Countries Management (7 endpoints)[0m
+[2m[2026-03-10T15:58:29.388Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\destinations.js
+[2m[2026-03-10T15:58:29.401Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/destinations with 11 endpoints
+[32m   Γ£ô /destinations        ΓåÆ Travel Destinations (11 endpoints)[0m
+[2m[2026-03-10T15:58:29.406Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\posts.js
+[2m[2026-03-10T15:58:29.418Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/posts with 5 endpoints
+[32m   Γ£ô /posts               ΓåÆ Blog Posts (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.428Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\tips.js
+[2m[2026-03-10T15:58:29.434Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/tips with 5 endpoints
+[32m   Γ£ô /tips                ΓåÆ Travel Tips (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.444Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\services.js
+[2m[2026-03-10T15:58:29.458Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/services with 5 endpoints
+[32m   Γ£ô /services            ΓåÆ Travel Services (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.460Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\team.js
+[2m[2026-03-10T15:58:29.469Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/team with 5 endpoints
+[32m   Γ£ô /team                ΓåÆ Team Members (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.474Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\gallery.js
+[2m[2026-03-10T15:58:29.483Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/gallery with 5 endpoints
+[32m   Γ£ô /gallery             ΓåÆ Photo Gallery (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.485Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\bookings.js
+[2m[2026-03-10T15:58:29.494Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/bookings with 5 endpoints
+[32m   Γ£ô /bookings            ΓåÆ Booking Management (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.498Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\faqs.js
+[2m[2026-03-10T15:58:29.508Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/faqs with 5 endpoints
+[32m   Γ£ô /faqs                ΓåÆ FAQs (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.510Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\contact.js
+[2m[2026-03-10T15:58:29.517Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/contact with 4 endpoints
+[32m   Γ£ô /contact             ΓåÆ Contact Messages (4 endpoints)[0m
+[2m[2026-03-10T15:58:29.522Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\pages.js
+[2m[2026-03-10T15:58:29.535Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/pages with 5 endpoints
+[32m   Γ£ô /pages               ΓåÆ Static Pages (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.539Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\virtualTours.js
+[2m[2026-03-10T15:58:29.554Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/virtual-tours with 5 endpoints
+[32m   Γ£ô /virtual-tours       ΓåÆ Virtual Tours (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.561Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\subscribers.js
+[2m[2026-03-10T15:58:29.597Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/subscribers with 5 endpoints
+[32m   Γ£ô /subscribers         ΓåÆ Newsletter Subscribers (5 endpoints)[0m
+[2m[2026-03-10T15:58:29.601Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\settings.js
+[2m[2026-03-10T15:58:29.628Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/settings with 3 endpoints
+[32m   Γ£ô /settings            ΓåÆ Site Settings (3 endpoints)[0m
+[2m[2026-03-10T15:58:29.634Z][0m [34m≡ƒöì DEBUG[0m: Loading: C:\Users\KONG\OneDrive\Desktop\backend\routes\uploads.js
+[2m[2026-03-10T15:58:32.843Z][0m [34m≡ƒöì DEBUG[0m: Mounted: /api/uploads with 2 endpoints
+[32m   Γ£ô /uploads             ΓåÆ Cloudinary Uploads (2 endpoints)[0m
+
+[35m≡ƒÜÇ STARTUP[0m: Routes: 18 loaded Γ£ô | 0 failed Γ£ù | 0 skipped Γùï
+
+[2m[2026-03-10T15:58:32.930Z][0m [32m≡ƒÄë SUCCESS[0m: Error handlers configured
+
+[2m[2026-03-10T15:58:33.046Z][0m [32mΓ£à INFO[0m: HTTP server closed
+[2m[2026-03-10T15:58:33.422Z][0m [32mΓ£à INFO[0m: Database connection closed
+[2m[2026-03-10T15:58:33.448Z][0m [32mΓ£à INFO[0m: Final stats: [2m{"totalRequests":0,"successRate":"N/A","avgResponseTime":"0ms","errorsTotal":1}[0m
+[2m[2026-03-10T15:58:33.448Z][0m [32m≡ƒÄë SUCCESS[0m: Graceful shutdown complete

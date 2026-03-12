@@ -214,65 +214,9 @@ class SystemMonitor extends EventEmitter {
     this.initialized = false;
   }
 
-  // In DatabaseManager.initialize() - find the DATABASE_URL usage and fix it:
-
   async initialize() {
-    const databaseUrl = process.env.DATABASE_URL || null;
-
-    if (databaseUrl) {
-      // Use DATABASE_URL connection string
-      Logger.info("Using DATABASE_URL for connection");
-      this.sequelize = new Sequelize(databaseUrl, {
-        dialect: "postgres",
-        protocol: "postgres",
-        logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-        pool: CONFIG.db.pool,
-        dialectOptions: {
-          statement_timeout: 30000,
-          idle_in_transaction_session_timeout: 30000,
-          connectTimeout: 10000,
-          // Only add SSL if needed (e.g., for Render, Railway, etc.)
-          // ssl: { require: true, rejectUnauthorized: false },
-        },
-        define: {
-          timestamps: true,
-          underscored: true,
-          freezeTableName: true,
-        },
-        benchmark: CONFIG.isDev,
-        retry: { max: 3 },
-      });
-    } else {
-      // Use individual config values
-      Logger.info("Using individual DB config for connection");
-      this.sequelize = new Sequelize(
-        CONFIG.db.name,
-        CONFIG.db.user,
-        CONFIG.db.password,
-        {
-          host: CONFIG.db.host,
-          port: CONFIG.db.port,
-          dialect: "postgres",
-          protocol: "postgres",
-          logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-          pool: CONFIG.db.pool,
-          dialectOptions: {
-            statement_timeout: 30000,
-            idle_in_transaction_session_timeout: 30000,
-            connectTimeout: 10000,
-          },
-          define: {
-            timestamps: true,
-            underscored: true,
-            freezeTableName: true,
-          },
-          benchmark: CONFIG.isDev,
-          retry: { max: 3 },
-        },
-      );
-    }
-
-    global.sequelize = this.sequelize;
+    this._startMetricsCollection();
+    this.initialized = true;
     return this;
   }
 
