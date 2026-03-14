@@ -494,3 +494,178 @@ CREATE TRIGGER update_users_updated_at
     BEFORE UPDATE ON users
     FOR EACH ROW
     EXECUTE FUNCTION update_updated_at_column();
+
+
+-- ═══════════════════════════════════════════════════════════════════════════════
+-- TEAM MEMBERS TABLE
+-- ═══════════════════════════════════════════════════════════════════════════════
+
+CREATE TABLE IF NOT EXISTS team_members (
+    id SERIAL PRIMARY KEY,
+    
+    -- Basic Information
+    name VARCHAR(100) NOT NULL,
+    role VARCHAR(100) NOT NULL,
+    department VARCHAR(50),
+    bio TEXT,
+    
+    -- Contact Information
+    email VARCHAR(150) UNIQUE,
+    phone VARCHAR(30),
+    
+    -- Media
+    image_url TEXT,
+    image_public_id VARCHAR(255),
+    
+    -- Social Links
+    linkedin_url VARCHAR(255),
+    twitter_url VARCHAR(255),
+    instagram_url VARCHAR(255),
+    website_url VARCHAR(255),
+    
+    -- Professional Details
+    expertise TEXT[], -- Array of skills/expertise
+    languages TEXT[], -- Array of languages spoken
+    certifications TEXT[], -- Array of certifications
+    years_experience INTEGER DEFAULT 0,
+    
+    -- Location
+    location VARCHAR(100),
+    country VARCHAR(50),
+    
+    -- Display Settings
+    display_order INTEGER DEFAULT 0,
+    is_featured BOOLEAN DEFAULT FALSE,
+    is_active BOOLEAN DEFAULT TRUE,
+    show_on_homepage BOOLEAN DEFAULT FALSE,
+    
+    -- SEO & Meta
+    slug VARCHAR(120) UNIQUE,
+    meta_title VARCHAR(160),
+    meta_description VARCHAR(320),
+    
+    -- Timestamps
+    joined_date DATE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    
+    -- Constraints
+    CONSTRAINT chk_email_format CHECK (email ~* '^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$')
+);
+
+-- Indexes for performance
+CREATE INDEX IF NOT EXISTS idx_team_members_department ON team_members(department);
+CREATE INDEX IF NOT EXISTS idx_team_members_is_active ON team_members(is_active);
+CREATE INDEX IF NOT EXISTS idx_team_members_is_featured ON team_members(is_featured);
+CREATE INDEX IF NOT EXISTS idx_team_members_display_order ON team_members(display_order);
+CREATE INDEX IF NOT EXISTS idx_team_members_slug ON team_members(slug);
+
+-- Trigger for updated_at
+CREATE OR REPLACE FUNCTION update_team_members_updated_at()
+RETURNS TRIGGER AS $$
+BEGIN
+    NEW.updated_at = CURRENT_TIMESTAMP;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_team_members_updated_at ON team_members;
+CREATE TRIGGER trigger_team_members_updated_at
+    BEFORE UPDATE ON team_members
+    FOR EACH ROW
+    EXECUTE FUNCTION update_team_members_updated_at();
+
+-- Insert default team members
+INSERT INTO team_members (name, role, department, bio, email, image_url, expertise, location, country, is_featured, is_active, display_order, slug)
+VALUES 
+(
+    'IGIRANEZA Fabrice',
+    'Founder & CEO',
+    'Leadership',
+    'Visionary entrepreneur leading Altuvera''s mission to deliver transformative travel experiences across East Africa through the "True Adventures In High Places & Deep Culture" philosophy.',
+    'fabrice@altuvera.com',
+    'https://randomuser.me/api/portraits/men/32.jpg',
+    ARRAY['Strategic Planning', 'Tourism Innovation', 'Partnership Development', 'Business Leadership'],
+    'Kigali',
+    'Rwanda',
+    TRUE,
+    TRUE,
+    1,
+    'igiraneza-fabrice'
+),
+(
+    'UWIMANA Grace',
+    'Head of Operations',
+    'Operations',
+    'Ensures seamless coordination of every itinerary with precision, local expertise, and meticulous attention to detail across all operational touchpoints.',
+    'grace@altuvera.com',
+    'https://randomuser.me/api/portraits/women/44.jpg',
+    ARRAY['Logistics Management', 'Quality Assurance', 'Team Coordination', 'Process Optimization'],
+    'Nairobi',
+    'Kenya',
+    FALSE,
+    TRUE,
+    2,
+    'uwimana-grace'
+),
+(
+    'MUTABAZI Jean',
+    'Lead Safari Guide',
+    'Guides',
+    'Expert wildlife guide combining extensive field knowledge with exceptional safety standards for unforgettable safari expeditions.',
+    'jean@altuvera.com',
+    'https://randomuser.me/api/portraits/men/67.jpg',
+    ARRAY['Wildlife Tracking', 'Bird Identification', 'Conservation Education', 'First Aid'],
+    'Serengeti',
+    'Tanzania',
+    TRUE,
+    TRUE,
+    3,
+    'mutabazi-jean'
+),
+(
+    'INGABIRE Diane',
+    'Customer Experience Manager',
+    'Customer Service',
+    'Designs guest-first service experiences from initial inquiry through post-trip follow-up and comprehensive feedback collection.',
+    'diane@altuvera.com',
+    'https://randomuser.me/api/portraits/women/28.jpg',
+    ARRAY['Client Relations', 'Service Design', 'Feedback Analysis', 'Communication'],
+    'Kampala',
+    'Uganda',
+    FALSE,
+    TRUE,
+    4,
+    'ingabire-diane'
+),
+(
+    'HABIMANA Patrick',
+    'Conservation Liaison',
+    'Conservation',
+    'Manages partnerships with wildlife conservancies and oversees community development initiatives across the East African region.',
+    'patrick@altuvera.com',
+    'https://randomuser.me/api/portraits/men/52.jpg',
+    ARRAY['Conservation Strategy', 'Community Engagement', 'Sustainability', 'Partnership Management'],
+    'Bwindi',
+    'Uganda',
+    FALSE,
+    TRUE,
+    5,
+    'habimana-patrick'
+),
+(
+    'MUKAMANA Claudine',
+    'Marketing Director',
+    'Marketing',
+    'Leads brand strategy and digital marketing initiatives to connect global travelers with authentic African experiences.',
+    'claudine@altuvera.com',
+    'https://randomuser.me/api/portraits/women/65.jpg',
+    ARRAY['Digital Marketing', 'Brand Strategy', 'Content Creation', 'Social Media'],
+    'Kigali',
+    'Rwanda',
+    FALSE,
+    TRUE,
+    6,
+    'mukamana-claudine'
+)
+ON CONFLICT (email) DO NOTHING;

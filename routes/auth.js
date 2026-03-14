@@ -10,7 +10,7 @@ const { protect } = require("../middleware/auth");
 const { sendVerificationCode } = require("../utils/sendEmail");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const asyncHandler = require("../middleware/asyncHandler");
-const { validateEmail, validateName } = require("../utils/validators");
+const { validateEmail, validateName, validatePassword } = require("../utils/validators");
 const crypto = require('crypto');
 const bcrypt = require('bcryptjs');
 const { Op } = require('sequelize');
@@ -530,6 +530,14 @@ router.post(
       });
     }
 
+    if (!validatePassword(password)) {
+      return res.status(400).json({
+        success: false,
+        error:
+          "New password must be at least 10 characters and include upper + lower case letters, numbers, and symbols.",
+      });
+    }
+
     const resetPasswordToken = crypto.createHash('sha256').update(token).digest('hex');
 
     const user = await User.findOne({
@@ -577,10 +585,11 @@ router.put(
       });
     }
 
-    if (newPassword.length < 6) {
+    if (!validatePassword(newPassword)) {
       return res.status(400).json({
         success: false,
-        error: "New password must be at least 6 characters.",
+        error:
+          "New password must be at least 10 characters and include upper + lower case letters, numbers, and symbols.",
       });
     }
 

@@ -31,6 +31,10 @@ exports.protect = async (req, res, next) => {
     
     const result = await query(`SELECT * FROM ${table} WHERE id = $1`, [decoded.id]);
 
+    // Enforce token invalidation via token version
+    const tokenVersionFromToken =
+      decoded.tokenVersion ?? decoded.token_version ?? decoded.tv ?? null;
+
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
@@ -44,6 +48,20 @@ exports.protect = async (req, res, next) => {
       return res.status(401).json({
         success: false,
         message: "Account has been deactivated.",
+      });
+    }
+
+    // Token version check (logout / token invalidation)
+    const currentTokenVersion =
+      entity.token_version ?? entity.tokenVersion ?? 0;
+    if (
+      tokenVersionFromToken !== null &&
+      currentTokenVersion !== null &&
+      tokenVersionFromToken !== currentTokenVersion
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Session invalidated. Please sign in again.",
       });
     }
 

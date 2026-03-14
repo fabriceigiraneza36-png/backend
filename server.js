@@ -1,1569 +1,1424 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- *    █████╗ ██╗  ████████╗██╗   ██╗██╗   ██╗███████╗██████╗  █████╗
- *   ██╔══██╗██║  ╚══██╔══╝██║   ██║██║   ██║██╔════╝██╔══██╗██╔══██╗
- *   ███████║██║     ██║   ██║   ██║██║   ██║█████╗  ██████╔╝███████║
- *   ██╔══██║██║     ██║   ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗██╔══██║
- *   ██║  ██║███████╗██║   ╚██████╔╝ ╚████╔╝ ███████╗██║  ██║██║  ██║
- *   ╚═╝  ╚═╝╚══════╝╚═╝    ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════════
  *
- *   ALTUVERA TRAVEL - Enterprise Backend Server v4.0
- *   Production-Ready | High-Performance | Self-Monitoring | Cluster-Ready
- * ═══════════════════════════════════════════════════════════════════════════════
+ *       █████╗ ██╗  ████████╗██╗   ██╗██╗   ██╗███████╗██████╗  █████╗
+ *      ██╔══██╗██║  ╚══██╔══╝██║   ██║██║   ██║██╔════╝██╔══██╗██╔══██╗
+ *      ███████║██║     ██║   ██║   ██║██║   ██║█████╗  ██████╔╝███████║
+ *      ██╔══██║██║     ██║   ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗██╔══██║
+ *      ██║  ██║███████╗██║   ╚██████╔╝ ╚████╔╝ ███████╗██║  ██║██║  ██║
+ *      ╚═╝  ╚═╝╚══════╝╚═╝    ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝
+ *
+ *      ALTUVERA TRAVEL - Enterprise Backend Server v6.0
+ *
+ *      "True Adventures In High Places & Deep Culture"
+ *
+ *      Features:
+ *      ├── Advanced Error Handling & Self-Healing
+ *      ├── Comprehensive Security Hardening
+ *      ├── Real-time Health Monitoring
+ *      ├── Automatic Database Reconnection
+ *      ├── Memory & Performance Optimization
+ *      ├── Request Validation & Sanitization
+ *      ├── Graceful Shutdown Management
+ *      └── Production-Ready Logging
+ *
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════════
  */
 
 "use strict";
 
-require("dotenv").config();
-console.log("- SMTP_PASS check:", process.env.SMTP_PASS ? "FOUND" : "MISSING");
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENVIRONMENT VALIDATION & EARLY ERROR CATCHING
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// Catch environment errors before anything else
+process.on("uncaughtException", (err) => {
+  console.error("═══════════════════════════════════════════════════════════");
+  console.error("💥 UNCAUGHT EXCEPTION! Server shutting down...");
+  console.error("Time:", new Date().toISOString());
+  console.error("Error:", err.name);
+  console.error("Message:", err.message);
+  console.error("Stack:", err.stack);
+  console.error("═══════════════════════════════════════════════════════════");
+  process.exit(1);
+});
+
+process.on("unhandledRejection", (reason, promise) => {
+  console.error("═══════════════════════════════════════════════════════════");
+  console.error("💥 UNHANDLED REJECTION! Server shutting down...");
+  console.error("Time:", new Date().toISOString());
+  console.error("Reason:", reason);
+  console.error("═══════════════════════════════════════════════════════════");
+  process.exit(1);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE DEPENDENCIES
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const compression = require("compression");
+const http = require("http");
+const https = require("https");
 const path = require("path");
 const fs = require("fs");
-const os = require("os");
+const crypto = require("crypto");
 const cluster = require("cluster");
-const { EventEmitter } = require("events");
-const http = require("http");
-
-// Add this near the top of server.js, before database connection
-console.log("🔍 ENV CHECK:");
-console.log("- DATABASE_URL exists:", !!process.env.DATABASE_URL);
-if (process.env.DATABASE_URL) {
-  // Log sanitized version (hide password)
-  const sanitized = process.env.DATABASE_URL.replace(/:[^:@]*@/, ":***@");
-  console.log("- DATABASE_URL:", sanitized);
-
-  // Check if there's any hidden character
-  console.log("- DATABASE_URL length:", process.env.DATABASE_URL.length);
-  console.log("- First 10 chars:", process.env.DATABASE_URL.substring(0, 10));
-}
-console.log("- NODE_ENV:", process.env.NODE_ENV);
+const os = require("os");
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CONFIGURATION - Centralized & Validated
+// INTERNAL MODULES WITH SAFE LOADING
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const CONFIG = {
-  // Server
-  name: "ALTUVERA",
-  version: "4.0.0",
-  port: parseInt(process.env.PORT, 10) || 5000,
-  env: process.env.NODE_ENV || "development",
-  get isDev() {
-    return this.env === "development";
-  },
-  get isProd() {
-    return this.env === "production";
-  },
-  startTime: new Date(),
-
-  // CORS
-  corsOrigins: (
-    process.env.CORS_ORIGINS ||
-    "http://localhost:5173,http://localhost:3000,http://localhost:3001"
-  )
-    .split(",")
-    .map((s) => s.trim())
-    .filter(Boolean),
-
-  // File Upload
-  uploadDir: process.env.UPLOAD_DIR || "uploads",
-  maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 50 * 1024 * 1024, // 50MB
-  maxJsonSize: "10mb",
-  maxUrlEncodedSize: "10mb",
-
-  // Cluster
-  clusterMode: process.env.CLUSTER_MODE === "true",
-  workersCount:
-    parseInt(process.env.WORKERS_COUNT, 10) || Math.max(2, os.cpus().length),
-
-  // Performance
-  keepAliveTimeout: 65000,
-  headersTimeout: 66000,
-  requestTimeout: 30000,
-
-  // Rate Limiting
-  rateLimit: {
-    windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // requests per window
-  },
-
-  // Database
-  db: {
-    host: process.env.DB_HOST || "localhost",
-    port: parseInt(process.env.DB_PORT, 10) || 5432,
-    name: process.env.DB_NAME || "altuvera",
-    user: process.env.DB_USER || "fabrice",
-    password: process.env.DB_PASSWORD || "2004",
-    pool: {
-      max: parseInt(process.env.DB_POOL_MAX, 10) || 20,
-      min: parseInt(process.env.DB_POOL_MIN, 10) || 5,
-      acquire: 30000,
-      idle: 10000,
-    },
-  },
+/**
+ * Safe module loader with fallback
+ */
+const safeRequire = (modulePath, fallback = null) => {
+  try {
+    return require(modulePath);
+  } catch (err) {
+    console.warn(`⚠️  Module not found: ${modulePath}. Using fallback.`);
+    return fallback;
+  }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// COLORS - Terminal output formatting
-// ═══════════════════════════════════════════════════════════════════════════════
+// Load configuration with validation
+const env = (() => {
+  try {
+    const envModule = require("./config/env");
 
-const COLORS = {
-  reset: "\x1b[0m",
-  bright: "\x1b[1m",
-  dim: "\x1b[2m",
-  red: "\x1b[31m",
-  green: "\x1b[32m",
-  yellow: "\x1b[33m",
-  blue: "\x1b[34m",
-  magenta: "\x1b[35m",
-  cyan: "\x1b[36m",
-  white: "\x1b[37m",
-  bgRed: "\x1b[41m",
-  bgGreen: "\x1b[42m",
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// LOGGER - Enhanced logging with levels and colors
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const Logger = {
-  _getTimestamp() {
-    return new Date().toISOString();
-  },
-
-  _format(level, color, emoji, message, meta = null) {
-    const timestamp = this._getTimestamp();
-    const metaStr = meta
-      ? ` ${COLORS.dim}${JSON.stringify(meta)}${COLORS.reset}`
-      : "";
-    return `${COLORS.dim}[${timestamp}]${COLORS.reset} ${color}${emoji} ${level}${COLORS.reset}: ${message}${metaStr}`;
-  },
-
-  info(message, meta) {
-    console.log(this._format("INFO", COLORS.green, "✅", message, meta));
-  },
-
-  warn(message, meta) {
-    console.warn(this._format("WARN", COLORS.yellow, "⚠️", message, meta));
-  },
-
-  error(message, meta) {
-    console.error(this._format("ERROR", COLORS.red, "❌", message, meta));
-  },
-
-  debug(message, meta) {
-    if (CONFIG.isDev) {
-      console.log(this._format("DEBUG", COLORS.blue, "🔍", message, meta));
-    }
-  },
-
-  http(message) {
-    console.log(`${COLORS.cyan}🌐 HTTP${COLORS.reset}: ${message}`);
-  },
-
-  success(message, meta) {
-    console.log(this._format("SUCCESS", COLORS.green, "🎉", message, meta));
-  },
-
-  startup(message) {
-    console.log(`${COLORS.magenta}🚀 STARTUP${COLORS.reset}: ${message}`);
-  },
-
-  route(message, status = "ok") {
-    const config = {
-      ok: { emoji: "✓", color: COLORS.green },
-      warn: { emoji: "⚠", color: COLORS.yellow },
-      error: { emoji: "✗", color: COLORS.red },
-    };
-    const { emoji, color } = config[status] || config.ok;
-    console.log(`${color}   ${emoji} ${message}${COLORS.reset}`);
-  },
-
-  request(req, res, duration) {
-    const status = res.statusCode;
-    const color =
-      status >= 500 ? COLORS.red : status >= 400 ? COLORS.yellow : COLORS.green;
-    console.log(
-      `${color}${req.method} ${req.originalUrl} ${status} ${duration}ms${COLORS.reset}`,
-    );
-  },
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SYSTEM MONITOR - Real-time metrics and health tracking
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class SystemMonitor extends EventEmitter {
-  constructor() {
-    super();
-    this.setMaxListeners(50);
-    this.metrics = {
-      requests: { total: 0, success: 0, failed: 0, active: 0 },
-      response: { times: [], avg: 0, min: Infinity, max: 0, p95: 0, p99: 0 },
-      errors: [],
-      routes: new Map(),
-      memory: { samples: [] },
-      cpu: { samples: [] },
-    };
-    this.startTime = Date.now();
-    this.initialized = false;
-  }
-
-  async initialize() {
-    this._startMetricsCollection();
-    this.initialized = true;
-    return this;
-  }
-
-  _startMetricsCollection() {
-    this._memoryInterval = setInterval(() => {
-      const mem = process.memoryUsage();
-      this.metrics.memory.samples.push({
-        timestamp: Date.now(),
-        heapUsed: mem.heapUsed,
-        heapTotal: mem.heapTotal,
-        rss: mem.rss,
-        external: mem.external,
-      });
-      if (this.metrics.memory.samples.length > 100) {
-        this.metrics.memory.samples.shift();
-      }
-    }, 30000);
-
-    this._cpuInterval = setInterval(() => {
-      const cpuUsage = process.cpuUsage();
-      this.metrics.cpu.samples.push({
-        timestamp: Date.now(),
-        user: cpuUsage.user,
-        system: cpuUsage.system,
-      });
-      if (this.metrics.cpu.samples.length > 100) {
-        this.metrics.cpu.samples.shift();
-      }
-    }, 10000);
-  }
-
-  recordRequest(req) {
-    this.metrics.requests.total++;
-    this.metrics.requests.active++;
-
-    const routeKey = `${req.method} ${req.baseUrl}${req.path}`;
-    if (!this.metrics.routes.has(routeKey)) {
-      this.metrics.routes.set(routeKey, {
-        count: 0,
-        errors: 0,
-        times: [],
-        avgTime: 0,
-      });
-    }
-    this.metrics.routes.get(routeKey).count++;
-  }
-
-  recordResponse(req, res, duration) {
-    this.metrics.requests.active = Math.max(
-      0,
-      this.metrics.requests.active - 1,
+    // Validate required environment variables
+    const requiredVars = ["PORT", "NODE_ENV", "DATABASE_URL"];
+    const missing = requiredVars.filter(
+      (v) => !envModule[v] && !process.env[v],
     );
 
-    if (res.statusCode >= 400) {
-      this.metrics.requests.failed++;
-    } else {
-      this.metrics.requests.success++;
-    }
-
-    this.metrics.response.times.push(duration);
-    if (this.metrics.response.times.length > 1000) {
-      this.metrics.response.times.shift();
-    }
-
-    this._updateResponseStats();
-
-    const routeKey = `${req.method} ${req.baseUrl}${req.path}`;
-    const routeStats = this.metrics.routes.get(routeKey);
-    if (routeStats) {
-      if (res.statusCode >= 400) routeStats.errors++;
-      routeStats.times.push(duration);
-      if (routeStats.times.length > 100) routeStats.times.shift();
-      routeStats.avgTime =
-        routeStats.times.reduce((a, b) => a + b, 0) / routeStats.times.length;
-    }
-  }
-
-  _updateResponseStats() {
-    const times = this.metrics.response.times;
-    if (times.length === 0) return;
-
-    const sorted = [...times].sort((a, b) => a - b);
-    this.metrics.response.avg = times.reduce((a, b) => a + b, 0) / times.length;
-    this.metrics.response.min = sorted[0];
-    this.metrics.response.max = sorted[sorted.length - 1];
-    this.metrics.response.p95 = sorted[Math.floor(sorted.length * 0.95)] || 0;
-    this.metrics.response.p99 = sorted[Math.floor(sorted.length * 0.99)] || 0;
-  }
-
-  recordError(err, req = null, type = "REQUEST_ERROR") {
-    const errorRecord = {
-      timestamp: new Date().toISOString(),
-      type,
-      message: err.message,
-      stack: CONFIG.isDev ? err.stack : undefined,
-      path: req?.originalUrl || req?.path,
-      method: req?.method,
-      requestId: req?.id,
-      statusCode: err.statusCode || err.status || 500,
-    };
-
-    this.metrics.errors.push(errorRecord);
-    if (this.metrics.errors.length > 100) {
-      this.metrics.errors.shift();
-    }
-
-    if (this.listenerCount("error") > 0) {
-      this.emit("error", errorRecord);
-    }
-    return errorRecord;
-  }
-
-  recordSecurityEvent(type, details) {
-    Logger.warn(`Security Event: ${type}`, details);
-    this.emit("security", {
-      type,
-      details,
-      timestamp: new Date().toISOString(),
-    });
-  }
-
-  async getHealthStatus() {
-    const mem = process.memoryUsage();
-    const memUsagePercent = (mem.heapUsed / mem.heapTotal) * 100;
-
-    let status = "healthy";
-    const issues = [];
-
-    if (memUsagePercent > 90) {
-      status = "unhealthy";
-      issues.push("Memory usage critical (>90%)");
-    } else if (memUsagePercent > 75) {
-      status = "degraded";
-      issues.push("Memory usage high (>75%)");
-    }
-
-    const errorRate =
-      this.metrics.requests.total > 0
-        ? (this.metrics.requests.failed / this.metrics.requests.total) * 100
-        : 0;
-    if (errorRate > 10) {
-      status = status === "healthy" ? "degraded" : status;
-      issues.push(`High error rate (${errorRate.toFixed(1)}%)`);
-    }
-
-    if (this.metrics.response.avg > 2000) {
-      status = status === "healthy" ? "degraded" : status;
-      issues.push(
-        `Slow avg response (${this.metrics.response.avg.toFixed(0)}ms)`,
+    if (missing.length > 0) {
+      console.warn(
+        `⚠️  Missing env vars: ${missing.join(", ")}. Using defaults.`,
       );
     }
 
     return {
-      status,
-      timestamp: new Date().toISOString(),
-      uptime: Math.floor((Date.now() - this.startTime) / 1000),
-      uptimeFormatted: this._formatUptime(Date.now() - this.startTime),
-      issues,
-      metrics: {
-        requests: { ...this.metrics.requests },
-        responseTime: {
-          avg: Math.round(this.metrics.response.avg),
-          min:
-            this.metrics.response.min === Infinity
-              ? 0
-              : this.metrics.response.min,
-          max: this.metrics.response.max,
-          p95: Math.round(this.metrics.response.p95),
-          p99: Math.round(this.metrics.response.p99),
+      PORT: envModule.PORT || process.env.PORT || 5000,
+      NODE_ENV: envModule.NODE_ENV || process.env.NODE_ENV || "development",
+      CORS_ORIGINS: envModule.CORS_ORIGINS || process.env.CORS_ORIGINS || "*",
+      DATABASE_URL: envModule.DATABASE_URL || process.env.DATABASE_URL,
+      JWT_SECRET:
+        envModule.JWT_SECRET ||
+        process.env.JWT_SECRET ||
+        crypto.randomBytes(32).toString("hex"),
+      API_VERSION: envModule.API_VERSION || "v1",
+      MAX_REQUEST_SIZE: envModule.MAX_REQUEST_SIZE || "10mb",
+      RATE_LIMIT_WINDOW: envModule.RATE_LIMIT_WINDOW || 15 * 60 * 1000,
+      RATE_LIMIT_MAX: envModule.RATE_LIMIT_MAX || 100,
+      ENABLE_CLUSTERING: envModule.ENABLE_CLUSTERING || false,
+      CLUSTER_WORKERS: envModule.CLUSTER_WORKERS || os.cpus().length,
+      SSL_ENABLED: envModule.SSL_ENABLED || false,
+      SSL_KEY_PATH: envModule.SSL_KEY_PATH,
+      SSL_CERT_PATH: envModule.SSL_CERT_PATH,
+      LOG_LEVEL: envModule.LOG_LEVEL || "info",
+      ENABLE_SWAGGER: envModule.ENABLE_SWAGGER !== false,
+      ...envModule,
+    };
+  } catch (err) {
+    console.warn("⚠️  Config module not found. Using environment variables.");
+    return {
+      PORT: process.env.PORT || 5000,
+      NODE_ENV: process.env.NODE_ENV || "development",
+      CORS_ORIGINS: process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "*",
+      DATABASE_URL: process.env.DATABASE_URL,
+      JWT_SECRET:
+        process.env.JWT_SECRET || crypto.randomBytes(32).toString("hex"),
+      API_VERSION: "v1",
+      MAX_REQUEST_SIZE: "10mb",
+      RATE_LIMIT_WINDOW: 15 * 60 * 1000,
+      RATE_LIMIT_MAX: 100,
+      ENABLE_CLUSTERING: false,
+      LOG_LEVEL: "info",
+      ENABLE_SWAGGER: true,
+    };
+  }
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// LOGGER IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const logger = (() => {
+  const customLogger = safeRequire("./utils/logger");
+
+  if (customLogger) return customLogger;
+
+  // Fallback logger with colors and formatting
+  const colors = {
+    reset: "\x1b[0m",
+    red: "\x1b[31m",
+    green: "\x1b[32m",
+    yellow: "\x1b[33m",
+    blue: "\x1b[34m",
+    magenta: "\x1b[35m",
+    cyan: "\x1b[36m",
+    gray: "\x1b[90m",
+  };
+
+  const levels = {
+    error: { priority: 0, color: colors.red, label: "ERROR" },
+    warn: { priority: 1, color: colors.yellow, label: "WARN " },
+    info: { priority: 2, color: colors.green, label: "INFO " },
+    http: { priority: 3, color: colors.magenta, label: "HTTP " },
+    debug: { priority: 4, color: colors.blue, label: "DEBUG" },
+  };
+
+  const currentLevel = levels[env.LOG_LEVEL] || levels.info;
+
+  const formatMessage = (level, message, meta = {}) => {
+    const timestamp = new Date().toISOString();
+    const levelInfo = levels[level];
+    const metaStr =
+      Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
+
+    return `${colors.gray}[${timestamp}]${colors.reset} ${levelInfo.color}${levelInfo.label}${colors.reset}: ${message}${metaStr}`;
+  };
+
+  const log = (level, message, meta) => {
+    if (levels[level].priority <= currentLevel.priority) {
+      console.log(formatMessage(level, message, meta));
+    }
+  };
+
+  return {
+    error: (msg, meta) => log("error", msg, meta),
+    warn: (msg, meta) => log("warn", msg, meta),
+    info: (msg, meta) => log("info", msg, meta),
+    http: (msg, meta) => log("http", msg, meta),
+    debug: (msg, meta) => log("debug", msg, meta),
+  };
+})();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MONITOR IMPLEMENTATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const monitor = (() => {
+  const customMonitor = safeRequire("./utils/monitor");
+
+  if (customMonitor) return customMonitor;
+
+  // Built-in monitor
+  const stats = {
+    startTime: Date.now(),
+    requests: {
+      total: 0,
+      successful: 0,
+      failed: 0,
+      byMethod: {},
+      byStatus: {},
+      byPath: {},
+    },
+    responses: {
+      avgResponseTime: 0,
+      totalResponseTime: 0,
+      maxResponseTime: 0,
+      minResponseTime: Infinity,
+    },
+    errors: [],
+    memory: {
+      peak: 0,
+      current: 0,
+    },
+  };
+
+  return {
+    recordRequest: (req) => {
+      stats.requests.total++;
+      stats.requests.byMethod[req.method] =
+        (stats.requests.byMethod[req.method] || 0) + 1;
+
+      const pathKey = req.path.split("/").slice(0, 3).join("/");
+      stats.requests.byPath[pathKey] =
+        (stats.requests.byPath[pathKey] || 0) + 1;
+    },
+
+    recordResponse: (req, res, duration) => {
+      const statusCode = res.statusCode;
+      stats.requests.byStatus[statusCode] =
+        (stats.requests.byStatus[statusCode] || 0) + 1;
+
+      if (statusCode >= 200 && statusCode < 400) {
+        stats.requests.successful++;
+      } else {
+        stats.requests.failed++;
+      }
+
+      stats.responses.totalResponseTime += duration;
+      stats.responses.avgResponseTime =
+        stats.responses.totalResponseTime / stats.requests.total;
+      stats.responses.maxResponseTime = Math.max(
+        stats.responses.maxResponseTime,
+        duration,
+      );
+      stats.responses.minResponseTime = Math.min(
+        stats.responses.minResponseTime,
+        duration,
+      );
+    },
+
+    recordError: (error) => {
+      stats.errors.push({
+        message: error.message,
+        stack: error.stack,
+        timestamp: new Date().toISOString(),
+      });
+
+      // Keep only last 100 errors
+      if (stats.errors.length > 100) {
+        stats.errors = stats.errors.slice(-100);
+      }
+    },
+
+    updateMemory: () => {
+      const memUsage = process.memoryUsage();
+      stats.memory.current = memUsage.heapUsed;
+      stats.memory.peak = Math.max(stats.memory.peak, memUsage.heapUsed);
+    },
+
+    getHealthStatus: () => {
+      const memUsage = process.memoryUsage();
+      const uptime = Date.now() - stats.startTime;
+
+      return {
+        status: "healthy",
+        timestamp: new Date().toISOString(),
+        version: env.API_VERSION,
+        environment: env.NODE_ENV,
+        uptime: {
+          ms: uptime,
+          formatted: formatUptime(uptime),
+        },
+        server: {
+          pid: process.pid,
+          platform: process.platform,
+          nodeVersion: process.version,
+          cpus: os.cpus().length,
         },
         memory: {
-          heapUsed: this._formatBytes(mem.heapUsed),
-          heapTotal: this._formatBytes(mem.heapTotal),
-          rss: this._formatBytes(mem.rss),
-          usagePercent: `${memUsagePercent.toFixed(1)}%`,
+          used: formatBytes(memUsage.heapUsed),
+          total: formatBytes(memUsage.heapTotal),
+          external: formatBytes(memUsage.external),
+          rss: formatBytes(memUsage.rss),
+          usagePercent:
+            ((memUsage.heapUsed / memUsage.heapTotal) * 100).toFixed(2) + "%",
         },
-        errorCount: this.metrics.errors.length,
-        errorRate: `${errorRate.toFixed(2)}%`,
-      },
-    };
-  }
+        requests: {
+          total: stats.requests.total,
+          successful: stats.requests.successful,
+          failed: stats.requests.failed,
+          successRate:
+            stats.requests.total > 0
+              ? (
+                  (stats.requests.successful / stats.requests.total) *
+                  100
+                ).toFixed(2) + "%"
+              : "N/A",
+        },
+        performance: {
+          avgResponseTime: stats.responses.avgResponseTime.toFixed(2) + "ms",
+          maxResponseTime: stats.responses.maxResponseTime + "ms",
+          minResponseTime:
+            stats.responses.minResponseTime === Infinity
+              ? "N/A"
+              : stats.responses.minResponseTime + "ms",
+        },
+        load: os.loadavg(),
+        recentErrors: stats.errors.slice(-5),
+      };
+    },
 
-  getMetrics() {
-    const topRoutes = Array.from(this.metrics.routes.entries())
-      .sort((a, b) => b[1].count - a[1].count)
-      .slice(0, 10)
-      .map(([route, data]) => ({
-        route,
-        count: data.count,
-        errors: data.errors,
-        avgTime: Math.round(data.avgTime),
-      }));
+    getDetailedStats: () => ({
+      ...stats,
+      currentMemory: process.memoryUsage(),
+      cpuUsage: process.cpuUsage(),
+    }),
+  };
+})();
 
-    return {
-      timestamp: new Date().toISOString(),
-      uptime: Date.now() - this.startTime,
-      requests: { ...this.metrics.requests },
-      responseTime: {
-        avg: Math.round(this.metrics.response.avg),
-        min:
-          this.metrics.response.min === Infinity
-            ? 0
-            : this.metrics.response.min,
-        max: this.metrics.response.max,
-        p95: Math.round(this.metrics.response.p95),
-        p99: Math.round(this.metrics.response.p99),
-      },
-      topRoutes,
-      recentErrors: this.metrics.errors.slice(-10),
-      memory: process.memoryUsage(),
-    };
-  }
-
-  async generateReport() {
-    const health = await this.getHealthStatus();
-    const metrics = this.getMetrics();
-
-    return {
-      server: {
-        name: CONFIG.name,
-        version: CONFIG.version,
-        environment: CONFIG.env,
-        nodeVersion: process.version,
-        pid: process.pid,
-      },
-      health,
-      metrics,
-      system: {
-        platform: process.platform,
-        arch: process.arch,
-        cpus: os.cpus().length,
-        totalMemory: this._formatBytes(os.totalmem()),
-        freeMemory: this._formatBytes(os.freemem()),
-        loadAvg: os.loadavg(),
-        hostname: os.hostname(),
-      },
-      summary: {
-        totalRequests: this.metrics.requests.total,
-        successRate:
-          this.metrics.requests.total > 0
-            ? `${((this.metrics.requests.success / this.metrics.requests.total) * 100).toFixed(2)}%`
-            : "N/A",
-        avgResponseTime: `${Math.round(this.metrics.response.avg)}ms`,
-        errorsTotal: this.metrics.errors.length,
-      },
-    };
-  }
-
-  cleanup() {
-    if (this._memoryInterval) clearInterval(this._memoryInterval);
-    if (this._cpuInterval) clearInterval(this._cpuInterval);
-  }
-
-  _formatBytes(bytes) {
-    if (bytes === 0) return "0 B";
-    const sizes = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`;
-  }
-
-  _formatUptime(ms) {
-    const seconds = Math.floor(ms / 1000);
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = seconds % 60;
-    return [
-      days > 0 ? `${days}d` : null,
-      hours > 0 ? `${hours}h` : null,
-      minutes > 0 ? `${minutes}m` : null,
-      `${secs}s`,
-    ]
-      .filter(Boolean)
-      .join(" ");
-  }
-}
 // ═══════════════════════════════════════════════════════════════════════════════
-// DATABASE MANAGER - PostgreSQL with connection pooling & SSL verify-full
-// ═══════════════════════════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════════════════════════
-// DATABASE MANAGER - PostgreSQL with connection pooling & SSL support
+// UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const { Sequelize } = require("sequelize");
+const formatBytes = (bytes) => {
+  const units = ["B", "KB", "MB", "GB"];
+  let unitIndex = 0;
+  let value = bytes;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+
+  return `${value.toFixed(2)} ${units[unitIndex]}`;
+};
+
+const formatUptime = (ms) => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
+  if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+  return `${seconds}s`;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// DATABASE CONNECTION WITH AUTO-RECONNECT
+// ═══════════════════════════════════════════════════════════════════════════════
 
 class DatabaseManager {
   constructor() {
     this.sequelize = null;
-    this.connected = false;
-    this.retryCount = 0;
-    this.maxRetries = 5;
-    this.retryDelay = 3000; // initial delay in ms
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    this.maxReconnectAttempts = 10;
+    this.reconnectDelay = 5000;
+    this.healthCheckInterval = null;
   }
 
   async initialize() {
-    // Check if DATABASE_URL exists (for cloud deployments like Render)
-    if (process.env.DATABASE_URL) {
-      Logger.info("Using DATABASE_URL for connection");
+    try {
+      const dbModule = safeRequire("./config/database");
 
-      // Log sanitized URL for debugging
-      const sanitizedUrl = process.env.DATABASE_URL.replace(
-        /:[^:@]*@/,
-        ":***@",
-      );
-      Logger.debug(`Connection string: ${sanitizedUrl}`);
+      if (dbModule && dbModule.sequelize) {
+        this.sequelize = dbModule.sequelize;
+      } else {
+        // Create sequelize instance if not provided
+        const { Sequelize } = require("sequelize");
 
-      this.sequelize = new Sequelize(process.env.DATABASE_URL, {
-        dialect: "postgres",
-        protocol: "postgres",
-        logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-        pool: CONFIG.db.pool,
-        dialectOptions: {
-          ssl: {
-            require: true,
-            rejectUnauthorized: false, // Critical for cloud databases like Neon
-          },
-          statement_timeout: 30000,
-          idle_in_transaction_session_timeout: 30000,
-          connectTimeout: 10000,
-        },
-        define: {
-          timestamps: true,
-          underscored: true,
-          freezeTableName: true,
-        },
-        benchmark: CONFIG.isDev,
-        retry: {
-          max: 3,
-        },
-      });
-    } else {
-      // Fall back to individual connection parameters
-      Logger.info("Using individual connection parameters");
-
-      this.sequelize = new Sequelize(
-        CONFIG.db.name,
-        CONFIG.db.user,
-        CONFIG.db.password,
-        {
-          host: CONFIG.db.host,
-          port: CONFIG.db.port,
+        this.sequelize = new Sequelize(env.DATABASE_URL, {
           dialect: "postgres",
-          protocol: "postgres",
-          logging: CONFIG.isDev ? (msg) => Logger.debug(msg) : false,
-          pool: CONFIG.db.pool,
+          logging:
+            env.NODE_ENV === "development" ? (msg) => logger.debug(msg) : false,
+          pool: {
+            max: 20,
+            min: 5,
+            acquire: 60000,
+            idle: 10000,
+            evict: 1000,
+          },
           dialectOptions: {
-            statement_timeout: 30000,
-            idle_in_transaction_session_timeout: 30000,
-            connectTimeout: 10000,
-            ssl: CONFIG.isProd
-              ? {
-                  require: true,
-                  rejectUnauthorized: false,
-                }
-              : false,
+            ssl:
+              env.NODE_ENV === "production"
+                ? {
+                    require: true,
+                    rejectUnauthorized: false,
+                  }
+                : false,
+            connectTimeout: 60000,
           },
-          define: {
-            timestamps: true,
-            underscored: true,
-            freezeTableName: true,
-          },
-          benchmark: CONFIG.isDev,
           retry: {
             max: 3,
+            timeout: 30000,
           },
-        },
-      );
-    }
-
-    global.sequelize = this.sequelize; // make globally accessible
-    return this;
-  }
-
-  async connect() {
-    while (this.retryCount < this.maxRetries) {
-      try {
-        await this.sequelize.authenticate();
-        this.connected = true;
-
-        // ✅ Auto-sync tables in development
-        if (CONFIG.isDev) {
-          Logger.info("Synchronizing database schema...");
-          await this.sequelize.sync({ alter: true });
-          Logger.success("Database schema synchronized");
-        }
-
-        // Log connection details safely
-        const connectionDetails = process.env.DATABASE_URL
-          ? {
-              host: "from DATABASE_URL",
-              database: "from DATABASE_URL",
-              pool: CONFIG.db.pool.max,
-            }
-          : {
-              host: CONFIG.db.host,
-              database: CONFIG.db.name,
-              pool: CONFIG.db.pool.max,
-            };
-
-        Logger.success("Database connected successfully", connectionDetails);
-        return true;
-      } catch (error) {
-        this.retryCount++;
-
-        // Enhanced error logging
-        Logger.error(
-          `Database connection failed (attempt ${this.retryCount}/${this.maxRetries})`,
-          {
-            error: error.message,
-            code: error.code,
-            errno: error.errno,
-            syscall: error.syscall,
-          },
-        );
-
-        // Specific SSL error guidance
-        if (error.message.includes("ssl") || error.message.includes("SSL")) {
-          Logger.warn(
-            "SSL connection issue detected. Make sure SSL is enabled for your database provider.",
-          );
-          Logger.warn(
-            "Current SSL config: { require: true, rejectUnauthorized: false }",
-          );
-        }
-
-        // Connection timeout guidance
-        if (error.message.includes("timeout") || error.code === "ETIMEDOUT") {
-          Logger.warn(
-            "Connection timeout. Check if your database allows connections from Render's IP ranges.",
-          );
-        }
-
-        // Authentication error guidance
-        if (
-          error.message.includes("password") ||
-          error.message.includes("authentication")
-        ) {
-          Logger.warn(
-            "Authentication failed. Check your database username and password.",
-          );
-        }
-
-        if (this.retryCount >= this.maxRetries) {
-          // Log final error with full details before throwing
-          Logger.error("═".repeat(60));
-          Logger.error("FATAL: All database connection attempts failed");
-          Logger.error("═".repeat(60));
-          Logger.error(
-            `Connection string type: ${process.env.DATABASE_URL ? "DATABASE_URL" : "Individual params"}`,
-          );
-          if (process.env.DATABASE_URL) {
-            const maskedUrl = process.env.DATABASE_URL.replace(
-              /:[^:@]*@/,
-              ":***@",
-            );
-            Logger.error(`Connection string: ${maskedUrl}`);
-          }
-          throw new Error(
-            `Failed to connect to database after ${this.maxRetries} attempts: ${error.message}`,
-          );
-        }
-
-        Logger.warn(`Retrying in ${this.retryDelay / 1000}s...`);
-        await this._sleep(this.retryDelay);
-        this.retryDelay *= 1.5; // exponential backoff
-      }
-    }
-  }
-
-  async healthCheck() {
-    if (!this.sequelize) {
-      return {
-        status: "unhealthy",
-        connected: false,
-        error: "Not initialized",
-      };
-    }
-
-    try {
-      const start = Date.now();
-      await this.sequelize.query("SELECT 1");
-      const latency = Date.now() - start;
-
-      return {
-        status: latency < 100 ? "healthy" : "degraded",
-        connected: true,
-        latency: `${latency}ms`,
-      };
-    } catch (error) {
-      return { status: "unhealthy", connected: false, error: error.message };
-    }
-  }
-
-  async close() {
-    if (this.sequelize) {
-      await this.sequelize.close();
-      this.connected = false;
-      Logger.info("Database connection closed");
-    }
-  }
-
-  _sleep(ms) {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-  }
-}
-
-// Export a single instance
-const databaseManager = new DatabaseManager();
-module.exports = databaseManager;
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ROUTE LOADER - Intelligent route mounting with validation
-// ═══════════════════════════════════════════════════════════════════════════════
-
-class RouteLoader {
-  constructor(app, monitor) {
-    this.app = app;
-    this.monitor = monitor;
-    this.loadedRoutes = [];
-    this.failedRoutes = [];
-    this.routeStats = {};
-  }
-
-  getRouteDefinitions() {
-    return [
-      {
-        path: "/admin/auth",
-        file: "./routes/adminAuth",
-        description: "Admin Authentication",
-        priority: 0,
-      },
-      {
-        path: "/auth",
-        file: "./routes/auth",
-        description: "User Authentication",
-        priority: 1,
-      },
-      {
-        path: "/users",
-        file: "./routes/users",
-        description: "User Management",
-        optional: true,
-      },
-      {
-        path: "/countries",
-        file: "./routes/countries",
-        description: "Countries Management",
-      },
-      {
-        path: "/destinations",
-        file: "./routes/destinations",
-        description: "Travel Destinations",
-      },
-      { path: "/posts", file: "./routes/posts", description: "Blog Posts" },
-      { path: "/tips", file: "./routes/tips", description: "Travel Tips" },
-      {
-        path: "/services",
-        file: "./routes/services",
-        description: "Travel Services",
-      },
-      { path: "/team", file: "./routes/team", description: "Team Members" },
-      {
-        path: "/gallery",
-        file: "./routes/gallery",
-        description: "Photo Gallery",
-      },
-      {
-        path: "/bookings",
-        file: "./routes/bookings",
-        description: "Booking Management",
-      },
-      { path: "/faqs", file: "./routes/faqs", description: "FAQs" },
-      {
-        path: "/contact",
-        file: "./routes/contact",
-        description: "Contact Messages",
-      },
-      { path: "/pages", file: "./routes/pages", description: "Static Pages" },
-      {
-        path: "/virtual-tours",
-        file: "./routes/virtualTours",
-        description: "Virtual Tours",
-      },
-      {
-        path: "/subscribers",
-        file: "./routes/subscribers",
-        description: "Newsletter Subscribers",
-      },
-      {
-        path: "/settings",
-        file: "./routes/settings",
-        description: "Site Settings",
-      },
-      {
-        path: "/uploads",
-        file: "./routes/uploads",
-        description: "Cloudinary Uploads",
-      },
-    ];
-  }
-
-  async loadAllRoutes() {
-    Logger.startup("Loading API routes...");
-    console.log("");
-
-    const definitions = this.getRouteDefinitions().sort(
-      (a, b) => (a.priority || 99) - (b.priority || 99),
-    );
-
-    const results = { loaded: 0, failed: 0, skipped: 0 };
-
-    for (const routeDef of definitions) {
-      const result = await this._loadRoute(routeDef);
-
-      switch (result.status) {
-        case "loaded":
-          results.loaded++;
-          this.loadedRoutes.push(result);
-          Logger.route(
-            `${routeDef.path.padEnd(20)} → ${routeDef.description} (${result.endpoints} endpoints)`,
-            "ok",
-          );
-          break;
-        case "skipped":
-          results.skipped++;
-          Logger.route(
-            `${routeDef.path.padEnd(20)} → Skipped (optional)`,
-            "warn",
-          );
-          break;
-        case "failed":
-          results.failed++;
-          this.failedRoutes.push(result);
-          Logger.route(
-            `${routeDef.path.padEnd(20)} → FAILED: ${result.error}`,
-            "error",
-          );
-          break;
-      }
-    }
-
-    console.log("");
-    Logger.startup(
-      `Routes: ${results.loaded} loaded ✓ | ${results.failed} failed ✗ | ${results.skipped} skipped ○`,
-    );
-
-    return results;
-  }
-
-  async _loadRoute(routeDef) {
-    const { path: routePath, file, description, optional = false } = routeDef;
-    const fullPath = `/api${routePath}`;
-
-    try {
-      const absolutePath = require.resolve(file);
-      Logger.debug(`Loading: ${absolutePath}`);
-
-      if (CONFIG.isDev && require.cache[absolutePath]) {
-        delete require.cache[absolutePath];
-      }
-
-      const routeModule = require(file);
-
-      if (!routeModule || typeof routeModule !== "function") {
-        throw new Error(
-          `Invalid export: expected express.Router(), got ${typeof routeModule}`,
-        );
-      }
-
-      if (!routeModule.stack) {
-        throw new Error("Module is not a valid Express router (missing stack)");
-      }
-
-      const endpoints = this._countEndpoints(routeModule);
-
-      this.app.use(fullPath, routeModule);
-
-      Logger.debug(`Mounted: ${fullPath} with ${endpoints} endpoints`);
-
-      this.routeStats[fullPath] = {
-        description,
-        endpoints,
-        loadedAt: new Date().toISOString(),
-        status: "active",
-        file: absolutePath,
-      };
-
-      return {
-        status: "loaded",
-        path: fullPath,
-        description,
-        endpoints,
-        file: absolutePath,
-      };
-    } catch (err) {
-      if (
-        (err.code === "MODULE_NOT_FOUND" ||
-          err.code === "ERR_MODULE_NOT_FOUND") &&
-        optional
-      ) {
-        return {
-          status: "skipped",
-          path: fullPath,
-          description,
-          reason: "Optional module not found",
-        };
-      }
-
-      if (CONFIG.isDev) {
-        Logger.error(`Failed to load route ${routePath}:`, {
-          error: err.message,
-          stack: err.stack,
         });
       }
 
-      return {
-        status: "failed",
-        path: fullPath,
-        description,
-        error: err.message,
-        stack: CONFIG.isDev ? err.stack : undefined,
-      };
+      await this.connect();
+      this.startHealthCheck();
+
+      return this.sequelize;
+    } catch (err) {
+      logger.error("Database initialization failed", { error: err.message });
+      throw err;
     }
   }
 
-  _countEndpoints(router) {
-    let count = 0;
-    if (router.stack) {
-      for (const layer of router.stack) {
-        if (layer.route) {
-          count += Object.keys(layer.route.methods).filter(
-            (m) => layer.route.methods[m],
-          ).length;
-        } else if (layer.name === "router" && layer.handle?.stack) {
-          count += this._countEndpoints(layer.handle);
+  async connect() {
+    try {
+      await this.sequelize.authenticate();
+      this.isConnected = true;
+      this.reconnectAttempts = 0;
+      logger.info("✅ Database connection established successfully");
+      return true;
+    } catch (err) {
+      this.isConnected = false;
+      logger.error("❌ Database connection failed", { error: err.message });
+      throw err;
+    }
+  }
+
+  async reconnect() {
+    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
+      logger.error(
+        "❌ Max reconnection attempts reached. Manual intervention required.",
+      );
+      return false;
+    }
+
+    this.reconnectAttempts++;
+    logger.warn(
+      `🔄 Attempting database reconnection (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`,
+    );
+
+    try {
+      await this.connect();
+      return true;
+    } catch (err) {
+      logger.error(`Reconnection attempt ${this.reconnectAttempts} failed`, {
+        error: err.message,
+      });
+
+      // Exponential backoff
+      const delay = Math.min(
+        this.reconnectDelay * Math.pow(2, this.reconnectAttempts - 1),
+        60000,
+      );
+
+      setTimeout(() => this.reconnect(), delay);
+      return false;
+    }
+  }
+
+  startHealthCheck() {
+    this.healthCheckInterval = setInterval(async () => {
+      try {
+        await this.sequelize.query("SELECT 1");
+
+        if (!this.isConnected) {
+          this.isConnected = true;
+          logger.info("✅ Database connection restored");
+        }
+      } catch (err) {
+        if (this.isConnected) {
+          this.isConnected = false;
+          logger.error(
+            "❌ Database connection lost. Initiating reconnection...",
+          );
+          this.reconnect();
         }
       }
+    }, 30000); // Check every 30 seconds
+  }
+
+  async shutdown() {
+    if (this.healthCheckInterval) {
+      clearInterval(this.healthCheckInterval);
     }
-    return count;
+
+    if (this.sequelize) {
+      await this.sequelize.close();
+      logger.info("Database connection closed");
+    }
+  }
+
+  getStatus() {
+    return {
+      isConnected: this.isConnected,
+      reconnectAttempts: this.reconnectAttempts,
+    };
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ROUTE LOADER WITH VALIDATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class RouteLoader {
+  constructor(app) {
+    this.app = app;
+    this.loadedRoutes = [];
+    this.failedRoutes = [];
+  }
+
+  loadRoutes(routes) {
+    logger.info(`📂 Loading ${routes.length} route modules...`);
+
+    routes.forEach(({ path: routePath, file }) => {
+      try {
+        const router = require(`./${file}`);
+
+        if (typeof router !== "function" && typeof router !== "object") {
+          throw new Error(`Invalid router export in ${file}`);
+        }
+
+        this.app.use(`/api${routePath}`, router);
+        this.loadedRoutes.push({ path: routePath, file });
+        logger.debug(`  ✓ Loaded: /api${routePath}`);
+      } catch (err) {
+        this.failedRoutes.push({ path: routePath, file, error: err.message });
+        logger.warn(`  ✗ Failed to load: /api${routePath} - ${err.message}`);
+      }
+    });
+
+    logger.info(
+      `📊 Routes loaded: ${this.loadedRoutes.length}/${routes.length}`,
+    );
+
+    if (this.failedRoutes.length > 0) {
+      logger.warn(
+        `⚠️  Failed routes: ${this.failedRoutes.map((r) => r.path).join(", ")}`,
+      );
+    }
+
+    return {
+      loaded: this.loadedRoutes,
+      failed: this.failedRoutes,
+    };
   }
 
   getStatus() {
     return {
       loaded: this.loadedRoutes.length,
       failed: this.failedRoutes.length,
-      routes: this.routeStats,
-      failures: this.failedRoutes.map((f) => ({
-        path: f.path,
-        error: f.error,
-        description: f.description,
-      })),
+      routes: this.loadedRoutes.map((r) => r.path),
+      failures: this.failedRoutes,
     };
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// EXPRESS APP FACTORY
+// APP ERROR CLASS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function createApp(monitor) {
-  const app = express();
+class AppError extends Error {
+  constructor(message, statusCode, errorCode = null) {
+    super(message);
 
-  app.set("trust proxy", CONFIG.isProd ? 1 : false);
-  app.set("x-powered-by", false);
+    this.statusCode = statusCode;
+    this.status = `${statusCode}`.startsWith("4") ? "fail" : "error";
+    this.errorCode = errorCode;
+    this.isOperational = true;
+    this.timestamp = new Date().toISOString();
 
-  // ═══════════════════════════════════════════════════════════════════════════
-  // SECURITY MIDDLEWARE
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  app.use(
-    helmet({
-      contentSecurityPolicy: CONFIG.isProd ? undefined : false,
-      crossOriginEmbedderPolicy: false,
-      crossOriginResourcePolicy: { policy: "cross-origin" },
-    }),
-  );
-
-  // CORS
-  app.use(
-    cors({
-      origin: (origin, callback) => {
-        if (!origin) return callback(null, true);
-
-        if (CONFIG.corsOrigins.includes(origin) || CONFIG.isDev) {
-          return callback(null, true);
-        }
-
-        monitor.recordSecurityEvent("CORS_BLOCKED", { origin });
-        callback(new Error(`CORS blocked: ${origin}`));
-      },
-      credentials: true,
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: [
-        "Content-Type",
-        "Authorization",
-        "X-Requested-With",
-        "X-API-Key",
-        "X-Request-ID",
-      ],
-      exposedHeaders: ["X-Total-Count", "X-Page-Count", "X-Request-ID"],
-      maxAge: 86400,
-    }),
-  );
-
-  // Compression
-  app.use(
-    compression({
-      level: 6,
-      threshold: 1024,
-      filter: (req, res) => {
-        if (req.headers["x-no-compression"]) return false;
-        return compression.filter(req, res);
-      },
-    }),
-  );
-
-  // ✅ CRITICAL FIX: Body parsing BEFORE routes
-  app.use(
-    express.json({
-      limit: CONFIG.maxJsonSize,
-      strict: true,
-      verify: (req, res, buf) => {
-        req.rawBody = buf;
-      },
-    }),
-  );
-
-  app.use(
-    express.urlencoded({
-      extended: true,
-      limit: CONFIG.maxUrlEncodedSize,
-      parameterLimit: 10000,
-    }),
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // REQUEST TRACKING
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  app.use((req, res, next) => {
-    req.id =
-      req.headers["x-request-id"] ||
-      `${Date.now().toString(36)}-${Math.random().toString(36).substring(2, 11)}`;
-    req.startTime = Date.now();
-
-    res.setHeader("X-Request-ID", req.id);
-    res.setHeader("X-Response-Time", "pending");
-    res.setHeader("X-Powered-By", `${CONFIG.name}/${CONFIG.version}`);
-
-    const originalWriteHead = res.writeHead;
-    res.writeHead = function writeHeadWithResponseTime(...args) {
-      if (!res.headersSent) {
-        const duration = Date.now() - req.startTime;
-        res.setHeader("X-Response-Time", `${duration}ms`);
-      }
-      return originalWriteHead.apply(this, args);
-    };
-
-    res.once("finish", () => {
-      const duration = Date.now() - req.startTime;
-      try {
-        monitor.recordResponse(req, res, duration);
-      } catch (monitorErr) {
-        Logger.warn(`Monitor response recording failed: ${monitorErr.message}`);
-      }
-    });
-
-    monitor.recordRequest(req);
-    next();
-  });
-
-  // Morgan logging
-  const morganFormat = CONFIG.isDev
-    ? ":method :url :status :response-time ms - :res[content-length]"
-    : "combined";
-
-  app.use(
-    morgan(morganFormat, {
-      stream: { write: (msg) => Logger.http(msg.trim()) },
-      skip: (req) =>
-        [
-          "/api/health",
-          "/api/health/live",
-          "/api/health/ready",
-          "/favicon.ico",
-        ].includes(req.url),
-    }),
-  );
-
-  // ═══════════════════════════════════════════════════════════════════════════
-  // STATIC FILES
-  // ═══════════════════════════════════════════════════════════════════════════
-
-  const uploadsDir = path.join(__dirname, CONFIG.uploadDir);
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-    Logger.info("Created uploads directory", { path: uploadsDir });
+    Error.captureStackTrace(this, this.constructor);
   }
 
-  app.use(
-    "/uploads",
-    express.static(uploadsDir, {
-      maxAge: CONFIG.isProd ? "7d" : 0,
-      etag: true,
-      lastModified: true,
-      index: false,
-      dotfiles: "deny",
-    }),
+  static badRequest(message, errorCode) {
+    return new AppError(message, 400, errorCode);
+  }
+
+  static unauthorized(message = "Unauthorized access") {
+    return new AppError(message, 401, "UNAUTHORIZED");
+  }
+
+  static forbidden(message = "Access forbidden") {
+    return new AppError(message, 403, "FORBIDDEN");
+  }
+
+  static notFound(resource = "Resource") {
+    return new AppError(`${resource} not found`, 404, "NOT_FOUND");
+  }
+
+  static conflict(message) {
+    return new AppError(message, 409, "CONFLICT");
+  }
+
+  static tooManyRequests(message = "Too many requests") {
+    return new AppError(message, 429, "RATE_LIMITED");
+  }
+
+  static internal(message = "Internal server error") {
+    return new AppError(message, 500, "INTERNAL_ERROR");
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// MIDDLEWARE IMPLEMENTATIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * Security Headers Middleware
+ */
+const securityMiddleware = (req, res, next) => {
+  // Remove powered-by header
+  res.removeHeader("X-Powered-By");
+
+  // Additional security headers
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("X-Frame-Options", "DENY");
+  res.setHeader("X-XSS-Protection", "1; mode=block");
+  res.setHeader("Referrer-Policy", "strict-origin-when-cross-origin");
+  res.setHeader(
+    "Permissions-Policy",
+    "geolocation=(), microphone=(), camera=()",
   );
 
-  return app;
-}
+  // Request ID for tracing
+  req.requestId = req.headers["x-request-id"] || crypto.randomUUID();
+  res.setHeader("X-Request-ID", req.requestId);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SYSTEM ENDPOINTS SETUP
-// ═══════════════════════════════════════════════════════════════════════════════
+  next();
+};
 
-function setupSystemEndpoints(app, monitor, database, routeLoader) {
-  app.get("/", (req, res) => {
-    res.json({
-      name: CONFIG.name,
-      version: CONFIG.version,
-      status: "online",
-      message: "Welcome to ALTUVERA Travel API 🌍",
-      documentation: "/api/docs",
-      health: "/api/health",
-      timestamp: new Date().toISOString(),
-    });
-  });
+/**
+ * Request Sanitization Middleware
+ */
+const sanitizationMiddleware = (req, res, next) => {
+  // Sanitize common attack vectors
+  const sanitize = (obj) => {
+    if (typeof obj !== "object" || obj === null) return obj;
 
-  app.get("/api", (req, res) => {
-    res.json({
-      name: `${CONFIG.name} API`,
-      version: CONFIG.version,
-      status: "online",
-      endpoints: {
-        health: "/api/health",
-        docs: "/api/docs",
-        auth: "/api/auth",
-        adminAuth: "/api/admin/auth",
-      },
-    });
-  });
+    const sanitized = Array.isArray(obj) ? [] : {};
 
-  app.get("/api/health", async (req, res) => {
-    try {
-      const [serverHealth, dbHealth] = await Promise.all([
-        monitor.getHealthStatus(),
-        database.healthCheck(),
-      ]);
-
-      const overall =
-        dbHealth.status === "unhealthy" || serverHealth.status === "unhealthy"
-          ? "unhealthy"
-          : dbHealth.status === "degraded" || serverHealth.status === "degraded"
-            ? "degraded"
-            : "healthy";
-
-      const statusCode = overall === "unhealthy" ? 503 : 200;
-
-      res.status(statusCode).json({
-        status: overall,
-        timestamp: new Date().toISOString(),
-        version: CONFIG.version,
-        environment: CONFIG.env,
-        server: serverHealth,
-        database: dbHealth,
-      });
-    } catch (error) {
-      res.status(503).json({
-        status: "unhealthy",
-        error: error.message,
-        timestamp: new Date().toISOString(),
-      });
-    }
-  });
-
-  app.get("/api/health/live", (req, res) => {
-    res.status(200).json({ status: "alive", timestamp: Date.now() });
-  });
-
-  app.get("/api/health/ready", async (req, res) => {
-    const dbHealth = await database.healthCheck();
-    const status = dbHealth.status === "healthy" ? 200 : 503;
-    res.status(status).json({
-      status: dbHealth.status === "healthy" ? "ready" : "not ready",
-      database: dbHealth,
-      timestamp: Date.now(),
-    });
-  });
-
-  app.get("/api/system/metrics", (req, res) => {
-    res.json(monitor.getMetrics());
-  });
-
-  app.get("/api/system/report", async (req, res) => {
-    try {
-      res.json(await monitor.generateReport());
-    } catch (err) {
-      res
-        .status(500)
-        .json({ error: "Failed to generate report", message: err.message });
-    }
-  });
-
-  app.get("/api/system/info", (req, res) => {
-    res.json({
-      name: CONFIG.name,
-      version: CONFIG.version,
-      environment: CONFIG.env,
-      nodeVersion: process.version,
-      platform: process.platform,
-      arch: process.arch,
-      pid: process.pid,
-      uptime: process.uptime(),
-      startTime: CONFIG.startTime.toISOString(),
-      memory: process.memoryUsage(),
-      cpus: os.cpus().length,
-    });
-  });
-
-  app.get("/api/system/routes", (req, res) => {
-    res.json(routeLoader.getStatus());
-  });
-
-  app.get("/api/monitor/ping", (req, res) => {
-    res.json({
-      pong: Date.now(),
-      server: CONFIG.name,
-      uptime: process.uptime(),
-    });
-  });
-
-  app.get("/api/docs", (req, res) => {
-    const routeStatus = routeLoader.getStatus();
-
-    res.json({
-      name: `${CONFIG.name} API Documentation`,
-      version: CONFIG.version,
-      baseUrl: `/api`,
-      endpoints: {
-        system: {
-          "GET /": "API information",
-          "GET /api": "API root",
-          "GET /api/health": "Health check",
-          "GET /api/health/live": "Liveness probe",
-          "GET /api/health/ready": "Readiness probe",
-          "GET /api/system/info": "Server information",
-          "GET /api/system/metrics": "Real-time metrics",
-          "GET /api/system/report": "Detailed system report",
-          "GET /api/system/routes": "Route status",
-          "GET /api/monitor/ping": "Ping/Pong",
-        },
-        api: Object.fromEntries(
-          Object.entries(routeStatus.routes).map(([path, info]) => [
-            path,
-            {
-              description: info.description,
-              endpoints: info.endpoints,
-              status: info.status,
-            },
-          ]),
-        ),
-      },
-      failedRoutes: routeStatus.failures,
-    });
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS SETUP
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function setupErrorHandlers(app, monitor) {
-  app.use((req, res, next) => {
-    const error = {
-      success: false,
-      error: "Not Found",
-      message: `Cannot ${req.method} ${req.originalUrl}`,
-      path: req.originalUrl,
-      method: req.method,
-      timestamp: new Date().toISOString(),
-      requestId: req.id,
-      suggestion: "Check the API documentation at /api/docs",
-    };
-
-    Logger.warn(`404: ${req.method} ${req.originalUrl}`);
-    res.status(404).json(error);
-  });
-
-  app.use((err, req, res, next) => {
-    if (res.headersSent) {
-      Logger.warn(`[${req.id}] Error after headers sent: ${err.message}`);
-      return next(err);
-    }
-
-    try {
-      monitor.recordError(err, req);
-    } catch (monitorErr) {
-      Logger.warn(`Monitor error recording failed: ${monitorErr.message}`);
-    }
-
-    const statusCode = err.statusCode || err.status || 500;
-
-    if (statusCode >= 500) {
-      Logger.error(`[${req.id}] ${err.message}`, {
-        path: req.originalUrl,
-        method: req.method,
-        stack: CONFIG.isDev ? err.stack : undefined,
-      });
-    } else {
-      Logger.warn(`[${req.id}] ${err.message}`, {
-        path: req.originalUrl,
-        status: statusCode,
-      });
-    }
-
-    const response = {
-      success: false,
-      error: err.name || "Error",
-      code: err.code || "INTERNAL_ERROR",
-      message:
-        CONFIG.isProd && statusCode >= 500
-          ? "Internal server error"
-          : err.message,
-      requestId: req.id,
-      timestamp: new Date().toISOString(),
-    };
-
-    if (err.details) response.details = err.details;
-    if (CONFIG.isDev) response.stack = err.stack;
-
-    res.status(statusCode).json(response);
-  });
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// STARTUP BANNER
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function printStartupBanner(routeResults) {
-  const mem = process.memoryUsage();
-  const banner = `
-${COLORS.cyan}╔═══════════════════════════════════════════════════════════════════════════════╗
-║                                                                               ║
-║     █████╗ ██╗  ████████╗██╗   ██╗██╗   ██╗███████╗██████╗  █████╗            ║
-║    ██╔══██╗██║  ╚══██╔══╝██║   ██║██║   ██║██╔════╝██╔══██╗██╔══██╗           ║
-║    ███████║██║     ██║   ██║   ██║██║   ██║█████╗  ██████╔╝███████║           ║
-║    ██╔══██║██║     ██║   ██║   ██║╚██╗ ██╔╝██╔══╝  ██╔══██╗██╔══██║           ║
-║    ██║  ██║███████╗██║   ╚██████╔╝ ╚████╔╝ ███████╗██║  ██║██║  ██║           ║
-║    ╚═╝  ╚═╝╚══════╝╚═╝    ╚═════╝   ╚═══╝  ╚══════╝╚═╝  ╚═╝╚═╝  ╚═╝           ║
-║                                                                               ║
-║                    🌍 EAST AFRICAN TRAVEL BACKEND SERVER 🌍                   ║
-║                                                                               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║   ${COLORS.green}🚀 Status: ONLINE${COLORS.cyan}         ${COLORS.white}📍 Port: ${CONFIG.port}${COLORS.cyan}                                    ║
-║   ${COLORS.white}🌐 Environment: ${CONFIG.env.toUpperCase().padEnd(12)}${COLORS.cyan}${COLORS.white}📦 Version: ${CONFIG.version}${COLORS.cyan}                         ║
-║   ${COLORS.white}💻 Node: ${process.version.padEnd(16)}${COLORS.cyan}${COLORS.white}🖥️  Platform: ${process.platform} ${process.arch}${COLORS.cyan}               ║
-║   ${COLORS.white}🧠 Memory: ${Math.round(mem.heapUsed / 1024 / 1024)}MB / ${Math.round(mem.heapTotal / 1024 / 1024)}MB${COLORS.cyan}       ${COLORS.white}📂 PID: ${process.pid}${COLORS.cyan}                              ║
-║                                                                               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║   ${COLORS.yellow}📊 ROUTES:${COLORS.cyan} ${COLORS.green}${routeResults.loaded} loaded${COLORS.cyan} | ${COLORS.red}${routeResults.failed} failed${COLORS.cyan} | ${COLORS.yellow}${routeResults.skipped} skipped${COLORS.cyan}                           ║
-║                                                                               ║
-╠═══════════════════════════════════════════════════════════════════════════════╣
-║                                                                               ║
-║   ${COLORS.magenta}📡 ENDPOINTS:${COLORS.cyan}                                                             ║
-║   ${COLORS.white}├─ API:        http://localhost:${CONFIG.port}/api${COLORS.cyan}                              ║
-║   ${COLORS.white}├─ Health:     http://localhost:${CONFIG.port}/api/health${COLORS.cyan}                        ║
-║   ${COLORS.white}├─ Docs:       http://localhost:${CONFIG.port}/api/docs${COLORS.cyan}                          ║
-║   ${COLORS.white}├─ Auth:       http://localhost:${CONFIG.port}/api/auth${COLORS.cyan}                          ║
-║   ${COLORS.white}└─ Admin Auth: http://localhost:${CONFIG.port}/api/admin/auth${COLORS.cyan}                    ║
-║                                                                               ║
-╚═══════════════════════════════════════════════════════════════════════════════╝${COLORS.reset}
-`;
-  console.log(banner);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// GRACEFUL SHUTDOWN
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function setupGracefulShutdown(server, database, monitor) {
-  let isShuttingDown = false;
-
-  const shutdown = async (signal) => {
-    if (isShuttingDown) return;
-    isShuttingDown = true;
-
-    console.log("");
-    Logger.warn(`${signal} received. Starting graceful shutdown...`);
-
-    server.close(async () => {
-      Logger.info("HTTP server closed");
-
-      try {
-        await database.close();
-        monitor.cleanup();
-
-        const report = await monitor.generateReport();
-        Logger.info("Final stats:", report.summary);
-
-        Logger.success("Graceful shutdown complete");
-        process.exit(0);
-      } catch (err) {
-        Logger.error("Error during shutdown:", { error: err.message });
-        process.exit(1);
+    for (const key of Object.keys(obj)) {
+      // Block prototype pollution
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        continue;
       }
-    });
 
-    setTimeout(() => {
-      Logger.error("Forced shutdown after timeout");
-      process.exit(1);
-    }, 30000);
+      let value = obj[key];
+
+      // Recursively sanitize nested objects
+      if (typeof value === "object" && value !== null) {
+        value = sanitize(value);
+      }
+
+      // Basic XSS prevention for strings
+      if (typeof value === "string") {
+        value = value.replace(
+          /<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi,
+          "",
+        );
+      }
+
+      sanitized[key] = value;
+    }
+
+    return sanitized;
   };
 
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
-  process.on("SIGINT", () => shutdown("SIGINT"));
+  if (req.body) req.body = sanitize(req.body);
+  if (req.query) req.query = sanitize(req.query);
+  if (req.params) req.params = sanitize(req.params);
 
-  process.on("uncaughtException", (err) => {
-    Logger.error("Uncaught Exception:", {
-      message: err.message,
-      stack: err.stack,
-    });
-    monitor.recordError(err, null, "UNCAUGHT_EXCEPTION");
-    shutdown("UNCAUGHT_EXCEPTION");
-  });
+  next();
+};
 
-  process.on("unhandledRejection", (reason) => {
-    Logger.error("Unhandled Rejection:", {
-      reason: reason?.message || String(reason),
-    });
-    monitor.recordError(
-      reason || new Error("Unhandled rejection"),
-      null,
-      "UNHANDLED_REJECTION",
-    );
-  });
-}
+/**
+ * Rate Limiter Implementation
+ */
+const createRateLimiter = (options = {}) => {
+  const {
+    windowMs = env.RATE_LIMIT_WINDOW,
+    max = env.RATE_LIMIT_MAX,
+    message = "Too many requests, please try again later",
+    keyGenerator = (req) => req.ip,
+    skip = () => false,
+  } = options;
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// HELPER FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+  const requests = new Map();
 
-function getLocalIP() {
-  const interfaces = os.networkInterfaces();
-  for (const name of Object.keys(interfaces)) {
-    for (const iface of interfaces[name]) {
-      if (iface.family === "IPv4" && !iface.internal) {
-        return iface.address;
+  // Cleanup old entries periodically
+  setInterval(() => {
+    const now = Date.now();
+    for (const [key, data] of requests) {
+      if (now - data.startTime > windowMs) {
+        requests.delete(key);
       }
     }
-  }
-  return "127.0.0.1";
-}
+  }, windowMs);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// MAIN STARTUP FUNCTION
-// ═══════════════════════════════════════════════════════════════════════════════
+  return (req, res, next) => {
+    if (skip(req)) return next();
 
-async function startServer() {
-  try {
-    console.log("");
-    Logger.startup("═".repeat(60));
-    Logger.startup(`Starting ${CONFIG.name} v${CONFIG.version}...`);
-    Logger.startup("═".repeat(60));
-    console.log("");
+    const key = keyGenerator(req);
+    const now = Date.now();
 
-    // 1. Initialize Monitor
-    Logger.startup("Initializing system monitor...");
-    const monitor = new SystemMonitor();
-    await monitor.initialize();
-    Logger.success("System monitor ready");
+    let requestData = requests.get(key);
 
-    // 2. Initialize Database
-    Logger.startup("Connecting to database...");
-    const database = new DatabaseManager();
-    await database.initialize();
-    await database.connect();
-
-    // 3. Create Express App
-    Logger.startup("Creating Express application...");
-    const app = createApp(monitor);
-    Logger.success("Express app created");
-
-    // 4. Setup System Endpoints (BEFORE routes)
-    const routeLoader = new RouteLoader(app, monitor);
-    setupSystemEndpoints(app, monitor, database, routeLoader);
-    Logger.success("System endpoints configured");
-
-    // 5. Load API Routes
-    console.log("");
-    const routeResults = await routeLoader.loadAllRoutes();
-    console.log("");
-
-    // 6. Setup Error Handlers (AFTER routes)
-    setupErrorHandlers(app, monitor);
-    Logger.success("Error handlers configured");
-
-    // Check for critical failures
-    if (routeResults.failed > 0 && routeResults.loaded === 0) {
-      throw new Error("All routes failed to load. Cannot start server.");
+    if (!requestData || now - requestData.startTime > windowMs) {
+      requestData = { count: 0, startTime: now };
     }
 
-    // 7. Start HTTP Server
-    const server = http.createServer(app);
+    requestData.count++;
+    requests.set(key, requestData);
 
-    server.keepAliveTimeout = CONFIG.keepAliveTimeout;
-    server.headersTimeout = CONFIG.headersTimeout;
-    server.timeout = CONFIG.requestTimeout;
+    // Set rate limit headers
+    res.setHeader("X-RateLimit-Limit", max);
+    res.setHeader(
+      "X-RateLimit-Remaining",
+      Math.max(0, max - requestData.count),
+    );
+    res.setHeader(
+      "X-RateLimit-Reset",
+      new Date(requestData.startTime + windowMs).toISOString(),
+    );
 
-    server.listen(CONFIG.port, "0.0.0.0", () => {
-      printStartupBanner(routeResults);
+    if (requestData.count > max) {
+      logger.warn(`Rate limit exceeded for ${key}`);
+      return next(AppError.tooManyRequests(message));
+    }
 
-      Logger.success("Server is ready and accepting connections!");
-      Logger.info(`Local:   http://localhost:${CONFIG.port}`);
-      Logger.info(`Network: http://${getLocalIP()}:${CONFIG.port}`);
-      console.log("");
+    next();
+  };
+};
+
+/**
+ * Request Timeout Middleware
+ */
+const timeoutMiddleware = (timeout = 30000) => {
+  return (req, res, next) => {
+    req.setTimeout(timeout, () => {
+      if (!res.headersSent) {
+        next(new AppError("Request timeout", 408, "TIMEOUT"));
+      }
+    });
+    next();
+  };
+};
+
+/**
+ * Response Time Tracking Middleware
+ */
+const responseTimeMiddleware = (req, res, next) => {
+  const startTime = process.hrtime.bigint();
+
+  // Wrap res.end so we can set headers before the response is sent
+  const originalEnd = res.end;
+  res.end = function (...args) {
+    const endTime = process.hrtime.bigint();
+    const duration = Number(endTime - startTime) / 1e6; // Convert to milliseconds
+
+    try {
+      if (!res.headersSent) {
+        res.setHeader("X-Response-Time", `${duration.toFixed(2)}ms`);
+      }
+    } catch (e) {
+      // Headers may already be sent in some edge cases
+    }
+
+    return originalEnd.apply(this, args);
+  };
+
+  res.on("finish", () => {
+    const endTime = process.hrtime.bigint();
+    const duration = Number(endTime - startTime) / 1e6;
+
+    // Log slow requests
+    if (duration > 5000) {
+      logger.warn(
+        `Slow request detected: ${req.method} ${req.path} took ${duration.toFixed(2)}ms`,
+      );
+    }
+  });
+
+  next();
+};
+
+/**
+ * Error Handling Middleware
+ */
+const errorMiddleware = (err, req, res, next) => {
+  // Set defaults
+  err.statusCode = err.statusCode || 500;
+  err.status = err.status || "error";
+
+  // Log error
+  monitor.recordError(err);
+
+  if (env.NODE_ENV === "development") {
+    logger.error(`${err.statusCode} - ${err.message}`, {
+      path: req.path,
+      method: req.method,
+      stack: err.stack,
+    });
+  } else {
+    logger.error(`${err.statusCode} - ${err.message}`, {
+      path: req.path,
+      method: req.method,
+      requestId: req.requestId,
+    });
+  }
+
+  // Handle specific error types
+  let error = { ...err, message: err.message };
+
+  // Sequelize validation error
+  if (
+    err.name === "SequelizeValidationError" ||
+    err.name === "SequelizeUniqueConstraintError"
+  ) {
+    const messages =
+      err.errors?.map((e) => e.message).join(", ") || err.message;
+    error = new AppError(messages, 400, "VALIDATION_ERROR");
+  }
+
+  // JWT errors
+  if (err.name === "JsonWebTokenError") {
+    error = new AppError(
+      "Invalid token. Please log in again.",
+      401,
+      "INVALID_TOKEN",
+    );
+  }
+
+  if (err.name === "TokenExpiredError") {
+    error = new AppError(
+      "Your token has expired. Please log in again.",
+      401,
+      "TOKEN_EXPIRED",
+    );
+  }
+
+  // Multer errors
+  if (err.name === "MulterError") {
+    error = new AppError(
+      `File upload error: ${err.message}`,
+      400,
+      "UPLOAD_ERROR",
+    );
+  }
+
+  // Syntax error in JSON
+  if (err instanceof SyntaxError && err.status === 400 && "body" in err) {
+    error = new AppError("Invalid JSON in request body", 400, "INVALID_JSON");
+  }
+
+  // Send response
+  const response = {
+    status: error.status,
+    message: error.message,
+    errorCode: error.errorCode,
+    requestId: req.requestId,
+    timestamp: new Date().toISOString(),
+  };
+
+  // Include stack trace in development
+  if (env.NODE_ENV === "development") {
+    response.stack = err.stack;
+    response.originalError = err.message;
+  }
+
+  // Include validation details if available
+  if (err.errors) {
+    response.errors = err.errors;
+  }
+
+  res.status(error.statusCode).json(response);
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORS CONFIGURATION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const corsOptions = {
+  origin: (origin, callback) => {
+    const allowedOrigins = env.CORS_ORIGINS.split(",").map((o) => o.trim());
+
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+
+    // Allow all in development
+    if (env.NODE_ENV === "development") return callback(null, true);
+
+    // Check if origin is allowed
+    if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) {
+      callback(null, true);
+    } else {
+      callback(new AppError("Not allowed by CORS", 403, "CORS_ERROR"));
+    }
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "X-Request-ID",
+    "Accept",
+    "Origin",
+  ],
+  exposedHeaders: [
+    "X-Request-ID",
+    "X-Response-Time",
+    "X-RateLimit-Limit",
+    "X-RateLimit-Remaining",
+    "X-RateLimit-Reset",
+  ],
+  maxAge: 86400, // 24 hours
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// GRACEFUL SHUTDOWN HANDLER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class GracefulShutdown {
+  constructor(server, dbManager) {
+    this.server = server;
+    this.dbManager = dbManager;
+    this.isShuttingDown = false;
+    this.shutdownTimeout = 30000;
+
+    this.setupHandlers();
+  }
+
+  setupHandlers() {
+    // Handle various shutdown signals
+    const signals = ["SIGTERM", "SIGINT", "SIGUSR2"];
+
+    signals.forEach((signal) => {
+      process.on(signal, () => this.shutdown(signal));
     });
 
-    // 8. Setup Graceful Shutdown
-    setupGracefulShutdown(server, database, monitor);
+    // Handle PM2 graceful reload
+    process.on("message", (msg) => {
+      if (msg === "shutdown") {
+        this.shutdown("PM2_SHUTDOWN");
+      }
+    });
+  }
 
-    global.server = server;
-    global.monitor = monitor;
-    global.database = database;
-
-    return { app, server, monitor, database };
-  } catch (err) {
-    console.log("");
-    Logger.error("═".repeat(60));
-    Logger.error("FATAL: Failed to start server");
-    Logger.error("═".repeat(60));
-    Logger.error(err.message);
-    if (CONFIG.isDev) {
-      console.error(err.stack);
+  async shutdown(signal) {
+    if (this.isShuttingDown) {
+      logger.warn("Shutdown already in progress...");
+      return;
     }
-    console.log("");
-    process.exit(1);
+
+    this.isShuttingDown = true;
+    logger.info(`\n🛑 ${signal} received. Starting graceful shutdown...`);
+
+    // Set timeout for forced shutdown
+    const forceShutdownTimeout = setTimeout(() => {
+      logger.error("Forced shutdown due to timeout");
+      process.exit(1);
+    }, this.shutdownTimeout);
+
+    try {
+      // Stop accepting new connections
+      logger.info("Stopping new connections...");
+      this.server.close((err) => {
+        if (err) {
+          logger.error("Error closing server", { error: err.message });
+        } else {
+          logger.info("Server closed successfully");
+        }
+      });
+
+      // Close database connection
+      logger.info("Closing database connection...");
+      await this.dbManager.shutdown();
+
+      // Clear the timeout
+      clearTimeout(forceShutdownTimeout);
+
+      // Final cleanup
+      logger.info("✅ Graceful shutdown completed");
+      process.exit(0);
+    } catch (err) {
+      logger.error("Error during shutdown", { error: err.message });
+      clearTimeout(forceShutdownTimeout);
+      process.exit(1);
+    }
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// START THE SERVER
+// ROUTE DEFINITIONS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-startServer();
+const routeDefinitions = [
+  { path: "/admin/auth", file: "routes/adminAuth" },
+  { path: "/auth", file: "routes/auth" },
+  { path: "/users", file: "routes/users" },
+  { path: "/countries", file: "routes/countries" },
+  { path: "/destinations", file: "routes/destinations" },
+  { path: "/posts", file: "routes/posts" },
+  { path: "/tips", file: "routes/tips" },
+  { path: "/services", file: "routes/services" },
+  { path: "/team", file: "routes/team" },
+  { path: "/gallery", file: "routes/gallery" },
+  { path: "/bookings", file: "routes/bookings" },
+  { path: "/faqs", file: "routes/faqs" },
+  { path: "/contact", file: "routes/contact" },
+  { path: "/pages", file: "routes/pages" },
+  { path: "/virtual-tours", file: "routes/virtualTours" },
+  { path: "/subscribers", file: "routes/subscribers" },
+  { path: "/settings", file: "routes/settings" },
+  { path: "/uploads", file: "routes/uploads" },
+  // { path: "/reviews", file: "routes/reviews" },
+  // { path: "/testimonials", file: "routes/testimonials" },
+  // { path: "/newsletters", file: "routes/newsletters" },
+];
 
-module.exports = { createApp, CONFIG, Logger, databaseManager };
+// ═══════════════════════════════════════════════════════════════════════════════
+// MAIN SERVER CLASS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+class AltuveraServer {
+  constructor() {
+    this.app = express();
+    this.server = null;
+    this.dbManager = new DatabaseManager();
+    this.routeLoader = null;
+    this.isReady = false;
+  }
+
+  async initialize() {
+    logger.info("═══════════════════════════════════════════════════════════");
+    logger.info("🌍 ALTUVERA TRAVEL - Enterprise Backend Server v6.0");
+    logger.info('   "True Adventures In High Places & Deep Culture"');
+    logger.info("═══════════════════════════════════════════════════════════");
+    logger.info(`Environment: ${env.NODE_ENV}`);
+    logger.info(`Port: ${env.PORT}`);
+    logger.info(
+      "═══════════════════════════════════════════════════════════\n",
+    );
+
+    try {
+      // Initialize database
+      await this.dbManager.initialize();
+
+      // Setup Express app
+      this.setupMiddleware();
+      this.setupRoutes();
+      this.setupErrorHandling();
+
+      // Start server
+      await this.startServer();
+
+      // Setup graceful shutdown
+      new GracefulShutdown(this.server, this.dbManager);
+
+      // Start memory monitoring
+      this.startMemoryMonitoring();
+
+      this.isReady = true;
+
+      logger.info(
+        "\n═══════════════════════════════════════════════════════════",
+      );
+      logger.info("🚀 Server is ready to accept connections");
+      logger.info(
+        "═══════════════════════════════════════════════════════════\n",
+      );
+
+      return this;
+    } catch (err) {
+      logger.error("💥 Failed to initialize server", { error: err.message });
+      throw err;
+    }
+  }
+
+  setupMiddleware() {
+    logger.info("⚙️  Setting up middleware...");
+
+    // Trust proxy (for reverse proxies like nginx)
+    this.app.set("trust proxy", 1);
+    this.app.set("x-powered-by", false);
+
+    // Security middleware
+    this.app.use(securityMiddleware);
+    this.app.use(
+      helmet({
+        contentSecurityPolicy: env.NODE_ENV === "production",
+        crossOriginEmbedderPolicy: false,
+        crossOriginResourcePolicy: { policy: "cross-origin" },
+      }),
+    );
+
+    // CORS
+    this.app.use(cors(corsOptions));
+    this.app.options("*", cors(corsOptions));
+
+    // Request parsing
+    this.app.use(
+      express.json({
+        limit: env.MAX_REQUEST_SIZE,
+        strict: true,
+      }),
+    );
+    this.app.use(
+      express.urlencoded({
+        extended: true,
+        limit: env.MAX_REQUEST_SIZE,
+      }),
+    );
+
+    // Sanitization
+    this.app.use(sanitizationMiddleware);
+
+    // Compression
+    this.app.use(
+      compression({
+        level: 6,
+        threshold: 1024,
+        filter: (req, res) => {
+          if (req.headers["x-no-compression"]) return false;
+          return compression.filter(req, res);
+        },
+      }),
+    );
+
+    // Logging
+    const morganFormat =
+      env.NODE_ENV === "development"
+        ? "dev"
+        : ":remote-addr - :method :url :status :response-time ms";
+
+    this.app.use(
+      morgan(morganFormat, {
+        stream: { write: (msg) => logger.http(msg.trim()) },
+        skip: (req) => req.url === "/api/health",
+      }),
+    );
+
+    // Response time tracking
+    this.app.use(responseTimeMiddleware);
+
+    // Request timeout
+    this.app.use(timeoutMiddleware(30000));
+
+    // Monitoring middleware
+    this.app.use((req, res, next) => {
+      req.startTime = Date.now();
+
+      res.on("finish", () => {
+        const duration = Date.now() - req.startTime;
+        monitor.recordResponse(req, res, duration);
+      });
+
+      monitor.recordRequest(req);
+      next();
+    });
+
+    // Rate limiting for API routes
+    this.app.use(
+      "/api",
+      createRateLimiter({
+        windowMs: env.RATE_LIMIT_WINDOW,
+        max: env.RATE_LIMIT_MAX,
+        skip: (req) => req.path === "/health",
+      }),
+    );
+
+    // Static files
+    const uploadsPath = path.join(__dirname, "uploads");
+    if (!fs.existsSync(uploadsPath)) {
+      fs.mkdirSync(uploadsPath, { recursive: true });
+    }
+    this.app.use(
+      "/uploads",
+      express.static(uploadsPath, {
+        maxAge: "1d",
+        etag: true,
+        lastModified: true,
+      }),
+    );
+
+    logger.info("✅ Middleware configured successfully");
+  }
+
+  setupRoutes() {
+    logger.info("📂 Setting up routes...");
+
+    // Route loader
+    this.routeLoader = new RouteLoader(this.app);
+    this.routeLoader.loadRoutes(routeDefinitions);
+
+    // Health check endpoint
+    this.app.get("/api/health", (req, res) => {
+      const health = monitor.getHealthStatus();
+      health.database = this.dbManager.getStatus();
+      health.routes = this.routeLoader.getStatus();
+
+      const statusCode = health.database.isConnected ? 200 : 503;
+      res.status(statusCode).json(health);
+    });
+
+    // Detailed stats endpoint (protected)
+    this.app.get("/api/stats", (req, res) => {
+      // In production, you'd want to protect this endpoint
+      if (env.NODE_ENV === "production" && !req.headers["x-admin-key"]) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+
+      res.json(monitor.getDetailedStats());
+    });
+
+    // Root endpoint
+    this.app.get("/", (req, res) => {
+      res.json({
+        name: "Altuvera Travel API",
+        version: env.API_VERSION,
+        status: "operational",
+        documentation: "/api/docs",
+        health: "/api/health",
+      });
+    });
+
+    // API info endpoint
+    this.app.get("/api", (req, res) => {
+      res.json({
+        name: "Altuvera Travel API",
+        version: env.API_VERSION,
+        description: "True Adventures In High Places & Deep Culture",
+        endpoints: this.routeLoader.loadedRoutes.map((r) => `/api${r.path}`),
+        documentation: "/api/docs",
+      });
+    });
+
+    // 404 handler - must be after all routes
+    this.app.all("*", (req, res, next) => {
+      next(AppError.notFound(`Route ${req.originalUrl}`));
+    });
+
+    logger.info("✅ Routes configured successfully");
+  }
+
+  setupErrorHandling() {
+    logger.info("🛡️  Setting up error handling...");
+    this.app.use(errorMiddleware);
+    logger.info("✅ Error handling configured successfully");
+  }
+
+  async startServer() {
+    return new Promise((resolve, reject) => {
+      try {
+        // Create HTTP or HTTPS server
+        if (env.SSL_ENABLED && env.SSL_KEY_PATH && env.SSL_CERT_PATH) {
+          const sslOptions = {
+            key: fs.readFileSync(env.SSL_KEY_PATH),
+            cert: fs.readFileSync(env.SSL_CERT_PATH),
+          };
+          this.server = https.createServer(sslOptions, this.app);
+          logger.info("🔒 SSL enabled");
+        } else {
+          this.server = http.createServer(this.app);
+        }
+
+        // Configure server
+        this.server.keepAliveTimeout = 65000;
+        this.server.headersTimeout = 66000;
+        this.server.maxHeadersCount = 100;
+
+        // Start listening
+        this.server.listen(env.PORT, "0.0.0.0", () => {
+          logger.info(
+            `\n🚀 Server running on port ${env.PORT} in ${env.NODE_ENV} mode`,
+          );
+          resolve(this.server);
+        });
+
+        // Handle server errors
+        this.server.on("error", (err) => {
+          if (err.code === "EADDRINUSE") {
+            logger.error(`Port ${env.PORT} is already in use`);
+          } else if (err.code === "EACCES") {
+            logger.error(`Port ${env.PORT} requires elevated privileges`);
+          } else {
+            logger.error("Server error", { error: err.message });
+          }
+          reject(err);
+        });
+
+        // Handle connection errors
+        this.server.on("clientError", (err, socket) => {
+          if (err.code === "ECONNRESET" || !socket.writable) return;
+          socket.end("HTTP/1.1 400 Bad Request\r\n\r\n");
+        });
+      } catch (err) {
+        logger.error("Failed to start server", { error: err.message });
+        reject(err);
+      }
+    });
+  }
+
+  startMemoryMonitoring() {
+    // Update memory stats periodically
+    setInterval(() => {
+      monitor.updateMemory();
+
+      // Check for memory leaks
+      const memUsage = process.memoryUsage();
+      const heapUsedMB = memUsage.heapUsed / 1024 / 1024;
+
+      if (heapUsedMB > 500) {
+        logger.warn(`High memory usage: ${heapUsedMB.toFixed(2)} MB`);
+      }
+
+      // Force garbage collection if available (requires --expose-gc flag)
+      if (global.gc && heapUsedMB > 400) {
+        logger.info("Running garbage collection...");
+        global.gc();
+      }
+    }, 60000); // Every minute
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CLUSTER MODE (Optional)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const startWithCluster = async () => {
+  if (cluster.isMaster) {
+    const numWorkers = env.CLUSTER_WORKERS;
+
+    logger.info(`🔧 Master process ${process.pid} is running`);
+    logger.info(`🔧 Starting ${numWorkers} workers...`);
+
+    // Fork workers
+    for (let i = 0; i < numWorkers; i++) {
+      cluster.fork();
+    }
+
+    // Handle worker exit
+    cluster.on("exit", (worker, code, signal) => {
+      logger.warn(
+        `Worker ${worker.process.pid} died (${signal || code}). Restarting...`,
+      );
+      cluster.fork();
+    });
+
+    // Handle worker messages
+    cluster.on("message", (worker, message) => {
+      logger.debug(`Message from worker ${worker.id}:`, message);
+    });
+  } else {
+    // Workers run the server
+    const server = new AltuveraServer();
+    await server.initialize();
+    logger.info(`🔧 Worker ${process.pid} started`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENTRY POINT
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const main = async () => {
+  try {
+    if (env.ENABLE_CLUSTERING && env.NODE_ENV === "production") {
+      await startWithCluster();
+    } else {
+      const server = new AltuveraServer();
+      await server.initialize();
+    }
+  } catch (err) {
+    logger.error("💥 Fatal error during startup", {
+      error: err.message,
+      stack: err.stack,
+    });
+    process.exit(1);
+  }
+};
+
+// Start the server
+main();
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// EXPORTS (for testing)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+module.exports = {
+  AltuveraServer,
+  AppError,
+  DatabaseManager,
+  RouteLoader,
+  createRateLimiter,
+};

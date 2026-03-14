@@ -11,6 +11,7 @@ const crypto = require("crypto");
 const { query } = require("../config/db");
 const { sendEmail } = require("../utils/email");
 const logger = require("../utils/logger");
+const { validatePassword } = require("../utils/validators");
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 🎨 EMAIL TEMPLATE SYSTEM — Clean, Centered, Responsive
@@ -339,18 +340,26 @@ const buildAdminWelcomeEmail = ({ recipientName, username }) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 const generateToken = (entity, type = "user") => {
+  const tokenVersion = entity.token_version ?? entity.tokenVersion ?? 0;
   return jwt.sign(
-    { id: entity.id, email: entity.email, role: entity.role || (type === "admin" ? "admin" : "user"), type },
+    {
+      id: entity.id,
+      email: entity.email,
+      role: entity.role || (type === "admin" ? "admin" : "user"),
+      type,
+      tokenVersion,
+    },
     process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" }
+    { expiresIn: process.env.JWT_EXPIRES_IN || "7d" },
   );
 };
 
 const generateRefreshToken = (entity, type = "user") => {
+  const tokenVersion = entity.token_version ?? entity.tokenVersion ?? 0;
   return jwt.sign(
-    { id: entity.id, type, tokenType: "refresh" },
+    { id: entity.id, type, tokenType: "refresh", tokenVersion },
     process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET,
-    { expiresIn: "30d" }
+    { expiresIn: process.env.JWT_REFRESH_EXPIRES_IN || "30d" },
   );
 };
 
@@ -916,7 +925,12 @@ exports.adminRegister = async (req, res) => {
   try {
     const { username, email, password, full_name, role } = req.body;
     if (!username || !email || !password) return res.status(400).json({ success: false, message: "Required fields missing" });
-    if (password.length < 8) return res.status(400).json({ success: false, message: "Password min 8 characters" });
+    if (!validatePassword(password))
+      return res.status(400).json({
+        success: false,
+        message:
+          "Password must be at least 10 characters and include upper + lower case letters, numbers, and symbols.",
+      });
 
     const exists = await query("SELECT id FROM admin_users WHERE email=$1 OR username=$2", [email.toLowerCase(), username.toLowerCase()]);
     if (exists.rows.length > 0) return res.status(409).json({ success: false, message: "Admin already exists" });
@@ -1106,7 +1120,20 @@ exports.checkEmail = async (req, res) => {
   }
 };
 
-exports.logout = (req, res) => res.json({ success: true, message: "Signed out." });
+exports.logout = async (req, res) => {
+  try {
+    const table = req.userType === "admin" ? "admin_users" : "users";
+    await query(
+      `UPDATE ${table} SET token_version = COALESCE(token_version, 0) + 1 WHERE id = $1`,
+      [req.user.id],
+    );
+
+    return res.json({ success: true, message: "Signed out." });
+  } catch (err) {
+    logger.error("Logout failed:", err);
+    return res.status(500).json({ success: false, message: "Logout failed." });
+  }
+};
 
 exports.deleteAccount = async (req, res) => {
   try {
