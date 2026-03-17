@@ -234,6 +234,22 @@ const ensureUserSchema = async () => {
   }
 };
 
+// ── Ensure Destinations Table Schema is Complete ─────────────────────────────
+
+const ensureDestinationsSchema = async () => {
+  try {
+    await pool.query(
+      "ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true",
+    );
+    logger.info("[DB] ✅ Destinations table schema verified & updated");
+  } catch (err) {
+    logger.warn(
+      "[DB] Destinations schema check skipped (table may not exist yet):",
+      err.message,
+    );
+  }
+};
+
 // ── Graceful Close ───────────────────────────────────────────────────────────
 
 const closeConnections = async () => {
@@ -255,4 +271,5 @@ module.exports = {
   testConnection,
   closeConnections,
   ensureUserSchema,
+  ensureDestinationsSchema,
 };

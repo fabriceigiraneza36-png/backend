@@ -5,18 +5,32 @@
 
 require("dotenv").config();
 const { Sequelize } = require("sequelize");
+const fs = require("fs");
+const path = require("path");
 
-const sequelize = new Sequelize(
-  process.env.DB_NAME || "altuvera",
-  process.env.DB_USER || "fabrice",
-  process.env.DB_PASSWORD || "2004",
-  {
-    host: process.env.DB_HOST || "localhost",
-    port: parseInt(process.env.DB_PORT, 10) || 5432,
+let sequelize;
+if (process.env.DATABASE_URL) {
+  sequelize = new Sequelize(process.env.DATABASE_URL, {
     dialect: "postgres",
     logging: console.log,
-  }
-);
+    dialectOptions:
+      process.env.DB_SSL === "false"
+        ? {}
+        : { ssl: { rejectUnauthorized: false } },
+  });
+} else {
+  sequelize = new Sequelize(
+    process.env.DB_NAME || "altuvera",
+    process.env.DB_USER || "fabrice",
+    process.env.DB_PASSWORD || "2004",
+    {
+      host: process.env.DB_HOST || "localhost",
+      port: parseInt(process.env.DB_PORT, 10) || 5432,
+      dialect: "postgres",
+      logging: console.log,
+    }
+  );
+}
 
 async function setupDatabase() {
   try {
@@ -24,7 +38,17 @@ async function setupDatabase() {
     await sequelize.authenticate();
     console.log("✅ Connected!");
 
-    console.log("\n📊 Creating tables...");
+    const schemaFile = path.join(__dirname, "..", "db", "schema.sql");
+    if (fs.existsSync(schemaFile)) {
+      console.log("\n📄 Found db/schema.sql — applying full schema (this will recreate tables)...");
+      const sql = fs.readFileSync(schemaFile, "utf8");
+      await sequelize.query(sql);
+      console.log("✅ Full schema applied from db/schema.sql");
+    } else {
+      console.log("\n📊 Creating tables...");
+
+      // (fallback) previous manual table creation will be executed below
+    }
     
     // Users table
     await sequelize.query(`
