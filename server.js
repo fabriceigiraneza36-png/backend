@@ -27,81 +27,57 @@
 
 "use strict";
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ENVIRONMENT VALIDATION & EARLY ERROR CATCHING
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Catch environment errors before anything else
-process.on("uncaughtException", (err) => {
-  console.error("═══════════════════════════════════════════════════════════");
-  console.error("💥 UNCAUGHT EXCEPTION! Server shutting down...");
-  console.error("Time:", new Date().toISOString());
-  console.error("Error:", err.name);
-  console.error("Message:", err.message);
-  console.error("Stack:", err.stack);
-  console.error("═══════════════════════════════════════════════════════════");
-  process.exit(1);
-});
-
-process.on("unhandledRejection", (reason, promise) => {
-  console.error("═══════════════════════════════════════════════════════════");
-  console.error("💥 UNHANDLED REJECTION! Server shutting down...");
-  console.error("Time:", new Date().toISOString());
-  console.error("Reason:", reason);
-  console.error("═══════════════════════════════════════════════════════════");
-  process.exit(1);
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// CORE DEPENDENCIES
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// Ensure proper initialization order
 const express = require("express");
 const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const compression = require("compression");
-const http = require("http");
-const https = require("https");
+const crypto = require("crypto");
+const os = require("os");
 const path = require("path");
 const fs = require("fs");
-const crypto = require("crypto");
-const cluster = require("cluster");
-const os = require("os");
+const http = require("http");
+const https = require("https");
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// INTERNAL MODULES WITH SAFE LOADING
-// ═══════════════════════════════════════════════════════════════════════════════
+// Import logger utility
+const logger = require("./utils/logger");
 
-/**
- * Safe module loader with fallback
- */
-const safeRequire = (modulePath, fallback = null) => {
+// Import monitor utility for tracking
+const monitor = require("./utils/monitor");
+
+// Require a module without crashing the process if it is missing.
+// Used for optional modules/config that may not exist in all environments.
+const safeRequire = (modulePath) => {
   try {
     return require(modulePath);
   } catch (err) {
-    console.warn(`⚠️  Module not found: ${modulePath}. Using fallback.`);
-    return fallback;
+    const msg = err && err.message ? err.message : String(err);
+    if (err && err.code === "MODULE_NOT_FOUND") {
+      logger.warn(`Optional module not found: ${modulePath}`, { error: msg });
+      return null;
+    }
+    logger.error(`Failed to load module: ${modulePath}`, { error: msg });
+    return null;
   }
 };
+
+// Initialize Express app
+const app = express();
 
 // Load configuration with validation
 const env = (() => {
   try {
     const envModule = require("./config/env");
-
-    // Validate required environment variables
     const requiredVars = ["PORT", "NODE_ENV", "DATABASE_URL"];
     const missing = requiredVars.filter(
       (v) => !envModule[v] && !process.env[v],
     );
-
     if (missing.length > 0) {
       console.warn(
         `⚠️  Missing env vars: ${missing.join(", ")}. Using defaults.`,
       );
     }
-
     return {
       PORT: envModule.PORT || process.env.PORT || 5000,
       NODE_ENV: envModule.NODE_ENV || process.env.NODE_ENV || "development",
@@ -144,241 +120,14 @@ const env = (() => {
   }
 })();
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// LOGGER IMPLEMENTATION
-// ═══════════════════════════════════════════════════════════════════════════════
+// Note: CORS, helmet, morgan, and compression are configured in ServerManager.setupMiddleware()
+// Doing it here would cause conflicts. This app initialization is just for structure.
 
-const logger = (() => {
-  const customLogger = safeRequire("./utils/logger");
+// Ensure consistent base URL usage
+const BACKEND_URL = process.env.BACKEND_URL || `http://localhost:${env.PORT}`;
+const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:3000";
 
-  if (customLogger) return customLogger;
-
-  // Fallback logger with colors and formatting
-  const colors = {
-    reset: "\x1b[0m",
-    red: "\x1b[31m",
-    green: "\x1b[32m",
-    yellow: "\x1b[33m",
-    blue: "\x1b[34m",
-    magenta: "\x1b[35m",
-    cyan: "\x1b[36m",
-    gray: "\x1b[90m",
-  };
-
-  const levels = {
-    error: { priority: 0, color: colors.red, label: "ERROR" },
-    warn: { priority: 1, color: colors.yellow, label: "WARN " },
-    info: { priority: 2, color: colors.green, label: "INFO " },
-    http: { priority: 3, color: colors.magenta, label: "HTTP " },
-    debug: { priority: 4, color: colors.blue, label: "DEBUG" },
-  };
-
-  const currentLevel = levels[env.LOG_LEVEL] || levels.info;
-
-  const formatMessage = (level, message, meta = {}) => {
-    const timestamp = new Date().toISOString();
-    const levelInfo = levels[level];
-    const metaStr =
-      Object.keys(meta).length > 0 ? ` ${JSON.stringify(meta)}` : "";
-
-    return `${colors.gray}[${timestamp}]${colors.reset} ${levelInfo.color}${levelInfo.label}${colors.reset}: ${message}${metaStr}`;
-  };
-
-  const log = (level, message, meta) => {
-    if (levels[level].priority <= currentLevel.priority) {
-      console.log(formatMessage(level, message, meta));
-    }
-  };
-
-  return {
-    error: (msg, meta) => log("error", msg, meta),
-    warn: (msg, meta) => log("warn", msg, meta),
-    info: (msg, meta) => log("info", msg, meta),
-    http: (msg, meta) => log("http", msg, meta),
-    debug: (msg, meta) => log("debug", msg, meta),
-  };
-})();
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// MONITOR IMPLEMENTATION
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const monitor = (() => {
-  const customMonitor = safeRequire("./utils/monitor");
-
-  if (customMonitor) return customMonitor;
-
-  // Built-in monitor
-  const stats = {
-    startTime: Date.now(),
-    requests: {
-      total: 0,
-      successful: 0,
-      failed: 0,
-      byMethod: {},
-      byStatus: {},
-      byPath: {},
-    },
-    responses: {
-      avgResponseTime: 0,
-      totalResponseTime: 0,
-      maxResponseTime: 0,
-      minResponseTime: Infinity,
-    },
-    errors: [],
-    memory: {
-      peak: 0,
-      current: 0,
-    },
-  };
-
-  return {
-    recordRequest: (req) => {
-      stats.requests.total++;
-      stats.requests.byMethod[req.method] =
-        (stats.requests.byMethod[req.method] || 0) + 1;
-
-      const pathKey = req.path.split("/").slice(0, 3).join("/");
-      stats.requests.byPath[pathKey] =
-        (stats.requests.byPath[pathKey] || 0) + 1;
-    },
-
-    recordResponse: (req, res, duration) => {
-      const statusCode = res.statusCode;
-      stats.requests.byStatus[statusCode] =
-        (stats.requests.byStatus[statusCode] || 0) + 1;
-
-      if (statusCode >= 200 && statusCode < 400) {
-        stats.requests.successful++;
-      } else {
-        stats.requests.failed++;
-      }
-
-      stats.responses.totalResponseTime += duration;
-      stats.responses.avgResponseTime =
-        stats.responses.totalResponseTime / stats.requests.total;
-      stats.responses.maxResponseTime = Math.max(
-        stats.responses.maxResponseTime,
-        duration,
-      );
-      stats.responses.minResponseTime = Math.min(
-        stats.responses.minResponseTime,
-        duration,
-      );
-    },
-
-    recordError: (error) => {
-      stats.errors.push({
-        message: error.message,
-        stack: error.stack,
-        timestamp: new Date().toISOString(),
-      });
-
-      // Keep only last 100 errors
-      if (stats.errors.length > 100) {
-        stats.errors = stats.errors.slice(-100);
-      }
-    },
-
-    updateMemory: () => {
-      const memUsage = process.memoryUsage();
-      stats.memory.current = memUsage.heapUsed;
-      stats.memory.peak = Math.max(stats.memory.peak, memUsage.heapUsed);
-    },
-
-    getHealthStatus: () => {
-      const memUsage = process.memoryUsage();
-      const uptime = Date.now() - stats.startTime;
-
-      return {
-        status: "healthy",
-        timestamp: new Date().toISOString(),
-        version: env.API_VERSION,
-        environment: env.NODE_ENV,
-        uptime: {
-          ms: uptime,
-          formatted: formatUptime(uptime),
-        },
-        server: {
-          pid: process.pid,
-          platform: process.platform,
-          nodeVersion: process.version,
-          cpus: os.cpus().length,
-        },
-        memory: {
-          used: formatBytes(memUsage.heapUsed),
-          total: formatBytes(memUsage.heapTotal),
-          external: formatBytes(memUsage.external),
-          rss: formatBytes(memUsage.rss),
-          usagePercent:
-            ((memUsage.heapUsed / memUsage.heapTotal) * 100).toFixed(2) + "%",
-        },
-        requests: {
-          total: stats.requests.total,
-          successful: stats.requests.successful,
-          failed: stats.requests.failed,
-          successRate:
-            stats.requests.total > 0
-              ? (
-                  (stats.requests.successful / stats.requests.total) *
-                  100
-                ).toFixed(2) + "%"
-              : "N/A",
-        },
-        performance: {
-          avgResponseTime: stats.responses.avgResponseTime.toFixed(2) + "ms",
-          maxResponseTime: stats.responses.maxResponseTime + "ms",
-          minResponseTime:
-            stats.responses.minResponseTime === Infinity
-              ? "N/A"
-              : stats.responses.minResponseTime + "ms",
-        },
-        load: os.loadavg(),
-        recentErrors: stats.errors.slice(-5),
-      };
-    },
-
-    getDetailedStats: () => ({
-      ...stats,
-      currentMemory: process.memoryUsage(),
-      cpuUsage: process.cpuUsage(),
-    }),
-  };
-})();
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// UTILITY FUNCTIONS
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const formatBytes = (bytes) => {
-  const units = ["B", "KB", "MB", "GB"];
-  let unitIndex = 0;
-  let value = bytes;
-
-  while (value >= 1024 && unitIndex < units.length - 1) {
-    value /= 1024;
-    unitIndex++;
-  }
-
-  return `${value.toFixed(2)} ${units[unitIndex]}`;
-};
-
-const formatUptime = (ms) => {
-  const seconds = Math.floor(ms / 1000);
-  const minutes = Math.floor(seconds / 60);
-  const hours = Math.floor(minutes / 60);
-  const days = Math.floor(hours / 24);
-
-  if (days > 0) return `${days}d ${hours % 24}h ${minutes % 60}m`;
-  if (hours > 0) return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
-  if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
-  return `${seconds}s`;
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DATABASE CONNECTION WITH AUTO-RECONNECT
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// Update DatabaseManager to log the base URL
 class DatabaseManager {
   constructor() {
     this.sequelize = null;
@@ -391,6 +140,8 @@ class DatabaseManager {
 
   async initialize() {
     try {
+      logger.info(`🌐 Backend URL: ${BACKEND_URL}`);
+      logger.info(`🌐 Frontend URL: ${FRONTEND_URL}`);
       const dbModule = safeRequire("./config/database");
 
       if (dbModule && dbModule.sequelize) {
@@ -404,10 +155,10 @@ class DatabaseManager {
           logging:
             env.NODE_ENV === "development" ? (msg) => logger.debug(msg) : false,
           pool: {
-            max: 20,
-            min: 5,
+            max: 50, // Increased max connections for high traffic
+            min: 10,
             acquire: 60000,
-            idle: 10000,
+            idle: 5000,
             evict: 1000,
           },
           dialectOptions: {
@@ -813,6 +564,12 @@ const responseTimeMiddleware = (req, res, next) => {
  * Error Handling Middleware
  */
 const errorMiddleware = (err, req, res, next) => {
+  // Prevent setting headers if already sent
+  if (res.headersSent) {
+    logger.error("Error after headers sent:", { error: err.message });
+    return next(err);
+  }
+
   // Set defaults
   err.statusCode = err.statusCode || 500;
   err.status = err.status || "error";
@@ -899,7 +656,7 @@ const errorMiddleware = (err, req, res, next) => {
   }
 
   res.status(error.statusCode).json(response);
-};
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CORS CONFIGURATION
@@ -1036,6 +793,7 @@ const routeDefinitions = [
   { path: "/bookings", file: "routes/bookings" },
   { path: "/faqs", file: "routes/faqs" },
   { path: "/contact", file: "routes/contact" },
+  { path: "/message", file: "routes/message" },
   { path: "/pages", file: "routes/pages" },
   { path: "/virtual-tours", file: "routes/virtualTours" },
   { path: "/subscribers", file: "routes/subscribers" },
@@ -1229,6 +987,40 @@ class AltuveraServer {
 
       const statusCode = health.database.isConnected ? 200 : 503;
       res.status(statusCode).json(health);
+    });
+
+    // Real-time tracking endpoint
+    const realTimeTracker = require("./utils/realTimeTracker");
+    
+    this.app.get("/api/tracking/stats", (req, res) => {
+      if (env.NODE_ENV === "production" && !req.headers["x-admin-key"]) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      res.json(realTimeTracker.getStats());
+    });
+
+    this.app.get("/api/tracking/uploads", (req, res) => {
+      if (env.NODE_ENV === "production" && !req.headers["x-admin-key"]) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const limit = parseInt(req.query.limit, 10) || 10;
+      res.json(realTimeTracker.getRecentUploads(limit));
+    });
+
+    this.app.get("/api/tracking/events", (req, res) => {
+      if (env.NODE_ENV === "production" && !req.headers["x-admin-key"]) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const limit = parseInt(req.query.limit, 10) || 20;
+      res.json(realTimeTracker.getRecentEvents(limit));
+    });
+
+    this.app.get("/api/tracking/api-calls", (req, res) => {
+      if (env.NODE_ENV === "production" && !req.headers["x-admin-key"]) {
+        return res.status(403).json({ error: "Access denied" });
+      }
+      const limit = parseInt(req.query.limit, 10) || 10;
+      res.json(realTimeTracker.getRecentAPICalls(limit));
     });
 
     // Detailed stats endpoint (protected)

@@ -28,7 +28,7 @@ const parseNumber = (value, fallback = null) => {
 
 const serializeTip = (row) => ({
   ...row,
-  title: row.headline,
+  title: row.slug || row.headline,
   content: row.body || row.summary,
 });
 
@@ -124,14 +124,13 @@ exports.create = async (req, res, next) => {
     const finalSlug = slugify(finalHeadline);
     const result = await query(
       `INSERT INTO tips
-       (headline, slug, summary, body, category, trip_phase, audience, difficulty_level,
+       (slug, summary, body, category, trip_phase, audience, difficulty_level,
         priority_level, read_time_minutes, checklist, tags, icon, image_url, source_url,
         cta_text, cta_url, sort_order, is_featured, is_active)
        VALUES
-       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)
+       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        RETURNING *`,
       [
-        finalHeadline,
         finalSlug,
         finalSummary,
         body || content || null,
@@ -170,7 +169,6 @@ exports.update = async (req, res, next) => {
 
     if (input.headline || input.title) {
       const finalHeadline = input.headline || input.title;
-      fields.headline = finalHeadline;
       fields.slug = slugify(finalHeadline);
     }
     if (Object.prototype.hasOwnProperty.call(input, "summary")) fields.summary = input.summary;

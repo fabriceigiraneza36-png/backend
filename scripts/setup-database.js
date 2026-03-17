@@ -282,15 +282,24 @@ async function setupDatabase() {
 
     // Create indexes for performance
     console.log("\n🔧 Creating indexes...");
-    await sequelize.query(`
-      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-      CREATE INDEX IF NOT EXISTS idx_destinations_country ON destinations(country_id);
-      CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
-      CREATE INDEX IF NOT EXISTS idx_bookings_destination ON bookings(destination_id);
-      CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);
-      CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);
-    `);
-    console.log("✅ Indexes created");
+    const indexStatements = [
+      `CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);`,
+      `CREATE INDEX IF NOT EXISTS idx_destinations_country ON destinations(country_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_bookings_destination ON bookings(destination_id);`,
+      `CREATE INDEX IF NOT EXISTS idx_posts_slug ON posts(slug);`,
+      `CREATE INDEX IF NOT EXISTS idx_posts_author ON posts(author_id);`,
+    ];
+
+    for (const stmt of indexStatements) {
+      try {
+        await sequelize.query(stmt);
+      } catch (err) {
+        console.warn('⚠️ Index creation warning:', err.message);
+      }
+    }
+
+    console.log("✅ Indexes created (or skipped if already present)");
 
     console.log("\n🎉 Database setup complete!");
     

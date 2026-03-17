@@ -16,25 +16,42 @@ const logger = require("../utils/logger");
 
 // ── Connection Configuration ─────────────────────────────────────────────────
 
-const dbConfig = {
-  host: process.env.DB_HOST || "localhost",
-  port: parseInt(process.env.DB_PORT, 10) || 5432,
-  database: process.env.DB_NAME || "altuvera",
-  user: process.env.DB_USER || "fabrice",
-  password: process.env.DB_PASSWORD || "2004",
-};
+// If a single DATABASE_URL is provided (e.g., Neon/Heroku), prefer it.
+const connectionString = process.env.DATABASE_URL || null;
+
+const dbConfig = connectionString
+  ? { connectionString }
+  : {
+      host: process.env.DB_HOST || "localhost",
+      port: parseInt(process.env.DB_PORT, 10) || 5432,
+      database: process.env.DB_NAME || "altuvera",
+      user: process.env.DB_USER || "fabrice",
+      password: process.env.DB_PASSWORD || "2004",
+    };
 
 // ── Pool Configuration (Always-Ready) ────────────────────────────────────────
 
-const pool = new Pool({
-  ...dbConfig,
-  max: 30, // generous pool ceiling
-  min: 5, // always keep 5 warm connections
-  idleTimeoutMillis: 300000, // 5 min idle before release
-  connectionTimeoutMillis: 10000, // 10s max wait for new connection
-  allowExitOnIdle: false, // keep pool alive even if idle
-  statement_timeout: 30000, // 30s max query execution time
-});
+const poolOptions = connectionString
+  ? {
+      connectionString,
+      // If running against cloud providers, enable SSL by default
+      ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
+      max: parseInt(process.env.DB_POOL_MAX, 10) || 30,
+      idleTimeoutMillis: parseInt(process.env.DB_IDLE_MS, 10) || 300000,
+      connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
+      allowExitOnIdle: false,
+    }
+  : {
+      ...dbConfig,
+      max: parseInt(process.env.DB_POOL_MAX, 10) || 30,
+      min: parseInt(process.env.DB_POOL_MIN, 10) || 5,
+      idleTimeoutMillis: parseInt(process.env.DB_IDLE_MS, 10) || 300000,
+      connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
+      allowExitOnIdle: false,
+      statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30000,
+    };
+
+const pool = new Pool(poolOptions);
 
 // ── Pool Event Handlers ──────────────────────────────────────────────────────
 
