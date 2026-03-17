@@ -46,6 +46,9 @@ const logger = require("./utils/logger");
 // Import monitor utility for tracking
 const monitor = require("./utils/monitor");
 
+// Ensure schema migrations for missing columns
+const { ensureDestinationsSchema } = require("./config/db");
+
 // Require a module without crashing the process if it is missing.
 // Used for optional modules/config that may not exist in all environments.
 const safeRequire = (modulePath) => {
@@ -831,6 +834,9 @@ class AltuveraServer {
     try {
       // Initialize database
       await this.dbManager.initialize();
+
+      // Apply any missing schema changes (non-destructive)
+      await ensureDestinationsSchema();
 
       // Setup Express app
       this.setupMiddleware();
