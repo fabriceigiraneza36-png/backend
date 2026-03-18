@@ -10,10 +10,9 @@ const toNumber = (value) => {
   return Number.isFinite(n) ? n : null;
 };
 
-// Parse JSONB fields safely
 const parseJsonField = (value, defaultValue = {}) => {
   if (!value) return defaultValue;
-  if (typeof value === 'object') return value;
+  if (typeof value === "object") return value;
   try {
     return JSON.parse(value);
   } catch {
@@ -21,16 +20,14 @@ const parseJsonField = (value, defaultValue = {}) => {
   }
 };
 
-// Serialize country for API response (matches frontend data structure)
+/* ── serializers ─────────────────────────────────────── */
+
 const serializeCountry = (row, includeRelated = false) => {
   const country = {
-    // Identifiers
     id: row.slug || String(row.id),
     countryId: row.slug || String(row.id),
     dbId: row.id,
     slug: row.slug,
-    
-    // Basic Info
     name: row.name,
     officialName: row.official_name,
     capital: row.capital,
@@ -39,23 +36,15 @@ const serializeCountry = (row, includeRelated = false) => {
     tagline: row.tagline,
     motto: row.motto,
     demonym: row.demonym,
-    
-    // Dates & Government
     independence: row.independence_date,
     governmentType: row.government_type,
     headOfState: row.head_of_state,
-    
-    // Geographic Classification
     continent: row.continent,
     region: row.region,
     subRegion: row.sub_region,
-    
-    // Descriptions
     description: row.description,
     fullDescription: row.full_description,
     additionalInfo: row.additional_info,
-    
-    // Demographics
     population: row.population,
     area: row.area,
     populationDensity: row.population_density,
@@ -63,17 +52,11 @@ const serializeCountry = (row, includeRelated = false) => {
     lifeExpectancy: row.life_expectancy,
     medianAge: row.median_age,
     literacyRate: row.literacy_rate,
-    
-    // Languages (arrays)
     languages: row.languages || [],
     officialLanguages: row.official_languages || [],
     nationalLanguages: row.national_languages || [],
-    
-    // People & Culture (arrays)
     ethnicGroups: row.ethnic_groups || [],
     religions: row.religions || [],
-    
-    // Practical Info
     currency: row.currency,
     currencySymbol: row.currency_symbol,
     timezone: row.timezone,
@@ -83,65 +66,46 @@ const serializeCountry = (row, includeRelated = false) => {
     electricalPlug: row.electrical_plug,
     voltage: row.voltage,
     waterSafety: row.water_safety,
-    
-    // Climate & Weather
     climate: row.climate,
     bestTime: row.best_time_to_visit,
     seasons: parseJsonField(row.seasons, { dry: [], wet: [], best: null }),
-    
-    // Travel Requirements
     visaInfo: row.visa_info,
     healthInfo: row.health_info,
-    
-    // Arrays
     highlights: row.highlights || [],
     experiences: row.experiences || [],
     travelTips: row.travel_tips || [],
     neighboringCountries: row.neighboring_countries || [],
-    
-    // Nested Objects (JSONB)
     wildlife: parseJsonField(row.wildlife, { mammals: [], birds: [], marine: [] }),
-    cuisine: parseJsonField(row.cuisine, { staples: [], specialties: [], beverages: [] }),
+    cuisine: parseJsonField(row.cuisine, {
+      staples: [],
+      specialties: [],
+      beverages: [],
+    }),
     economicInfo: parseJsonField(row.economic_info, {}),
     geography: parseJsonField(row.geography, {}),
-    
-    // Images
     imageUrl: row.image_url,
     coverImageUrl: row.cover_image_url,
     heroImage: row.hero_image || row.cover_image_url || row.image_url,
     images: row.images || [],
-    
-    // Map Position
-    mapPosition: {
-      lat: toNumber(row.latitude),
-      lng: toNumber(row.longitude),
-    },
-    
-    // Stats
+    mapPosition: { lat: toNumber(row.latitude), lng: toNumber(row.longitude) },
     destinationCount: parseInt(row.destination_count || 0, 10),
     viewCount: row.view_count || 0,
-    
-    // Status
     isFeatured: row.is_featured,
     isActive: row.is_active,
-    
-    // Timestamps
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
-  
-  // Include related data if requested
+
   if (includeRelated) {
     country.airports = row.airports || [];
     country.festivals = row.festivals || [];
     country.unescoSites = row.unesco_sites || [];
     country.historicalTimeline = row.historical_events || [];
   }
-  
+
   return country;
 };
 
-// Serialize related data
 const serializeAirport = (row) => ({
   id: row.id,
   name: row.name,
@@ -171,20 +135,22 @@ const serializeUnescoSite = (row) => ({
 });
 
 const serializeHistoricalEvent = (row) => ({
+  id: row.id,
   year: row.year,
   event: row.event,
   type: row.event_type,
   isMajor: row.is_major,
 });
 
-// ============================================
-// CONTROLLER METHODS
-// ============================================
+/* ── helpers ─────────────────────────────────────── */
+
+const destCountSub = `(SELECT COUNT(*) FROM destinations d WHERE d.country_id = c.id AND d.is_active = true) AS destination_count`;
+
+/* ── PUBLIC ──────────────────────────────────────── */
 
 exports.getAll = async (req, res, next) => {
   try {
     const { page = 1, limit = 20, featured, continent, search, region } = req.query;
-
     let where = "WHERE c.is_active = true";
     const params = [];
     let idx = 1;
@@ -194,7 +160,7 @@ exports.getAll = async (req, res, next) => {
       params.push(featured === "true");
     }
     if (continent) {
-      where += ` AND c.continent = $${idx++}`;
+      where += ` AND c.continent ILIKE $${idx++}`;
       params.push(continent);
     }
     if (region) {
@@ -207,23 +173,24 @@ exports.getAll = async (req, res, next) => {
       idx++;
     }
 
-    const countRes = await query(`SELECT COUNT(*) FROM countries c ${where}`, params);
+    const countRes = await query(
+      `SELECT COUNT(*) FROM countries c ${where}`,
+      params
+    );
     const pagination = paginate(parseInt(countRes.rows[0].count, 10), page, limit);
 
     params.push(pagination.limit, pagination.offset);
     const result = await query(
-      `SELECT c.*,
-        (SELECT COUNT(*) FROM destinations d WHERE d.country_id = c.id AND d.is_active = true) AS destination_count
-       FROM countries c
-       ${where}
+      `SELECT c.*, ${destCountSub}
+       FROM countries c ${where}
        ORDER BY c.is_featured DESC, c.display_order ASC, c.name ASC
        LIMIT $${idx++} OFFSET $${idx}`,
       params
     );
 
-    res.json({ 
-      data: result.rows.map(row => serializeCountry(row)), 
-      pagination 
+    res.json({
+      data: result.rows.map((r) => serializeCountry(r)),
+      pagination,
     });
   } catch (err) {
     next(err);
@@ -233,83 +200,169 @@ exports.getAll = async (req, res, next) => {
 exports.getFeatured = async (req, res, next) => {
   try {
     const { limit = 12 } = req.query;
-    
     const result = await query(
-      `SELECT c.*,
-        (SELECT COUNT(*) FROM destinations d WHERE d.country_id = c.id AND d.is_active = true) AS destination_count
+      `SELECT c.*, ${destCountSub}
        FROM countries c
        WHERE c.is_active = true AND c.is_featured = true
        ORDER BY c.display_order ASC, c.name ASC
        LIMIT $1`,
       [parseInt(limit, 10)]
     );
-    
-    res.json({ data: result.rows.map(row => serializeCountry(row)) });
+    res.json({ data: result.rows.map((r) => serializeCountry(r)) });
   } catch (err) {
     next(err);
   }
 };
 
+exports.search = async (req, res, next) => {
+  try {
+    const { q, limit = 15 } = req.query;
+    if (!q || String(q).trim().length < 2) return res.json({ data: [] });
+
+    const term = `%${String(q).trim()}%`;
+    const result = await query(
+      `SELECT c.*, ${destCountSub}
+       FROM countries c
+       WHERE c.is_active = true
+         AND (c.name ILIKE $1 OR c.capital ILIKE $1 OR c.continent ILIKE $1
+              OR c.region ILIKE $1 OR c.description ILIKE $1 OR c.tagline ILIKE $1)
+       ORDER BY
+         CASE WHEN c.name ILIKE $2 THEN 0 WHEN c.name ILIKE $1 THEN 1 ELSE 2 END,
+         c.name ASC
+       LIMIT $3`,
+      [term, `${String(q).trim()}%`, parseInt(limit, 10)]
+    );
+    res.json({ data: result.rows.map((r) => serializeCountry(r)) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getStats = async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT
+        COUNT(*)::int                                           AS total_countries,
+        COUNT(*) FILTER (WHERE is_featured)::int                AS featured_countries,
+        COUNT(DISTINCT continent)::int                          AS total_continents,
+        COALESCE(SUM(population),0)::bigint                     AS total_population,
+        (SELECT COUNT(*)::int FROM destinations WHERE is_active = true) AS total_destinations,
+        (SELECT COUNT(*)::int FROM country_airports)            AS total_airports,
+        (SELECT COUNT(*)::int FROM country_unesco_sites)        AS total_unesco_sites
+      FROM countries WHERE is_active = true
+    `);
+    res.json({ data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getContinents = async (req, res, next) => {
+  try {
+    const result = await query(`
+      SELECT continent,
+             COUNT(*)::int AS country_count,
+             COALESCE(SUM(population),0)::bigint AS total_population
+      FROM countries
+      WHERE is_active = true AND continent IS NOT NULL
+      GROUP BY continent
+      ORDER BY continent ASC
+    `);
+    res.json({ data: result.rows });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getByContinent = async (req, res, next) => {
+  try {
+    const { continent } = req.params;
+    const { page = 1, limit = 20 } = req.query;
+
+    const countRes = await query(
+      "SELECT COUNT(*) FROM countries WHERE is_active = true AND continent ILIKE $1",
+      [continent]
+    );
+    const pagination = paginate(
+      parseInt(countRes.rows[0].count, 10),
+      page,
+      limit
+    );
+
+    const result = await query(
+      `SELECT c.*, ${destCountSub}
+       FROM countries c
+       WHERE c.is_active = true AND c.continent ILIKE $1
+       ORDER BY c.is_featured DESC, c.name ASC
+       LIMIT $2 OFFSET $3`,
+      [continent, pagination.limit, pagination.offset]
+    );
+    res.json({
+      data: result.rows.map((r) => serializeCountry(r)),
+      pagination,
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ── SINGLE ──────────────────────────────────────── */
+
 exports.getOne = async (req, res, next) => {
   try {
     const idOrSlug = resolveIdOrSlug(req.params);
     const isNumeric = /^\d+$/.test(String(idOrSlug));
-    const { includeRelated = 'true' } = req.query;
+    const { includeRelated = "true" } = req.query;
 
-    // Get main country data
     const result = await query(
-      `SELECT c.*,
-        (SELECT COUNT(*) FROM destinations d WHERE d.country_id = c.id AND d.is_active = true) AS destination_count
+      `SELECT c.*, ${destCountSub}
        FROM countries c
        WHERE ${isNumeric ? "c.id" : "c.slug"} = $1 AND c.is_active = true`,
       [isNumeric ? parseInt(idOrSlug, 10) : String(idOrSlug).toLowerCase()]
     );
 
-    if (result.rows.length === 0) {
+    if (!result.rows.length)
       return res.status(404).json({ error: "Country not found" });
-    }
 
-    const countryRow = result.rows[0];
-    
-    // Increment view count (fire and forget)
-    query(
-      "UPDATE countries SET view_count = view_count + 1 WHERE id = $1",
-      [countryRow.id]
-    ).catch(() => {}); // Ignore errors
+    const row = result.rows[0];
+    query("UPDATE countries SET view_count = view_count + 1 WHERE id = $1", [
+      row.id,
+    ]).catch(() => {});
 
-    // Get related data if requested
     let relatedData = {};
-    if (includeRelated === 'true') {
-      const [airportsRes, festivalsRes, unescoRes, historyRes] = await Promise.all([
+    if (includeRelated === "true") {
+      const [airports, festivals, unesco, history] = await Promise.all([
         query(
-          "SELECT * FROM country_airports WHERE country_id = $1 ORDER BY display_order ASC",
-          [countryRow.id]
+          "SELECT * FROM country_airports WHERE country_id = $1 ORDER BY display_order",
+          [row.id]
         ),
         query(
-          "SELECT * FROM country_festivals WHERE country_id = $1 ORDER BY display_order ASC",
-          [countryRow.id]
+          "SELECT * FROM country_festivals WHERE country_id = $1 ORDER BY display_order",
+          [row.id]
         ),
         query(
           "SELECT * FROM country_unesco_sites WHERE country_id = $1 ORDER BY year_inscribed DESC",
-          [countryRow.id]
+          [row.id]
         ),
         query(
-          "SELECT * FROM country_historical_events WHERE country_id = $1 ORDER BY sort_year ASC",
-          [countryRow.id]
+          "SELECT * FROM country_historical_events WHERE country_id = $1 ORDER BY sort_year",
+          [row.id]
         ),
       ]);
-      
       relatedData = {
-        airports: airportsRes.rows.map(serializeAirport),
-        festivals: festivalsRes.rows.map(serializeFestival),
-        unesco_sites: unescoRes.rows.map(serializeUnescoSite),
-        historical_events: historyRes.rows.map(serializeHistoricalEvent),
+        airports: airports.rows.map(serializeAirport),
+        festivals: festivals.rows.map(serializeFestival),
+        unesco_sites: unesco.rows.map(serializeUnescoSite),
+        historical_events: history.rows.map(serializeHistoricalEvent),
       };
     }
 
-    const serialized = serializeCountry({ ...countryRow, ...relatedData }, includeRelated === 'true');
-
-    res.json({ data: serialized });
+    res.json({
+      data: serializeCountry(
+        { ...row, ...relatedData },
+        includeRelated === "true"
+      ),
+    });
   } catch (err) {
     next(err);
   }
@@ -318,19 +371,17 @@ exports.getOne = async (req, res, next) => {
 exports.getDestinations = async (req, res, next) => {
   try {
     const idOrSlug = resolveIdOrSlug(req.params);
-    const { page = 1, limit = 20, search, category } = req.query;
     const isNumeric = /^\d+$/.test(String(idOrSlug));
+    const { page = 1, limit = 20, search, category } = req.query;
 
     const countryRes = await query(
-      `SELECT id, name, slug
-       FROM countries
+      `SELECT id, name, slug FROM countries
        WHERE ${isNumeric ? "id" : "slug"} = $1 AND is_active = true`,
       [isNumeric ? parseInt(idOrSlug, 10) : String(idOrSlug).toLowerCase()]
     );
 
-    if (countryRes.rows.length === 0) {
+    if (!countryRes.rows.length)
       return res.status(404).json({ error: "Country not found" });
-    }
 
     const country = countryRes.rows[0];
     let where = "WHERE d.country_id = $1 AND d.is_active = true";
@@ -347,206 +398,143 @@ exports.getDestinations = async (req, res, next) => {
       idx++;
     }
 
-    const countRes = await query(`SELECT COUNT(*) FROM destinations d ${where}`, params);
-    const pagination = paginate(parseInt(countRes.rows[0].count, 10), page, limit);
+    const countRes = await query(
+      `SELECT COUNT(*) FROM destinations d ${where}`,
+      params
+    );
+    const pagination = paginate(
+      parseInt(countRes.rows[0].count, 10),
+      page,
+      limit
+    );
 
     params.push(pagination.limit, pagination.offset);
     const result = await query(
-      `SELECT d.*
-       FROM destinations d
-       ${where}
+      `SELECT d.* FROM destinations d ${where}
        ORDER BY d.is_featured DESC, d.rating DESC, d.name ASC
        LIMIT $${idx++} OFFSET $${idx}`,
       params
     );
 
     res.json({
-      data: result.rows.map((row) => ({
-        ...row,
+      data: result.rows.map((r) => ({
+        ...r,
         countryId: country.slug || String(country.id),
         countryName: country.name,
-        mapPosition: {
-          lat: toNumber(row.latitude),
-          lng: toNumber(row.longitude),
-        },
-        highlights: row.highlights || [],
-        activities: row.activities || [],
-        images: row.images || [],
+        mapPosition: { lat: toNumber(r.latitude), lng: toNumber(r.longitude) },
+        highlights: r.highlights || [],
+        activities: r.activities || [],
+        images: r.images || [],
       })),
       pagination,
-      country: {
-        id: country.id,
-        slug: country.slug,
-        name: country.name,
-      },
+      country: { id: country.id, slug: country.slug, name: country.name },
     });
   } catch (err) {
     next(err);
   }
 };
 
+/* ── ADMIN CRUD ──────────────────────────────────── */
+
 exports.create = async (req, res, next) => {
   try {
-    const {
-      name,
-      official_name,
-      capital,
-      flag,
-      flag_url,
-      tagline,
-      motto,
-      demonym,
-      independence_date,
-      government_type,
-      head_of_state,
-      continent,
-      region,
-      sub_region,
-      description,
-      full_description,
-      additional_info,
-      population,
-      area,
-      population_density,
-      urban_population,
-      life_expectancy,
-      median_age,
-      literacy_rate,
-      languages,
-      official_languages,
-      national_languages,
-      ethnic_groups,
-      religions,
-      currency,
-      currency_symbol,
-      timezone,
-      calling_code,
-      internet_tld,
-      driving_side,
-      electrical_plug,
-      voltage,
-      water_safety,
-      climate,
-      best_time_to_visit,
-      seasons,
-      visa_info,
-      health_info,
-      highlights,
-      experiences,
-      travel_tips,
-      neighboring_countries,
-      wildlife,
-      cuisine,
-      economic_info,
-      geography,
-      image_url,
-      cover_image_url,
-      hero_image,
-      images,
-      latitude,
-      longitude,
-      is_featured,
-      is_active,
-    } = req.body;
+    const b = req.body;
+    if (!b.name || String(b.name).trim().length < 2)
+      return res
+        .status(400)
+        .json({ error: "Country name is required (min 2 chars)." });
 
-    if (!name || String(name).trim().length < 2) {
-      return res.status(400).json({ error: "Country name is required (min 2 characters)." });
-    }
-
-    const slug = slugify(name);
+    const slug = slugify(b.name);
     const uploadedImage = req.file ? getUploadedFileUrl(req.file) : null;
-    const finalImageUrl = uploadedImage || image_url || null;
+    const finalImageUrl = uploadedImage || b.image_url || null;
 
     const result = await query(
       `INSERT INTO countries (
-        slug, name, official_name, capital, flag, flag_url, tagline, motto, demonym,
-        independence_date, government_type, head_of_state, continent, region, sub_region,
-        description, full_description, additional_info,
-        population, area, population_density, urban_population, life_expectancy, median_age, literacy_rate,
-        languages, official_languages, national_languages, ethnic_groups, religions,
-        currency, currency_symbol, timezone, calling_code, internet_tld, driving_side,
-        electrical_plug, voltage, water_safety, climate, best_time_to_visit, seasons,
-        visa_info, health_info, highlights, experiences, travel_tips, neighboring_countries,
-        wildlife, cuisine, economic_info, geography,
-        image_url, cover_image_url, hero_image, images, latitude, longitude,
-        is_featured, is_active
+        slug,name,official_name,capital,flag,flag_url,tagline,motto,demonym,
+        independence_date,government_type,head_of_state,continent,region,sub_region,
+        description,full_description,additional_info,
+        population,area,population_density,urban_population,life_expectancy,median_age,literacy_rate,
+        languages,official_languages,national_languages,ethnic_groups,religions,
+        currency,currency_symbol,timezone,calling_code,internet_tld,driving_side,
+        electrical_plug,voltage,water_safety,climate,best_time_to_visit,seasons,
+        visa_info,health_info,highlights,experiences,travel_tips,neighboring_countries,
+        wildlife,cuisine,economic_info,geography,
+        image_url,cover_image_url,hero_image,images,latitude,longitude,
+        is_featured,is_active
       ) VALUES (
-        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-        $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
-        $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
-        $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-        $41, $42, $43, $44, $45, $46, $47, $48, $49, $50,
-        $51, $52, $53, $54, $55, $56, $57, $58, $59
+        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+        $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
+        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55,$56,
+        $57,$58,$59
       ) RETURNING *`,
       [
         slug,
-        String(name).trim(),
-        official_name || null,
-        capital || null,
-        flag || null,
-        flag_url || null,
-        tagline || null,
-        motto || null,
-        demonym || null,
-        independence_date || null,
-        government_type || 'Presidential Republic',
-        head_of_state || null,
-        continent || 'Africa',
-        region || null,
-        sub_region || null,
-        description || null,
-        full_description || null,
-        additional_info || null,
-        population || null,
-        area || null,
-        population_density || null,
-        urban_population || null,
-        life_expectancy || null,
-        median_age || null,
-        literacy_rate || null,
-        languages || [],
-        official_languages || [],
-        national_languages || [],
-        ethnic_groups || [],
-        religions || [],
-        currency || null,
-        currency_symbol || null,
-        timezone || null,
-        calling_code || null,
-        internet_tld || null,
-        driving_side || 'Right',
-        electrical_plug || null,
-        voltage || null,
-        water_safety || null,
-        climate || null,
-        best_time_to_visit || null,
-        seasons ? JSON.stringify(seasons) : null,
-        visa_info || null,
-        health_info || null,
-        highlights || [],
-        experiences || [],
-        travel_tips || [],
-        neighboring_countries || [],
-        wildlife ? JSON.stringify(wildlife) : null,
-        cuisine ? JSON.stringify(cuisine) : null,
-        economic_info ? JSON.stringify(economic_info) : null,
-        geography ? JSON.stringify(geography) : null,
+        String(b.name).trim(),
+        b.official_name || null,
+        b.capital || null,
+        b.flag || null,
+        b.flag_url || null,
+        b.tagline || null,
+        b.motto || null,
+        b.demonym || null,
+        b.independence_date || null,
+        b.government_type || "Presidential Republic",
+        b.head_of_state || null,
+        b.continent || "Africa",
+        b.region || null,
+        b.sub_region || null,
+        b.description || null,
+        b.full_description || null,
+        b.additional_info || null,
+        b.population || null,
+        b.area || null,
+        b.population_density || null,
+        b.urban_population || null,
+        b.life_expectancy || null,
+        b.median_age || null,
+        b.literacy_rate || null,
+        b.languages || [],
+        b.official_languages || [],
+        b.national_languages || [],
+        b.ethnic_groups || [],
+        b.religions || [],
+        b.currency || null,
+        b.currency_symbol || null,
+        b.timezone || null,
+        b.calling_code || null,
+        b.internet_tld || null,
+        b.driving_side || "Right",
+        b.electrical_plug || null,
+        b.voltage || null,
+        b.water_safety || null,
+        b.climate || null,
+        b.best_time_to_visit || null,
+        b.seasons ? JSON.stringify(b.seasons) : null,
+        b.visa_info || null,
+        b.health_info || null,
+        b.highlights || [],
+        b.experiences || [],
+        b.travel_tips || [],
+        b.neighboring_countries || [],
+        b.wildlife ? JSON.stringify(b.wildlife) : null,
+        b.cuisine ? JSON.stringify(b.cuisine) : null,
+        b.economic_info ? JSON.stringify(b.economic_info) : null,
+        b.geography ? JSON.stringify(b.geography) : null,
         finalImageUrl,
-        cover_image_url || null,
-        hero_image || null,
-        images || [],
-        latitude || null,
-        longitude || null,
-        Boolean(is_featured),
-        is_active === undefined ? true : Boolean(is_active),
+        b.cover_image_url || null,
+        b.hero_image || null,
+        b.images || [],
+        b.latitude || null,
+        b.longitude || null,
+        Boolean(b.is_featured),
+        b.is_active === undefined ? true : Boolean(b.is_active),
       ]
     );
 
     res.status(201).json({ data: serializeCountry(result.rows[0]) });
   } catch (err) {
-    if (err.code === "23505") {
-      return res.status(409).json({ error: "Country with this name already exists." });
-    }
+    if (err.code === "23505")
+      return res.status(409).json({ error: "Country already exists." });
     next(err);
   }
 };
@@ -556,50 +544,38 @@ exports.update = async (req, res, next) => {
     const { id } = req.params;
     const updates = { ...req.body };
 
-    // Handle name/slug update
     if (updates.name) {
       updates.name = String(updates.name).trim();
       updates.slug = slugify(updates.name);
     }
+    if (req.file) updates.image_url = getUploadedFileUrl(req.file);
 
-    // Handle file upload
-    if (req.file) {
-      updates.image_url = getUploadedFileUrl(req.file);
-    }
-
-    // Convert JSONB fields
-    const jsonbFields = ['seasons', 'wildlife', 'cuisine', 'economic_info', 'geography'];
-    jsonbFields.forEach(field => {
-      if (updates[field] && typeof updates[field] === 'object') {
-        updates[field] = JSON.stringify(updates[field]);
+    ["seasons", "wildlife", "cuisine", "economic_info", "geography"].forEach(
+      (f) => {
+        if (updates[f] && typeof updates[f] === "object")
+          updates[f] = JSON.stringify(updates[f]);
       }
-    });
+    );
 
     const keys = Object.keys(updates);
-    if (keys.length === 0) {
+    if (!keys.length)
       return res.status(400).json({ error: "No fields to update." });
-    }
 
-    const setClause = keys.map((key, i) => `${key} = $${i + 1}`).join(", ");
-    const values = [...keys.map((key) => updates[key]), id];
+    const setClause = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const values = [...keys.map((k) => updates[k]), id];
 
     const result = await query(
-      `UPDATE countries
-       SET ${setClause}, updated_at = CURRENT_TIMESTAMP
-       WHERE id = $${values.length}
-       RETURNING *`,
+      `UPDATE countries SET ${setClause}, updated_at = CURRENT_TIMESTAMP
+       WHERE id = $${values.length} RETURNING *`,
       values
     );
 
-    if (result.rows.length === 0) {
+    if (!result.rows.length)
       return res.status(404).json({ error: "Country not found." });
-    }
-
     res.json({ data: serializeCountry(result.rows[0]) });
   } catch (err) {
-    if (err.code === "23505") {
-      return res.status(409).json({ error: "Country slug/name already exists." });
-    }
+    if (err.code === "23505")
+      return res.status(409).json({ error: "Slug/name already exists." });
     next(err);
   }
 };
@@ -607,53 +583,171 @@ exports.update = async (req, res, next) => {
 exports.remove = async (req, res, next) => {
   try {
     const { id } = req.params;
-    
-    // Check for dependent destinations
-    const depRes = await query("SELECT COUNT(*) FROM destinations WHERE country_id = $1", [id]);
-    const dependentCount = parseInt(depRes.rows[0].count, 10);
-
-    if (dependentCount > 0) {
-      return res.status(409).json({
-        error: `Cannot delete country with ${dependentCount} existing destinations. Reassign or remove them first.`,
-        dependentCount,
-      });
-    }
-
-    // Delete related data first (cascades handle this, but explicit is clearer)
-    await query("DELETE FROM country_airports WHERE country_id = $1", [id]);
-    await query("DELETE FROM country_festivals WHERE country_id = $1", [id]);
-    await query("DELETE FROM country_unesco_sites WHERE country_id = $1", [id]);
-        await query("DELETE FROM country_historical_events WHERE country_id = $1", [id]);
-
-    // Delete the country
-    const result = await query(
-      "DELETE FROM countries WHERE id = $1 RETURNING id, name, slug",
+    const depRes = await query(
+      "SELECT COUNT(*) FROM destinations WHERE country_id = $1",
       [id]
     );
+    const cnt = parseInt(depRes.rows[0].count, 10);
+    if (cnt > 0)
+      return res.status(409).json({
+        error: `Cannot delete: ${cnt} destinations exist. Remove them first.`,
+        dependentCount: cnt,
+      });
 
-    if (result.rows.length === 0) {
+    await Promise.all([
+      query("DELETE FROM country_airports WHERE country_id = $1", [id]),
+      query("DELETE FROM country_festivals WHERE country_id = $1", [id]),
+      query("DELETE FROM country_unesco_sites WHERE country_id = $1", [id]),
+      query("DELETE FROM country_historical_events WHERE country_id = $1", [id]),
+    ]);
+
+    const result = await query(
+      "DELETE FROM countries WHERE id = $1 RETURNING id,name,slug",
+      [id]
+    );
+    if (!result.rows.length)
       return res.status(404).json({ error: "Country not found." });
-    }
 
-    res.json({
-      message: "Country and all related data deleted successfully.",
-      data: result.rows[0],
-    });
+    res.json({ message: "Deleted successfully.", data: result.rows[0] });
   } catch (err) {
     next(err);
   }
 };
 
-// ============================================
-// EXPORTS
-// ============================================
+/* ── AIRPORTS CRUD ───────────────────────────────── */
 
-module.exports = {
-  getAll,
-  getFeatured,
-  getOne,
-  getDestinations,
-  create,
-  update,
-  remove,
+exports.addAirport = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, code, location, airport_type, description, is_main_international } = req.body;
+    if (!name) return res.status(400).json({ error: "Airport name is required." });
+
+    const result = await query(
+      `INSERT INTO country_airports
+        (country_id, name, code, location, airport_type, description, is_main_international)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [id, name, code || null, location || null, airport_type || "International", description || null, Boolean(is_main_international)]
+    );
+    res.status(201).json({ data: serializeAirport(result.rows[0]) });
+  } catch (err) {
+    next(err);
+  }
 };
+
+exports.removeAirport = async (req, res, next) => {
+  try {
+    const { id, airportId } = req.params;
+    const result = await query(
+      "DELETE FROM country_airports WHERE id = $1 AND country_id = $2 RETURNING *",
+      [airportId, id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Airport not found." });
+    res.json({ message: "Airport removed.", data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ── FESTIVALS CRUD ──────────────────────────────── */
+
+exports.addFestival = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, period, month, description, is_major_event, image_url } = req.body;
+    if (!name) return res.status(400).json({ error: "Festival name is required." });
+
+    const result = await query(
+      `INSERT INTO country_festivals
+        (country_id, name, period, month, description, is_major_event, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
+      [id, name, period || null, month || null, description || null, Boolean(is_major_event), image_url || null]
+    );
+    res.status(201).json({ data: serializeFestival(result.rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.removeFestival = async (req, res, next) => {
+  try {
+    const { id, festivalId } = req.params;
+    const result = await query(
+      "DELETE FROM country_festivals WHERE id = $1 AND country_id = $2 RETURNING *",
+      [festivalId, id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Festival not found." });
+    res.json({ message: "Festival removed.", data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ── UNESCO SITES CRUD ───────────────────────────── */
+
+exports.addUnescoSite = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { name, year_inscribed, site_type, description } = req.body;
+    if (!name) return res.status(400).json({ error: "Site name is required." });
+
+    const result = await query(
+      `INSERT INTO country_unesco_sites
+        (country_id, name, year_inscribed, site_type, description)
+       VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+      [id, name, year_inscribed || null, site_type || "Cultural", description || null]
+    );
+    res.status(201).json({ data: serializeUnescoSite(result.rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.removeUnescoSite = async (req, res, next) => {
+  try {
+    const { id, siteId } = req.params;
+    const result = await query(
+      "DELETE FROM country_unesco_sites WHERE id = $1 AND country_id = $2 RETURNING *",
+      [siteId, id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "UNESCO site not found." });
+    res.json({ message: "UNESCO site removed.", data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ── HISTORICAL EVENTS CRUD ──────────────────────── */
+
+exports.addHistoricalEvent = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { year, event, event_type, is_major, sort_year } = req.body;
+    if (!event) return res.status(400).json({ error: "Event description is required." });
+
+    const result = await query(
+      `INSERT INTO country_historical_events
+        (country_id, year, event, event_type, is_major, sort_year)
+       VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+      [id, year || null, event, event_type || "Political", Boolean(is_major), sort_year || 0]
+    );
+    res.status(201).json({ data: serializeHistoricalEvent(result.rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.removeHistoricalEvent = async (req, res, next) => {
+  try {
+    const { id, eventId } = req.params;
+    const result = await query(
+      "DELETE FROM country_historical_events WHERE id = $1 AND country_id = $2 RETURNING *",
+      [eventId, id]
+    );
+    if (!result.rows.length) return res.status(404).json({ error: "Event not found." });
+    res.json({ message: "Event removed.", data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+module.exports = exports;

@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * TEAM VALIDATOR MIDDLEWARE - Altuvera Travel
+ * TEAM MEMBER VALIDATOR - Altuvera Travel
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -12,111 +12,111 @@ const validateTeamMember = [
     .trim()
     .notEmpty()
     .withMessage("Name is required")
-    .isLength({ min: 2, max: 100 })
-    .withMessage("Name must be between 2 and 100 characters"),
+    .isLength({ min: 2, max: 150 })
+    .withMessage("Name must be between 2 and 150 characters"),
 
   body("role")
     .trim()
     .notEmpty()
     .withMessage("Role is required")
-    .isLength({ max: 100 })
-    .withMessage("Role must not exceed 100 characters"),
+    .isLength({ min: 2, max: 150 })
+    .withMessage("Role must be between 2 and 150 characters"),
 
   body("department")
-    .optional()
+    .optional({ nullable: true })
     .trim()
-    .isLength({ max: 50 })
-    .withMessage("Department must not exceed 50 characters"),
+    .isLength({ max: 100 })
+    .withMessage("Department must be less than 100 characters"),
+
+  body("bio")
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 2000 })
+    .withMessage("Bio must be less than 2000 characters"),
 
   body("email")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isEmail()
-    .withMessage("Please provide a valid email address")
+    .withMessage("Must be a valid email address")
     .normalizeEmail(),
 
   body("phone")
-    .optional()
+    .optional({ nullable: true })
     .trim()
     .isLength({ max: 30 })
-    .withMessage("Phone must not exceed 30 characters"),
-
-  body("bio")
-    .optional()
-    .trim()
-    .isLength({ max: 1000 })
-    .withMessage("Bio must not exceed 1000 characters"),
+    .withMessage("Phone must be less than 30 characters"),
 
   body("linkedin_url")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isURL()
-    .withMessage("Please provide a valid LinkedIn URL"),
+    .withMessage("LinkedIn URL must be a valid URL"),
 
   body("twitter_url")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isURL()
-    .withMessage("Please provide a valid Twitter URL"),
+    .withMessage("Twitter URL must be a valid URL"),
 
   body("instagram_url")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isURL()
-    .withMessage("Please provide a valid Instagram URL"),
+    .withMessage("Instagram URL must be a valid URL"),
 
   body("website_url")
-    .optional()
+    .optional({ nullable: true, checkFalsy: true })
     .trim()
     .isURL()
-    .withMessage("Please provide a valid website URL"),
+    .withMessage("Website URL must be a valid URL"),
 
   body("years_experience")
-    .optional()
+    .optional({ nullable: true })
     .isInt({ min: 0, max: 100 })
     .withMessage("Years of experience must be between 0 and 100"),
 
   body("location")
-    .optional()
+    .optional({ nullable: true })
     .trim()
-    .isLength({ max: 100 })
-    .withMessage("Location must not exceed 100 characters"),
+    .isLength({ max: 200 })
+    .withMessage("Location must be less than 200 characters"),
 
   body("country")
-    .optional()
+    .optional({ nullable: true })
     .trim()
-    .isLength({ max: 50 })
-    .withMessage("Country must not exceed 50 characters"),
+    .isLength({ max: 100 })
+    .withMessage("Country must be less than 100 characters"),
 
   body("display_order")
-    .optional()
+    .optional({ nullable: true })
     .isInt({ min: 0 })
-    .withMessage("Display order must be a positive integer"),
+    .withMessage("Display order must be a non-negative integer"),
 
-  body("is_featured")
-    .optional()
-    .isBoolean()
-    .withMessage("is_featured must be a boolean"),
+  body("meta_title")
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 200 })
+    .withMessage("Meta title must be less than 200 characters"),
 
-  body("is_active")
-    .optional()
-    .isBoolean()
-    .withMessage("is_active must be a boolean"),
+  body("meta_description")
+    .optional({ nullable: true })
+    .trim()
+    .isLength({ max: 500 })
+    .withMessage("Meta description must be less than 500 characters"),
 
-  body("show_on_homepage")
-    .optional()
-    .isBoolean()
-    .withMessage("show_on_homepage must be a boolean"),
+  body("joined_date")
+    .optional({ nullable: true, checkFalsy: true })
+    .isISO8601()
+    .withMessage("Joined date must be a valid date (YYYY-MM-DD)"),
 
-  // Validation result handler
+  // Handle validation errors
   (req, res, next) => {
     const errors = validationResult(req);
-
     if (!errors.isEmpty()) {
-      const errorMessages = errors.array().map((err) => err.msg);
-      return next(new AppError(errorMessages.join(", "), 400));
+      const messages = errors.array().map((err) => err.msg);
+      return next(new AppError(messages.join(". "), 400));
     }
-
     next();
   },
 ];

@@ -82,7 +82,7 @@ const env = (() => {
       );
     }
     return {
-      PORT: envModule.PORT || process.env.PORT || 5000,
+      PORT: envModule.PORT || process.env.PORT || 3000,
       NODE_ENV: envModule.NODE_ENV || process.env.NODE_ENV || "development",
       CORS_ORIGINS: envModule.CORS_ORIGINS || process.env.CORS_ORIGINS || "*",
       DATABASE_URL: envModule.DATABASE_URL || process.env.DATABASE_URL,
@@ -106,7 +106,7 @@ const env = (() => {
   } catch (err) {
     console.warn("⚠️  Config module not found. Using environment variables.");
     return {
-      PORT: process.env.PORT || 5000,
+      PORT: process.env.PORT || 3000,
       NODE_ENV: process.env.NODE_ENV || "development",
       CORS_ORIGINS: process.env.CORS_ORIGINS || process.env.FRONTEND_URL || "*",
       DATABASE_URL: process.env.DATABASE_URL,
@@ -293,14 +293,63 @@ class RouteLoader {
 
     routes.forEach(({ path: routePath, file }) => {
       try {
-        const router = require(`./${file}`);
+        const imported = require(`./${file}`);
+        const router =
+          imported && typeof imported === "object"
+            ? imported.default || imported.router || imported
+            : imported;
 
-        if (typeof router !== "function" && typeof router !== "object") {
-          throw new Error(`Invalid router export in ${file}`);
+        if (typeof router !== "function") {
+          throw new Error(
+            `Invalid router export in ${file} (expected Express router)`,
+          );
         }
 
-        this.app.use(`/api${routePath}`, router);
-        this.loadedRoutes.push({ path: routePath, file });
+        // Wrap each router to provide:
+        // - a safe index route for modules that don't implement GET "/"
+        // - a consistent 405 for unsupported methods at the module root
+        const mountRouter = express.Router();
+
+        const hasRoute = (candidate, method, route) => {
+          try {
+            const stack =
+              candidate && Array.isArray(candidate.stack) ? candidate.stack : [];
+            const lowerMethod = String(method || "").toLowerCase();
+
+            return stack.some((layer) => {
+              if (!layer || !layer.route) return false;
+              const samePath = layer.route.path === route;
+              const supportsMethod =
+                layer.route.methods && layer.route.methods[lowerMethod];
+              return samePath && supportsMethod;
+            });
+          } catch {
+            return false;
+          }
+        };
+
+        if (!hasRoute(router, "get", "/")) {
+          mountRouter.get("/", (req, res) => {
+            res.json({
+              status: "success",
+              resource: `/api${routePath}`,
+              message: "Route module is reachable. Use documented sub-routes.",
+            });
+          });
+        }
+
+        mountRouter.use(router);
+
+        mountRouter.all("/", (req, res, next) => {
+          next(
+            AppError.methodNotAllowed(
+              `Method ${req.method} not allowed on /api${routePath}`,
+            ),
+          );
+        });
+
+        this.app.use(`/api${routePath}`, mountRouter);
+        this.loadedRoutes.push({ path: routePath, file, router });
         logger.debug(`  ✓ Loaded: /api${routePath}`);
       } catch (err) {
         this.failedRoutes.push({ path: routePath, file, error: err.message });
@@ -332,7 +381,169 @@ class RouteLoader {
       failures: this.failedRoutes,
     };
   }
+
+  getDocs() {
+    const normalizeLayerPath = (layer) => {
+      if (!layer || !layer.regexp) return "";
+      let raw = layer.regexp.source;
+
+      // Convert express regexp to a readable route fragment (best effort)
+      raw = raw
+        .replace(/\\\//g, "/")
+        .replace(
+          new RegExp("\\(\\?:\\(\\[\\^\\\\/\\]\\+\\?\\)\\)", "g"),
+          ":param",
+        )
+        .replace(
+          new RegExp("\\(\\?:\\(\\[\\^\\\\/\\]\\+\\?\\)\\+\\)", "g"),
+          ":param+",
+        )
+        .replace(/\^|\$|\(|\)|\?|\+|\[|\]|\\/g, "");
+
+      if (!raw.startsWith("/")) raw = "/" + raw;
+      if (raw.endsWith("/")) raw = raw.slice(0, -1);
+
+      return raw;
+    };
+
+    const extractRoutes = (router, basePath = "") => {
+      const routes = [];
+      const stack = router && Array.isArray(router.stack) ? router.stack : [];
+
+      stack.forEach((layer) => {
+        if (!layer) return;
+
+        if (layer.route) {
+          const routePath = layer.route.path;
+          const supportedMethods = Object.keys(layer.route.methods || {})
+            .filter((m) => layer.route.methods[m])
+            .map((m) => m.toUpperCase());
+
+          supportedMethods.forEach((method) => {
+            routes.push({
+              method,
+              path: `/api${basePath}${routePath === "/" ? "" : routePath}`,
+            });
+          });
+        } else if (layer.name === "router" && layer.handle) {
+          const nestedBase = `${basePath}${normalizeLayerPath(layer)}`;
+          routes.push(...extractRoutes(layer.handle, nestedBase));
+        }
+      });
+
+      return routes;
+    };
+
+    const docs = this.loadedRoutes.map(({ path, file, router }) => {
+      return {
+        path: `/api${path}`,
+        file,
+        methods: extractRoutes(router, path),
+      };
+    });
+
+    return docs;
+  }
+
+  getReport() {
+    return {
+      generatedAt: new Date().toISOString(),
+      loaded: this.loadedRoutes.map(({ path, file }) => ({
+        path,
+        mount: `/api${path}`,
+        file,
+      })),
+      failed: [...this.failedRoutes].map((r) => ({
+        ...r,
+        mount: `/api${r.path}`,
+      })),
+      docs: this.getDocs(),
+    };
+  }
 }
+
+const renderTextTable = (rows, columns) => {
+  const pad = (str, width) => {
+    const s = String(str ?? "");
+    if (s.length >= width) return s.slice(0, Math.max(0, width - 1)) + "…";
+    return s + " ".repeat(width - s.length);
+  };
+
+  const widths = columns.map((c) => {
+    const values = rows.map((r) => String(r[c.key] ?? ""));
+    return Math.min(
+      90,
+      Math.max(c.label.length, ...values.map((v) => v.length)),
+    );
+  });
+
+  const header = columns.map((c, i) => pad(c.label, widths[i])).join("  ");
+  const line = columns.map((_, i) => "-".repeat(widths[i])).join("  ");
+  const body = rows
+    .map((r) => columns.map((c, i) => pad(r[c.key], widths[i])).join("  "))
+    .join("\n");
+
+  return [header, line, body].filter(Boolean).join("\n");
+};
+
+const formatRoutesReportTables = (report) => {
+  const docs = Array.isArray(report?.docs) ? report.docs : [];
+  const failed = Array.isArray(report?.failed) ? report.failed : [];
+
+  const routeRows = [];
+  docs.forEach((moduleDoc) => {
+    const moduleMount = moduleDoc.path;
+    const file = moduleDoc.file;
+    const methods = Array.isArray(moduleDoc.methods) ? moduleDoc.methods : [];
+
+    methods.forEach((m) => {
+      routeRows.push({
+        module: moduleMount,
+        method: String(m.method || "").toUpperCase(),
+        path: m.path,
+        file,
+      });
+    });
+  });
+
+  routeRows.sort((a, b) =>
+    a.path === b.path ? a.method.localeCompare(b.method) : a.path.localeCompare(b.path),
+  );
+
+  const moduleSummary = docs
+    .map((d) => ({
+      mount: d.path,
+      status: "LIVE",
+      routes: Array.isArray(d.methods) ? d.methods.length : 0,
+      file: d.file,
+    }))
+    .concat(
+      failed.map((f) => ({
+        mount: f.mount || `/api${f.path}`,
+        status: "FAILED",
+        routes: 0,
+        file: f.file,
+        error: f.error,
+      })),
+    )
+    .sort((a, b) => a.mount.localeCompare(b.mount));
+
+  const routesTable = renderTextTable(routeRows, [
+    { key: "method", label: "METHOD" },
+    { key: "path", label: "PATH" },
+    { key: "module", label: "PARENT" },
+  ]);
+
+  const modulesTable = renderTextTable(moduleSummary, [
+    { key: "mount", label: "MOUNT" },
+    { key: "status", label: "STATUS" },
+    { key: "routes", label: "ROUTES" },
+    { key: "file", label: "FILE" },
+    ...(failed.length ? [{ key: "error", label: "ERROR" }] : []),
+  ]);
+
+  return { routesTable, modulesTable, counts: { routes: routeRows.length, live: docs.length, failed: failed.length } };
+};
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // APP ERROR CLASS
@@ -373,6 +584,10 @@ class AppError extends Error {
 
   static tooManyRequests(message = "Too many requests") {
     return new AppError(message, 429, "RATE_LIMITED");
+  }
+
+  static methodNotAllowed(message = "Method not allowed") {
+    return new AppError(message, 405, "METHOD_NOT_ALLOWED");
   }
 
   static internal(message = "Internal server error") {
@@ -779,12 +994,33 @@ class GracefulShutdown {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ROUTE DEFINITIONS
+// ROUTE DEFINITIONS (Auto-discovered + curated)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const routeDefinitions = [
+const getRouteFiles = () => {
+  const routesDir = path.join(__dirname, "routes");
+  try {
+    const files = fs.readdirSync(routesDir);
+    return files.filter((f) => f.endsWith(".js"));
+  } catch (err) {
+    logger.warn("Unable to read routes directory:", err.message);
+    return [];
+  }
+};
+
+const normalizeRoutePath = (fileName) => {
+  const base = fileName.replace(/\.js$/, "");
+  return (
+    "/" +
+    base
+      .replace(/([a-z])([A-Z])/g, "$1-$2")
+      .replace(/[_\s]+/g, "-")
+      .toLowerCase()
+  );
+};
+
+const curatedRouteDefinitions = [
   { path: "/admin/auth", file: "routes/adminAuth" },
-  { path: "/auth", file: "routes/auth" },
   { path: "/users", file: "routes/users" },
   { path: "/countries", file: "routes/countries" },
   { path: "/destinations", file: "routes/destinations" },
@@ -806,6 +1042,29 @@ const routeDefinitions = [
   // { path: "/testimonials", file: "routes/testimonials" },
   // { path: "/newsletters", file: "routes/newsletters" },
 ];
+
+const routeDefinitions = (() => {
+  const existingFiles = new Set(
+    curatedRouteDefinitions.map((r) => r.file.replace(/^routes\//, "") + ".js"),
+  );
+
+  const discovered = getRouteFiles()
+    .filter((file) => !existingFiles.has(file))
+    .map((file) => ({
+      path: normalizeRoutePath(file),
+      file: `routes/${file.replace(/\.js$/, "")}`,
+    }));
+
+  if (discovered.length > 0) {
+    logger.info(
+      `🔍 Auto-discovered ${discovered.length} new route(s): ${discovered
+        .map((r) => r.path)
+        .join(", ")}`,
+    );
+  }
+
+  return [...curatedRouteDefinitions, ...discovered];
+})();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN SERVER CLASS
@@ -985,6 +1244,33 @@ class AltuveraServer {
     this.routeLoader = new RouteLoader(this.app);
     this.routeLoader.loadRoutes(routeDefinitions);
 
+    // Pretty routes report (dev-friendly)
+    const shouldPrintRoutes =
+      env.NODE_ENV === "development" || process.env.ROUTES_REPORT === "true";
+    if (shouldPrintRoutes) {
+      try {
+        const report = this.routeLoader.getReport();
+        const { routesTable, modulesTable, counts } =
+          formatRoutesReportTables(report);
+
+        logger.info(
+          `\nâ•â•â•â•â•â•â•â• ROUTES OVERVIEW â•â•â•â•â•â•â•â•\n` +
+            `${modulesTable}\n` +
+            `\nâ•â•â•â•â•â•â•â• ROUTES (METHODS) â•â•â•â•â•â•â•â•\n` +
+            `${routesTable}\n` +
+            `\nSummary: ${counts.routes} routes â€¢ ${counts.live} live modules â€¢ ${counts.failed} failed modules\n`,
+        );
+      } catch (e) {
+        logger.warn("Failed to render routes report:", e.message);
+      }
+    }
+
+    // Backwards-compat: `/api/auth/*` now lives under `/api/users/*`.
+    this.app.use("/api/auth", (req, res) => {
+      const target = `/api/users${req.url || ""}`;
+      return res.redirect(307, target);
+    });
+
     // Health check endpoint
     this.app.get("/api/health", (req, res) => {
       const health = monitor.getHealthStatus();
@@ -1061,6 +1347,21 @@ class AltuveraServer {
       });
     });
 
+    // API documentation endpoint (auto-generated)
+    this.app.get("/api/docs", (req, res) => {
+      res.json({
+        name: "Altuvera Travel API",
+        version: env.API_VERSION,
+        generatedAt: new Date().toISOString(),
+        routes: this.routeLoader.getDocs(),
+      });
+    });
+
+    // API routes report endpoint (includes failed modules)
+    this.app.get("/api/routes", (req, res) => {
+      res.json(this.routeLoader.getReport());
+    });
+
     // 404 handler - must be after all routes
     this.app.all("*", (req, res, next) => {
       next(AppError.notFound(`Route ${req.originalUrl}`));
@@ -1095,25 +1396,48 @@ class AltuveraServer {
         this.server.headersTimeout = 66000;
         this.server.maxHeadersCount = 100;
 
-        // Start listening
-        this.server.listen(env.PORT, "0.0.0.0", () => {
-          logger.info(
-            `\n🚀 Server running on port ${env.PORT} in ${env.NODE_ENV} mode`,
-          );
-          resolve(this.server);
-        });
+        const basePort = Number(env.PORT) || 3000;
+        const maxAttempts =
+          env.NODE_ENV === "development"
+            ? Math.max(1, Number(process.env.PORT_FALLBACK_ATTEMPTS) || 10)
+            : 1;
 
-        // Handle server errors
-        this.server.on("error", (err) => {
-          if (err.code === "EADDRINUSE") {
-            logger.error(`Port ${env.PORT} is already in use`);
-          } else if (err.code === "EACCES") {
-            logger.error(`Port ${env.PORT} requires elevated privileges`);
-          } else {
-            logger.error("Server error", { error: err.message });
-          }
-          reject(err);
-        });
+        const tryListen = (port, attempt = 0) => {
+          this.server.listen(port, "0.0.0.0", () => {
+            logger.info(
+              `\n🚀 Server running on port ${port} in ${env.NODE_ENV} mode`,
+            );
+            resolve(this.server);
+          });
+
+          this.server.once("error", (err) => {
+            if (
+              err &&
+              err.code === "EADDRINUSE" &&
+              env.NODE_ENV === "development" &&
+              attempt + 1 < maxAttempts
+            ) {
+              const nextPort = port + 1;
+              logger.warn(
+                `Port ${port} is in use; retrying on ${nextPort} (${attempt + 2}/${maxAttempts})`,
+              );
+              setTimeout(() => tryListen(nextPort, attempt + 1), 250);
+              return;
+            }
+
+            if (err.code === "EADDRINUSE") {
+              logger.error(`Port ${port} is already in use`);
+            } else if (err.code === "EACCES") {
+              logger.error(`Port ${port} requires elevated privileges`);
+            } else {
+              logger.error("Server error", { error: err.message });
+            }
+            reject(err);
+          });
+        };
+
+        // Start listening (with dev fallback to next ports)
+        tryListen(basePort, 0);
 
         // Handle connection errors
         this.server.on("clientError", (err, socket) => {
@@ -1206,8 +1530,10 @@ const main = async () => {
   }
 };
 
-// Start the server
-main();
+// Start the server (only when run directly, not when imported for tests/scripts)
+if (require.main === module) {
+  main();
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // EXPORTS (for testing)

@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "start:prod": "cross-env NODE_ENV=production node server.js",
-    "dev": "nodemon server.js",
+    "dev": "node server.js",
     "migrate": "node scripts/migrate.js",
     "rollback": "node scripts/rollback.js",
     "seed": "node scripts/seed.js",
@@ -15,7 +15,11 @@
     "db:init": "node -e \"require('./config/db').initDB()\"",
     "db:seed": "node -e \"require('./config/db').seedDB()\"",
     "db:reset": "node -e \"require('./config/db').resetDB()\"",
+    "db:grant": "node scripts/grant-privileges.js",
     "setup-db": "node scripts/setup-database.js"
+  },
+  "nodemonConfig": {
+    "legacyWatch": true
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",

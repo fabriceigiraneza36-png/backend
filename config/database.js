@@ -5,7 +5,62 @@ const logger = require("../utils/logger");
 // DATABASE CONFIGURATION (Neon-ready for Render)
 // ═══════════════════════════════════════════════════
 
-const sequelize = new Sequelize(process.env.DATABASE_URL, {
+const getSslModeFromUrl = (databaseUrl) => {
+  try {
+    const url = new URL(databaseUrl);
+    const sslmode = (url.searchParams.get("sslmode") || "").toLowerCase();
+    return sslmode || null;
+  } catch {
+    return null;
+  }
+};
+
+const toBool = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+  return null;
+};
+
+const buildDatabaseUrlFromParts = () => {
+  const host = process.env.DB_HOST || "localhost";
+  const port = process.env.DB_PORT || "5432";
+  const name = process.env.DB_NAME || "altuvera";
+  const user = process.env.DB_USER || "";
+  const password = process.env.DB_PASSWORD || "";
+
+  // Encode to safely support special chars.
+  const auth =
+    user || password
+      ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@`
+      : "";
+  return `postgres://${auth}${host}:${port}/${name}`;
+};
+
+const isLocalDbUrl = (value) =>
+  typeof value === "string" &&
+  (value.includes("localhost") || value.includes("127.0.0.1"));
+
+// Prefer DB_* in local dev when provided, so a bad DATABASE_URL password
+// doesn’t brick the app.
+const databaseUrl =
+  (process.env.DB_PASSWORD || process.env.DB_USER || process.env.DB_HOST) &&
+  isLocalDbUrl(process.env.DATABASE_URL)
+    ? buildDatabaseUrlFromParts()
+    : process.env.DATABASE_URL || buildDatabaseUrlFromParts();
+const sslmode = getSslModeFromUrl(databaseUrl);
+
+// Default: production uses SSL, dev uses non-SSL (unless overridden).
+const envWantsSsl = toBool(process.env.DB_SSL);
+const useSsl =
+  envWantsSsl !== null
+    ? envWantsSsl
+    : sslmode
+      ? sslmode !== "disable"
+      : process.env.NODE_ENV === "production";
+
+const sequelize = new Sequelize(databaseUrl, {
   dialect: "postgres",
   protocol: "postgres",
   logging:
@@ -17,10 +72,14 @@ const sequelize = new Sequelize(process.env.DATABASE_URL, {
     idle: 10000,
   },
   dialectOptions: {
-    ssl: {
-      require: true,
-      rejectUnauthorized: false, // required for Neon serverless
-    },
+    ...(useSsl
+      ? {
+          ssl: {
+            require: true,
+            rejectUnauthorized: false, // required for some hosted Postgres providers
+          },
+        }
+      : { ssl: false }),
     statement_timeout: 30000,
     idle_in_transaction_session_timeout: 30000,
   },

@@ -107,6 +107,31 @@ const query = async (text, params = []) => {
 
     return result;
   } catch (err) {
+    // Permission denied (insufficient_privilege)
+    if (
+      err.code === "42501" ||
+      (typeof err.message === "string" &&
+        err.message.toLowerCase().includes("permission denied"))
+    ) {
+      const tableMatch =
+        typeof err.message === "string"
+          ? err.message.match(/permission denied for (?:relation|table)\s+\"?([a-zA-Z0-9_]+)\"?/i)
+          : null;
+      const table = tableMatch?.[1] || null;
+      const user = dbConfig.user || process.env.DB_USER || "unknown";
+      const database = dbConfig.database || process.env.DB_NAME || "unknown";
+
+      const permissionError = new Error(
+        `Database permission denied${table ? ` for table "${table}"` : ""}. ` +
+          `Connected as "${user}" to database "${database}". ` +
+          `Fix by granting privileges to this role (or run migrations as the table owner).`,
+      );
+      permissionError.statusCode = 403;
+      permissionError.errorCode = "DB_PERMISSION_DENIED";
+      permissionError.originalError = err.message;
+      throw permissionError;
+    }
+
     // Retry once on connection reset errors
     if (
       err.code === "ECONNRESET" ||

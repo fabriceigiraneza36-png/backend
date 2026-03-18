@@ -1,111 +1,62 @@
-/**
- * middleware/auth.js
- */
-
+// middleware/auth.js
 const jwt = require("jsonwebtoken");
 const { query } = require("../config/db");
 
-// ═══════════════════════════════════════════════════
-// Protect routes - verify JWT
-// ═══════════════════════════════════════════════════
-exports.protect = async (req, res, next) => {
-  let token;
+const extractToken = (req) => {
+  const h = req.headers.authorization;
+  return h && h.startsWith("Bearer ") ? h.slice(7) : null;
+};
 
-  if (req.headers.authorization?.startsWith("Bearer")) {
-    token = req.headers.authorization.split(" ")[1];
-  }
-
-  if (!token) {
-    return res.status(401).json({
-      success: false,
-      message: "Not authorized. No token provided.",
-    });
-  }
-
+const protect = async (req, res, next) => {
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    
-    // Determine table based on token type
-    const isAdmin = decoded.type === "admin" || decoded.role === "admin";
-    const table = isAdmin ? "admin_users" : "users";
-    
+    const token = extractToken(req);
+    if (!token) return res.status(401).json({ success: false, message: "Authentication required." });
+
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      const msg = err.name === "TokenExpiredError" ? "Session expired." : "Invalid token.";
+      return res.status(401).json({ success: false, message: msg });
+    }
+
+    const table = decoded.type === "admin" ? "admin_users" : "users";
     const result = await query(`SELECT * FROM ${table} WHERE id = $1`, [decoded.id]);
+    if (result.rows.length === 0) return res.status(401).json({ success: false, message: "Account not found." });
 
-    // Enforce token invalidation via token version
-    const tokenVersionFromToken =
-      decoded.tokenVersion ?? decoded.token_version ?? decoded.tv ?? null;
+    const user = result.rows[0];
+    if (!user.is_active) return res.status(401).json({ success: false, message: "Account deactivated." });
+    if (decoded.tokenVersion !== undefined && user.token_version !== undefined && decoded.tokenVersion !== user.token_version)
+      return res.status(401).json({ success: false, message: "Session invalidated." });
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: "User not found.",
-      });
-    }
-
-    const entity = result.rows[0];
-
-    if (entity.is_active === false) {
-      return res.status(401).json({
-        success: false,
-        message: "Account has been deactivated.",
-      });
-    }
-
-    // Token version check (logout / token invalidation)
-    const currentTokenVersion =
-      entity.token_version ?? entity.tokenVersion ?? 0;
-    if (
-      tokenVersionFromToken !== null &&
-      currentTokenVersion !== null &&
-      tokenVersionFromToken !== currentTokenVersion
-    ) {
-      return res.status(401).json({
-        success: false,
-        message: "Session invalidated. Please sign in again.",
-      });
-    }
-
-    req.user = entity;
-    req.userType = isAdmin ? "admin" : "user";
-    
+    req.user = user;
+    req.userType = decoded.type === "admin" ? "admin" : "user";
     next();
   } catch (err) {
-    const message = err.name === "TokenExpiredError" 
-      ? "Token expired. Please login again." 
-      : "Not authorized. Invalid token.";
-      
-    return res.status(401).json({
-      success: false,
-      message,
-    });
+    return res.status(500).json({ success: false, message: "Authentication error." });
   }
 };
 
-// ═══════════════════════════════════════════════════
-// Admin only middleware
-// ═══════════════════════════════════════════════════
-exports.adminOnly = (req, res, next) => {
-  if (req.userType === "admin" || req.user?.role === "admin" || req.user?.username) {
-    next();
-  } else {
-    res.status(403).json({
-      success: false,
-      message: "Access denied. Admin privileges required.",
-    });
-  }
+const adminOnly = (req, res, next) => {
+  if (!req.user) return res.status(401).json({ success: false, message: "Authentication required." });
+  const role = req.user.role || "";
+  if (req.userType === "admin" || role === "admin" || role === "super_admin") return next();
+  return res.status(403).json({ success: false, message: "Admin access required." });
 };
 
-// ═══════════════════════════════════════════════════
-// Optional: Role-based access
-// ═══════════════════════════════════════════════════
-exports.authorize = (...roles) => {
-  return (req, res, next) => {
-    if (!roles.includes(req.user?.role)) {
-      return res.status(403).json({
-        success: false,
-        message: `Role '${req.user?.role}' is not authorized.`,
-      });
+const optionalAuth = async (req, res, next) => {
+  try {
+    const token = extractToken(req);
+    if (!token) return next();
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const table = decoded.type === "admin" ? "admin_users" : "users";
+    const result = await query(`SELECT * FROM ${table} WHERE id=$1`, [decoded.id]);
+    if (result.rows.length > 0 && result.rows[0].is_active) {
+      req.user = result.rows[0];
+      req.userType = decoded.type === "admin" ? "admin" : "user";
     }
-    next();
-  };
+  } catch {}
+  next();
 };
+
+module.exports = { protect, adminOnly, optionalAuth };

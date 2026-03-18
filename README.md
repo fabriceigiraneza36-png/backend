@@ -34,7 +34,7 @@ A production-ready Express backend with advanced security, monitoring, and resil
 Ensure your environment provides a database (PostgreSQL) and sets these required variables:
 
 - `NODE_ENV=production`
-- `PORT` (e.g., `5000`)
+- `PORT` (e.g., `3000`)
 - `DATABASE_URL` or `DB_HOST`, `DB_PORT`, `DB_NAME`, `DB_USER`, `DB_PASSWORD`
 - `JWT_SECRET` (at least 32 characters)
 - `JWT_REFRESH_SECRET` (at least 32 characters)

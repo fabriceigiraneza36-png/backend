@@ -10,15 +10,23 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// Verify connection on startup
-transporter
-  .verify()
-  .then(() => {
-    console.log("✅ SMTP connection verified — ready to send emails");
-  })
-  .catch((err) => {
-    console.error("❌ SMTP connection failed:", err.message);
-  });
+// Verify connection on startup (optional)
+if (
+  process.env.EMAIL_VERIFY_ON_STARTUP === "true" &&
+  process.env.NODE_ENV === "production" &&
+  process.env.SMTP_HOST &&
+  process.env.SMTP_USER &&
+  process.env.SMTP_PASS
+) {
+  transporter
+    .verify()
+    .then(() => {
+      console.log("✅ SMTP connection verified — ready to send emails");
+    })
+    .catch((err) => {
+      console.error("❌ SMTP connection failed:", err.message);
+    });
+}
 
 /**
  * Send an email

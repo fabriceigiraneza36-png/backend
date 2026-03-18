@@ -4,7 +4,7 @@ function makeRequest(path) {
   return new Promise((resolve, reject) => {
     const req = http.request({
       hostname: 'localhost',
-      port: 5000,
+      port: 3000,
       path: path,
       method: 'GET'
     }, (res) => {

@@ -9,7 +9,6 @@ const router = express.Router();
 const teamController = require("../controllers/teamController");
 const { protect, adminOnly } = require("../middleware/auth");
 const upload = require("../middleware/upload");
-const { validateTeamMember } = require("../validators/teamValidator");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PUBLIC ROUTES
@@ -17,7 +16,7 @@ const { validateTeamMember } = require("../validators/teamValidator");
 
 /**
  * @route   GET /api/team
- * @desc    Get all team members with filtering, sorting, and pagination
+ * @desc    Get all active team members with filtering, sorting, pagination
  * @access  Public
  */
 router.get("/", teamController.getAllTeamMembers);
@@ -35,6 +34,13 @@ router.get("/featured", teamController.getFeaturedTeamMembers);
  * @access  Public
  */
 router.get("/departments/list", teamController.getDepartments);
+
+/**
+ * @route   GET /api/team/stats
+ * @desc    Get team statistics for the StatsSection component
+ * @access  Public
+ */
+router.get("/stats", teamController.getTeamStats);
 
 /**
  * @route   GET /api/team/department/:department
@@ -55,6 +61,13 @@ router.get("/:identifier", teamController.getTeamMember);
 // ═══════════════════════════════════════════════════════════════════════════════
 
 /**
+ * @route   GET /api/team/admin/all
+ * @desc    Get ALL team members (including inactive) for admin dashboard
+ * @access  Private (Admin)
+ */
+router.get("/admin/all", protect, adminOnly, teamController.getAllTeamMembersAdmin);
+
+/**
  * @route   POST /api/team
  * @desc    Create new team member
  * @access  Private (Admin)
@@ -64,8 +77,7 @@ router.post(
   protect,
   adminOnly,
   upload.single("image"),
-  validateTeamMember,
-  teamController.createTeamMember,
+  teamController.createTeamMember
 );
 
 /**
@@ -78,9 +90,15 @@ router.put(
   protect,
   adminOnly,
   upload.single("image"),
-  validateTeamMember,
-  teamController.updateTeamMember,
+  teamController.updateTeamMember
 );
+
+/**
+ * @route   DELETE /api/team/bulk-delete
+ * @desc    Bulk delete team members
+ * @access  Private (Admin)
+ */
+router.delete("/bulk-delete", protect, adminOnly, teamController.bulkDeleteTeamMembers);
 
 /**
  * @route   DELETE /api/team/:id
@@ -98,14 +116,16 @@ router.patch("/reorder", protect, adminOnly, teamController.reorderTeamMembers);
 
 /**
  * @route   PATCH /api/team/:id/toggle-status
- * @desc    Toggle team member status (is_active, is_featured, show_on_homepage)
+ * @desc    Toggle team member boolean status field
  * @access  Private (Admin)
  */
-router.patch(
-  "/:id/toggle-status",
-  protect,
-  adminOnly,
-  teamController.toggleStatus,
-);
+router.patch("/:id/toggle-status", protect, adminOnly, teamController.toggleStatus);
+
+/**
+ * @route   POST /api/team/:id/duplicate
+ * @desc    Duplicate a team member
+ * @access  Private (Admin)
+ */
+router.post("/:id/duplicate", protect, adminOnly, teamController.duplicateTeamMember);
 
 module.exports = router;

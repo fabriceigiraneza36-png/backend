@@ -1,5 +1,5 @@
 const http = require('http');
-const opts = 'http://localhost:5000/api/countries?featured=true';
+const opts = 'http://localhost:3000/api/countries?featured=true';
 http.get(opts, res => {
   console.log('STATUS', res.statusCode);
   let body='';
