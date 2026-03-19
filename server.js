@@ -153,7 +153,31 @@ class DatabaseManager {
         // Create sequelize instance if not provided
         const { Sequelize } = require("sequelize");
 
-        this.sequelize = new Sequelize(env.DATABASE_URL, {
+        const normalizeUrl = (url) => {
+          if (!url || typeof url !== "string") return null;
+          const trimmed = url.trim();
+          if (!trimmed) return null;
+          const lower = trimmed.toLowerCase();
+          if (lower === "null" || lower === "undefined") return null;
+          return trimmed;
+        };
+
+        const databaseUrl =
+          normalizeUrl(env.DATABASE_URL) ||
+          (() => {
+            const host = process.env.DB_HOST || "localhost";
+            const port = process.env.DB_PORT || "5432";
+            const name = process.env.DB_NAME || "altuvera";
+            const user = process.env.DB_USER || "";
+            const password = process.env.DB_PASSWORD || "";
+            const auth =
+              user || password
+                ? `${encodeURIComponent(user)}:${encodeURIComponent(password)}@`
+                : "";
+            return `postgres://${auth}${host}:${port}/${name}`;
+          })();
+
+        this.sequelize = new Sequelize(databaseUrl, {
           dialect: "postgres",
           logging:
             env.NODE_ENV === "development" ? (msg) => logger.debug(msg) : false,

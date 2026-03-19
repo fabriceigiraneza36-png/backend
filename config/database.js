@@ -38,17 +38,36 @@ const buildDatabaseUrlFromParts = () => {
   return `postgres://${auth}${host}:${port}/${name}`;
 };
 
+const isValidDbUrl = (value) => {
+  if (value === undefined || value === null) return false;
+  if (typeof value !== "string") return false;
+  const trimmed = value.trim();
+  if (!trimmed) return false;
+  const lower = trimmed.toLowerCase();
+  if (lower === "null" || lower === "undefined") return false;
+  return true;
+};
+
 const isLocalDbUrl = (value) =>
   typeof value === "string" &&
   (value.includes("localhost") || value.includes("127.0.0.1"));
 
 // Prefer DB_* in local dev when provided, so a bad DATABASE_URL password
 // doesn’t brick the app.
-const databaseUrl =
-  (process.env.DB_PASSWORD || process.env.DB_USER || process.env.DB_HOST) &&
-  isLocalDbUrl(process.env.DATABASE_URL)
-    ? buildDatabaseUrlFromParts()
-    : process.env.DATABASE_URL || buildDatabaseUrlFromParts();
+const databaseUrl = (() => {
+  const explicitUrl = isValidDbUrl(process.env.DATABASE_URL)
+    ? process.env.DATABASE_URL.trim()
+    : null;
+
+  const useDbParts =
+    (process.env.DB_PASSWORD || process.env.DB_USER || process.env.DB_HOST) &&
+    isLocalDbUrl(explicitUrl);
+
+  if (useDbParts) return buildDatabaseUrlFromParts();
+  if (explicitUrl) return explicitUrl;
+  return buildDatabaseUrlFromParts();
+})();
+
 const sslmode = getSslModeFromUrl(databaseUrl);
 
 // Default: production uses SSL, dev uses non-SSL (unless overridden).
