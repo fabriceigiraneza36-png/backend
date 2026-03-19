@@ -147,10 +147,18 @@ class DatabaseManager {
       logger.info(`🌐 Frontend URL: ${FRONTEND_URL}`);
       const dbModule = safeRequire("./config/database");
 
+      // Check if the database module has a valid sequelize instance
       if (dbModule && dbModule.sequelize) {
         this.sequelize = dbModule.sequelize;
+        logger.info("📦 Using database configuration from ./config/database");
+      } else if (dbModule && dbModule.databaseUrl) {
+        // Module exists but sequelize is null - db config failed
+        logger.error("❌ Database module exists but sequelize instance is null");
+        logger.error(`   Database URL is: ${dbModule.databaseUrl || 'null/undefined'}`);
+        throw new Error("Database configuration failed. Please check DATABASE_URL or DB_* environment variables.");
       } else {
-        // Create sequelize instance if not provided
+        // No database module - create instance from scratch
+        logger.warn("⚠️  No database module found. Creating instance from environment variables.");
         const { Sequelize } = require("sequelize");
 
         const normalizeUrl = (url) => {
@@ -176,6 +184,10 @@ class DatabaseManager {
                 : "";
             return `postgres://${auth}${host}:${port}/${name}`;
           })();
+
+        if (!databaseUrl) {
+          throw new Error("No database URL available. Set DATABASE_URL or DB_* environment variables.");
+        }
 
         this.sequelize = new Sequelize(databaseUrl, {
           dialect: "postgres",
@@ -1047,7 +1059,13 @@ const curatedRouteDefinitions = [
   { path: "/admin/auth", file: "routes/adminAuth" },
   { path: "/users", file: "routes/users" },
   { path: "/countries", file: "routes/countries" },
+  { path: "/country-likes", file: "routes/countryLikes" },
+  { path: "/country-comments", file: "routes/countryComments" },
+  { path: "/country-ratings", file: "routes/countryRatings" },
   { path: "/destinations", file: "routes/destinations" },
+  { path: "/destination-likes", file: "routes/destinationLikes" },
+  { path: "/destination-comments", file: "routes/destinationComments" },
+  { path: "/destination-ratings", file: "routes/destinationRatings" },
   { path: "/posts", file: "routes/posts" },
   { path: "/tips", file: "routes/tips" },
   { path: "/services", file: "routes/services" },

@@ -6,6 +6,7 @@ const logger = require("../utils/logger");
 // ═══════════════════════════════════════════════════
 
 const getSslModeFromUrl = (databaseUrl) => {
+  if (!databaseUrl) return null;
   try {
     const url = new URL(databaseUrl);
     const sslmode = (url.searchParams.get("sslmode") || "").toLowerCase();
@@ -52,8 +53,13 @@ const isLocalDbUrl = (value) =>
   typeof value === "string" &&
   (value.includes("localhost") || value.includes("127.0.0.1"));
 
+const isProduction = () => {
+  const env = (process.env.NODE_ENV || "").toLowerCase();
+  return env === "production" || env === "prod";
+};
+
 // Prefer DB_* in local dev when provided, so a bad DATABASE_URL password
-// doesn’t brick the app.
+// doesn't brick the app.
 const databaseUrl = (() => {
   const explicitUrl = isValidDbUrl(process.env.DATABASE_URL)
     ? process.env.DATABASE_URL.trim()
@@ -65,12 +71,34 @@ const databaseUrl = (() => {
 
   if (useDbParts) return buildDatabaseUrlFromParts();
   if (explicitUrl) return explicitUrl;
+  
+  // In production, we MUST have DATABASE_URL or DB_* vars
+  if (isProduction()) {
+    // Check if we have individual DB parts
+    const hasDbParts = process.env.DB_HOST || process.env.DB_USER || 
+                       process.env.DB_PASSWORD || process.env.DB_NAME;
+    if (hasDbParts) {
+      return buildDatabaseUrlFromParts();
+    }
+    // No valid config - return null and let initialization fail with a clear error
+    logger.error("❌ PRODUCTION DATABASE CONFIGURATION ERROR:");
+    logger.error("   DATABASE_URL or DB_* environment variables are not set!");
+    logger.error("   Please set up your PostgreSQL database on Render.");
+    return null;
+  }
+  
+  // Development fallback
   return buildDatabaseUrlFromParts();
 })();
 
-const sslmode = getSslModeFromUrl(databaseUrl);
+// Validate databaseUrl before creating Sequelize instance
+if (!databaseUrl) {
+  logger.error("❌ Database URL is null. Cannot initialize Sequelize.");
+  logger.error("   Please ensure DATABASE_URL or DB_* variables are set.");
+}
 
 // Default: production uses SSL, dev uses non-SSL (unless overridden).
+const sslmode = getSslModeFromUrl(databaseUrl);
 const envWantsSsl = toBool(process.env.DB_SSL);
 const useSsl =
   envWantsSsl !== null
@@ -79,7 +107,8 @@ const useSsl =
       ? sslmode !== "disable"
       : process.env.NODE_ENV === "production";
 
-const sequelize = new Sequelize(databaseUrl, {
+const sequelize = databaseUrl 
+  ? new Sequelize(databaseUrl, {
   dialect: "postgres",
   protocol: "postgres",
   logging:
@@ -107,7 +136,8 @@ const sequelize = new Sequelize(databaseUrl, {
     underscored: true,
     freezeTableName: true,
   },
-});
+})
+: null;
 
 // ═══════════════════════════════════════════════════
 // TEST CONNECTION FUNCTION
@@ -149,4 +179,5 @@ module.exports = {
   query,
   testConnection,
   Sequelize,
+  databaseUrl, // Export for debugging
 };
