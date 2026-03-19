@@ -1351,3 +1351,308 @@ exports.getRecent = async (req, res, next) => {
     next(err);
   }
 };
+
+/**
+ * Get most booked destinations (Public - Featured route)
+ * GET /api/bookings/most-booked
+ */
+exports.getMostBookedDestinations = async (req, res, next) => {
+  try {
+    const { limit = 10, period = 'all' } = req.query;
+
+    let dateFilter = '';
+    if (period === 'month') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '30 days'";
+    } else if (period === 'year') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
+    }
+
+    const result = await query(`
+      SELECT 
+        d.id,
+        d.name,
+        d.slug,
+        d.image_url,
+        d.short_description,
+        d.duration,
+        d.difficulty,
+        c.name AS country_name,
+        c.slug AS country_slug,
+        COUNT(b.id) AS booking_count,
+        SUM(b.number_of_travelers) AS total_travelers,
+        AVG(CASE WHEN d.rating > 0 THEN d.rating ELSE NULL END)::DECIMAL(3,2) AS average_rating
+      FROM destinations d
+      LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
+      LEFT JOIN countries c ON d.country_id = c.id
+      WHERE d.is_active = true
+      GROUP BY d.id, d.name, d.slug, d.image_url, d.short_description, d.duration, d.difficulty, c.name, c.slug
+      ORDER BY booking_count DESC, total_travelers DESC
+      LIMIT $1
+    `, [parseInt(limit)]);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      period: period === 'all' ? 'All time' : period === 'month' ? 'Last 30 days' : 'Last year'
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Get bookings per destination (Public)
+ * GET /api/bookings/by-destination/:destinationId
+ */
+exports.getBookingsByDestination = async (req, res, next) => {
+  try {
+    const { destinationId } = req.params;
+    const { status, period = 'all' } = req.query;
+
+    let dateFilter = '';
+    if (period === 'month') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '30 days'";
+    } else if (period === 'year') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
+    }
+
+    let statusFilter = '';
+    const params = [parseInt(destinationId)];
+    
+    if (status) {
+      statusFilter = 'AND b.status = $2';
+      params.push(status);
+    }
+
+    const statsResult = await query(`
+      SELECT 
+        COUNT(*) AS total_bookings,
+        COUNT(*) FILTER (WHERE b.status = 'confirmed') AS confirmed_bookings,
+        COUNT(*) FILTER (WHERE b.status = 'completed') AS completed_bookings,
+        COUNT(*) FILTER (WHERE b.status = 'cancelled') AS cancelled_bookings,
+        SUM(b.number_of_travelers)::INTEGER AS total_travelers,
+        AVG(b.number_of_travelers)::DECIMAL(4,2) AS avg_travelers_per_booking
+      FROM bookings b
+      WHERE b.destination_id = $1 ${dateFilter} ${statusFilter}
+    `, params);
+
+    // Get destination info
+    const destResult = await query(`
+      SELECT 
+        d.id, d.name, d.slug, d.image_url, d.duration, d.difficulty,
+        c.name AS country_name, c.slug AS country_slug,
+        d.rating AS destination_rating,
+        d.review_count AS destination_review_count
+      FROM destinations d
+      LEFT JOIN countries c ON d.country_id = c.id
+      WHERE d.id = $1
+    `, [parseInt(destinationId)]);
+
+    if (destResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Destination not found' });
+    }
+
+    res.json({
+      success: true,
+      data: {
+        destination: destResult.rows[0],
+        stats: statsResult.rows[0],
+        period: period === 'all' ? 'All time' : period === 'month' ? 'Last 30 days' : 'Last year'
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Get bookings per country (Public)
+ * GET /api/bookings/by-country/:countryId
+ */
+exports.getBookingsByCountry = async (req, res, next) => {
+  try {
+    const { countryId } = req.params;
+    const { status, period = 'all' } = req.query;
+
+    let dateFilter = '';
+    if (period === 'month') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '30 days'";
+    } else if (period === 'year') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
+    }
+
+    let statusFilter = '';
+    const params = [parseInt(countryId)];
+    
+    if (status) {
+      statusFilter = 'AND b.status = $2';
+      params.push(status);
+    }
+
+    // Overall stats
+    const statsResult = await query(`
+      SELECT 
+        COUNT(DISTINCT b.id) AS total_bookings,
+        COUNT(DISTINCT b.destination_id) AS destinations_booked,
+        SUM(b.number_of_travelers)::INTEGER AS total_travelers,
+        AVG(b.number_of_travelers)::DECIMAL(4,2) AS avg_travelers_per_booking
+      FROM bookings b
+      JOIN destinations d ON b.destination_id = d.id
+      WHERE d.country_id = $1 ${dateFilter} ${statusFilter}
+    `, params);
+
+    // Country info
+    const countryResult = await query(`
+      SELECT id, name, slug, image_url, flag_url, continent, capital
+      FROM countries WHERE id = $1
+    `, [parseInt(countryId)]);
+
+    if (countryResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Country not found' });
+    }
+
+    // Top destinations in this country
+    const topDestResult = await query(`
+      SELECT 
+        d.id, d.name, d.slug, d.image_url,
+        COUNT(b.id) AS booking_count,
+        SUM(b.number_of_travelers) AS total_travelers
+      FROM destinations d
+      LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
+      WHERE d.country_id = $1 AND d.is_active = true ${statusFilter ? statusFilter.replace('b.status', 'b.status') : ''}
+      GROUP BY d.id, d.name, d.slug, d.image_url
+      ORDER BY booking_count DESC
+      LIMIT 5
+    `, params);
+
+    res.json({
+      success: true,
+      data: {
+        country: countryResult.rows[0],
+        stats: statsResult.rows[0],
+        top_destinations: topDestResult.rows,
+        period: period === 'all' ? 'All time' : period === 'month' ? 'Last 30 days' : 'Last year'
+      }
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Get all countries with booking stats (Public)
+ * GET /api/bookings/countries-stats
+ */
+exports.getCountriesBookingStats = async (req, res, next) => {
+  try {
+    const { period = 'all', sort_by = 'bookings' } = req.query;
+
+    let dateFilter = '';
+    if (period === 'month') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '30 days'";
+    } else if (period === 'year') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
+    }
+
+    const orderClause = sort_by === 'travelers' 
+      ? 'ORDER BY total_travelers DESC' 
+      : 'ORDER BY total_bookings DESC';
+
+    const result = await query(`
+      SELECT 
+        c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent,
+        COUNT(DISTINCT b.id) AS total_bookings,
+        COUNT(DISTINCT d.id) AS destinations_offered,
+        COALESCE(SUM(b.number_of_travelers), 0)::INTEGER AS total_travelers,
+        AVG(b.number_of_travelers)::DECIMAL(4,2) AS avg_travelers
+      FROM countries c
+      LEFT JOIN destinations d ON d.country_id = c.id AND d.is_active = true
+      LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
+      WHERE c.is_active = true
+      GROUP BY c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent
+      ${orderClause}
+    `);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      period: period === 'all' ? 'All time' : period === 'month' ? 'Last 30 days' : 'Last year',
+      sort_by
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * Get all destinations with booking stats (Public)
+ * GET /api/bookings/destinations-stats
+ */
+exports.getDestinationsBookingStats = async (req, res, next) => {
+  try {
+    const { period = 'all', country_id, sort_by = 'bookings' } = req.query;
+
+    let dateFilter = '';
+    if (period === 'month') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '30 days'";
+    } else if (period === 'year') {
+      dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
+    }
+
+    let countryFilter = '';
+    const params = [];
+    let paramIndex = 1;
+
+    if (country_id) {
+      countryFilter = `AND d.country_id = $${paramIndex++}`;
+      params.push(parseInt(country_id));
+    }
+
+    const orderClause = sort_by === 'travelers' 
+      ? 'ORDER BY total_travelers DESC' 
+      : 'ORDER BY total_bookings DESC';
+
+    params.push(parseInt(req.query.limit) || 20);
+    params.push(parseInt(req.query.page) || 1);
+
+    const result = await query(`
+      SELECT 
+        d.id, d.name, d.slug, d.image_url, d.short_description, d.duration, d.difficulty, d.rating, d.review_count,
+        c.id AS country_id, c.name AS country_name, c.slug AS country_slug,
+        COUNT(b.id) AS total_bookings,
+        COALESCE(SUM(b.number_of_travelers), 0)::INTEGER AS total_travelers,
+        AVG(b.number_of_travelers)::DECIMAL(4,2) AS avg_travelers
+      FROM destinations d
+      LEFT JOIN countries c ON d.country_id = c.id
+      LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
+      WHERE d.is_active = true ${countryFilter}
+      GROUP BY d.id, d.name, d.slug, d.image_url, d.short_description, d.duration, d.difficulty, d.rating, d.review_count, c.id, c.name, c.slug
+      ${orderClause}
+      LIMIT $${paramIndex++} OFFSET $${paramIndex}
+    `, params);
+
+    // Get total count for pagination
+    const countResult = await query(`
+      SELECT COUNT(*) FROM destinations d WHERE is_active = true ${countryFilter}
+    `, country_id ? [parseInt(country_id)] : []);
+
+    res.json({
+      success: true,
+      data: result.rows,
+      pagination: {
+        total: parseInt(countResult.rows[0].count),
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 20
+      },
+      period: period === 'all' ? 'All time' : period === 'month' ? 'Last 30 days' : 'Last year',
+      sort_by
+    });
+
+  } catch (err) {
+    next(err);
+  }
+};

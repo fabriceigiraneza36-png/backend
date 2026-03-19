@@ -21,22 +21,28 @@ const bookingLimiter = rateLimit({
 // PUBLIC ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Rate limiting for booking creation
-const bookingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 bookings per window
-  message: { error: "Too many booking requests. Please try again later." },
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// PUBLIC ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
-
 // Create booking (public, with optional auth)
 router.post("/", bookingLimiter, optionalAuth, bookingController.create);
 
 // Track booking by number (public)
 router.get("/track/:bookingNumber", bookingController.track);
+
+// === PUBLIC METRICS ROUTES ===
+
+// Most booked destinations (Featured for frontend)
+router.get("/most-booked", bookingController.getMostBookedDestinations);
+
+// Bookings by destination
+router.get("/by-destination/:destinationId", bookingController.getBookingsByDestination);
+
+// Bookings by country
+router.get("/by-country/:countryId", bookingController.getBookingsByCountry);
+
+// All countries with booking stats
+router.get("/countries-stats", bookingController.getCountriesBookingStats);
+
+// All destinations with booking stats
+router.get("/destinations-stats", bookingController.getDestinationsBookingStats);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // AUTHENTICATED USER ROUTES
