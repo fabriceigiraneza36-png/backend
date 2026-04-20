@@ -41,27 +41,73 @@ CREATE TRIGGER trg_admin_users_updated
 
 -- 2. Countries
 DROP TABLE IF EXISTS countries CASCADE;
+-- 2. Countries
+DROP TABLE IF EXISTS countries CASCADE;
 CREATE TABLE countries (
   id                 SERIAL PRIMARY KEY,
-  name               VARCHAR(255) NOT NULL,
   slug               VARCHAR(255) UNIQUE NOT NULL,
+  name               VARCHAR(255) NOT NULL,
+  official_name      VARCHAR(255),
+  capital            VARCHAR(255),
+  flag               VARCHAR(10),
+  flag_url           VARCHAR(500),
+  tagline            TEXT,
+  motto              TEXT,
+  demonym            VARCHAR(100),
+  independence_date  DATE,
+  government_type    VARCHAR(100),
+  head_of_state      VARCHAR(255),
+  continent          VARCHAR(100),
+  region             VARCHAR(100),
+  sub_region         VARCHAR(100),
   description        TEXT,
-  short_description  TEXT,
+  full_description   TEXT,
+  additional_info    TEXT,
+  population         BIGINT,
+  area               DECIMAL(12, 2),
+  population_density DECIMAL(8, 2),
+  urban_population   DECIMAL(5, 2),
+  life_expectancy    DECIMAL(4, 1),
+  median_age         DECIMAL(4, 1),
+  literacy_rate      DECIMAL(5, 2),
+  languages          TEXT[],
+  official_languages TEXT[],
+  national_languages TEXT[],
+  ethnic_groups      TEXT[],
+  religions          TEXT[],
+  currency           VARCHAR(100),
+  currency_symbol    VARCHAR(10),
+  timezone           VARCHAR(100),
+  calling_code       VARCHAR(10),
+  internet_tld       VARCHAR(10),
+  driving_side       VARCHAR(20),
+  electrical_plug    VARCHAR(50),
+  voltage            VARCHAR(20),
+  water_safety       VARCHAR(50),
+  climate            TEXT,
+  best_time_to_visit VARCHAR(255),
+  seasons            JSONB DEFAULT '{}'::jsonb,
+  visa_info          TEXT,
+  health_info        TEXT,
+  highlights         TEXT[],
+  experiences        TEXT[],
+  travel_tips        TEXT[],
+  neighboring_countries TEXT[],
+  wildlife           JSONB DEFAULT '{}'::jsonb,
+  cuisine            JSONB DEFAULT '{}'::jsonb,
+  economic_info      JSONB DEFAULT '{}'::jsonb,
+  geography          JSONB DEFAULT '{}'::jsonb,
   image_url          VARCHAR(500),
   cover_image_url    VARCHAR(500),
-  flag_url           VARCHAR(500),
-  continent          VARCHAR(100),
-  capital            VARCHAR(255),
-  currency           VARCHAR(100),
-  language           VARCHAR(255),
-  timezone           VARCHAR(100),
-  best_time_to_visit VARCHAR(255),
-  visa_info          TEXT,
+  hero_image         VARCHAR(500),
+  images             TEXT[],
   latitude           DECIMAL(10, 8),
   longitude          DECIMAL(11, 8),
   is_featured        BOOLEAN DEFAULT false,
   is_active          BOOLEAN DEFAULT true,
+  display_order      INTEGER DEFAULT 0,
   destination_count  INTEGER DEFAULT 0,
+  view_count         INTEGER DEFAULT 0,
   created_at         TIMESTAMP DEFAULT NOW(),
   updated_at         TIMESTAMP DEFAULT NOW()
 );
@@ -70,34 +116,127 @@ CREATE TRIGGER trg_countries_updated
   BEFORE UPDATE ON countries
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
+-- Country Airports
+DROP TABLE IF EXISTS country_airports CASCADE;
+CREATE TABLE country_airports (
+  id              SERIAL PRIMARY KEY,
+  country_id      INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
+  name            VARCHAR(255) NOT NULL,
+  code            VARCHAR(10),
+  location        VARCHAR(255),
+  airport_type    VARCHAR(50) DEFAULT 'international',
+  description     TEXT,
+  is_main_international BOOLEAN DEFAULT false,
+  display_order   INTEGER DEFAULT 0,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Country Festivals
+DROP TABLE IF EXISTS country_festivals CASCADE;
+CREATE TABLE country_festivals (
+  id              SERIAL PRIMARY KEY,
+  country_id      INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
+  name            VARCHAR(255) NOT NULL,
+  period          VARCHAR(100),
+  month           VARCHAR(50),
+  description     TEXT,
+  is_major_event  BOOLEAN DEFAULT false,
+  image_url       VARCHAR(500),
+  display_order   INTEGER DEFAULT 0,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Country UNESCO Sites
+DROP TABLE IF EXISTS country_unesco_sites CASCADE;
+CREATE TABLE country_unesco_sites (
+  id              SERIAL PRIMARY KEY,
+  country_id      INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
+  name            VARCHAR(255) NOT NULL,
+  year_inscribed  INTEGER,
+  site_type       VARCHAR(100),
+  description     TEXT,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Country Historical Events
+DROP TABLE IF EXISTS country_historical_events CASCADE;
+CREATE TABLE country_historical_events (
+  id              SERIAL PRIMARY KEY,
+  country_id      INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
+  year            INTEGER NOT NULL,
+  event           TEXT NOT NULL,
+  event_type      VARCHAR(50) DEFAULT 'historical',
+  is_major        BOOLEAN DEFAULT false,
+  sort_year       INTEGER NOT NULL,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- 3. Destinations (NO PRICES)
+DROP TABLE IF EXISTS destinations CASCADE;
 -- 3. Destinations (NO PRICES)
 DROP TABLE IF EXISTS destinations CASCADE;
 CREATE TABLE destinations (
-  id                SERIAL PRIMARY KEY,
-  country_id        INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
-  name              VARCHAR(255) NOT NULL,
-  slug              VARCHAR(255) UNIQUE NOT NULL,
-  description       TEXT,
-  short_description TEXT,
-  image_url         VARCHAR(500),
-  image_urls        TEXT[] DEFAULT ARRAY[]::TEXT[],
-  cover_image_url   VARCHAR(500),
-  latitude          DECIMAL(10, 8),
-  longitude         DECIMAL(11, 8),
-  category          VARCHAR(100),
-  rating            DECIMAL(3, 2) DEFAULT 0,
-  review_count      INTEGER       DEFAULT 0,
-  duration          VARCHAR(100),
-  difficulty        VARCHAR(50),
-  highlights        TEXT[],
-  included          TEXT[],
-  not_included      TEXT[],
-  best_season       VARCHAR(255),
-  is_featured       BOOLEAN DEFAULT false,
-  is_active         BOOLEAN DEFAULT true,
-  view_count        INTEGER DEFAULT 0,
-  created_at        TIMESTAMP DEFAULT NOW(),
-  updated_at        TIMESTAMP DEFAULT NOW()
+  id                      SERIAL PRIMARY KEY,
+  country_id              INTEGER NOT NULL REFERENCES countries(id) ON DELETE CASCADE,
+  name                    VARCHAR(255) NOT NULL,
+  slug                    VARCHAR(255) UNIQUE NOT NULL,
+  tagline                 TEXT,
+  short_description       TEXT,
+  description             TEXT,
+  overview                TEXT,
+  highlights              TEXT[],
+  activities              TEXT[],
+  wildlife                TEXT[],
+  best_time_to_visit      VARCHAR(255),
+  getting_there           TEXT,
+  what_to_expect          TEXT,
+  local_tips              TEXT,
+  safety_info             TEXT,
+  category                VARCHAR(100),
+  difficulty              VARCHAR(50),
+  destination_type        VARCHAR(50),
+  region                  VARCHAR(100),
+  nearest_city            VARCHAR(255),
+  nearest_airport         VARCHAR(255),
+  distance_from_airport_km DECIMAL(8, 2),
+  address                 TEXT,
+  latitude                DECIMAL(10, 8),
+  longitude               DECIMAL(11, 8),
+  altitude_meters         INTEGER,
+  image_url               VARCHAR(500),
+  image_urls              TEXT[] DEFAULT ARRAY[]::TEXT[],
+  cover_image_url         VARCHAR(500),
+  hero_image              VARCHAR(500),
+  thumbnail_url           VARCHAR(500),
+  video_url               VARCHAR(500),
+  virtual_tour_url        VARCHAR(500),
+  duration_days           INTEGER,
+  duration_nights         INTEGER,
+  duration_display        VARCHAR(100),
+  min_group_size          INTEGER DEFAULT 1,
+  max_group_size          INTEGER,
+  min_age                 INTEGER,
+  fitness_level           VARCHAR(50),
+  rating                  DECIMAL(3, 2) DEFAULT 0,
+  review_count            INTEGER DEFAULT 0,
+  view_count              INTEGER DEFAULT 0,
+  booking_count           INTEGER DEFAULT 0,
+  wishlist_count          INTEGER DEFAULT 0,
+  entrance_fee            VARCHAR(100),
+  operating_hours         TEXT,
+  is_sold_out             BOOLEAN DEFAULT false,
+  status                  VARCHAR(50) DEFAULT 'draft',
+  is_featured             BOOLEAN DEFAULT false,
+  is_popular              BOOLEAN DEFAULT false,
+  is_new                  BOOLEAN DEFAULT false,
+  is_eco_friendly         BOOLEAN DEFAULT false,
+  is_family_friendly      BOOLEAN DEFAULT false,
+  meta_title              VARCHAR(255),
+  meta_description        TEXT,
+  published_at            TIMESTAMP,
+  is_active               BOOLEAN DEFAULT true,
+  created_at              TIMESTAMP DEFAULT NOW(),
+  updated_at              TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TRIGGER trg_destinations_updated
@@ -114,6 +253,67 @@ CREATE TABLE destination_images (
   caption         VARCHAR(255),
   is_primary      BOOLEAN DEFAULT false,
   sort_order      INTEGER DEFAULT 0,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Destination Itineraries
+DROP TABLE IF EXISTS destination_itineraries CASCADE;
+CREATE TABLE destination_itineraries (
+  id              SERIAL PRIMARY KEY,
+  destination_id  INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+  day_number      INTEGER NOT NULL,
+  title           VARCHAR(255) NOT NULL,
+  description     TEXT,
+  activities      TEXT[],
+  meals           TEXT[],
+  accommodation   VARCHAR(255),
+  image_url       VARCHAR(500),
+  is_active       BOOLEAN DEFAULT true,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Destination FAQs
+DROP TABLE IF EXISTS destination_faqs CASCADE;
+CREATE TABLE destination_faqs (
+  id              SERIAL PRIMARY KEY,
+  destination_id  INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+  question        TEXT NOT NULL,
+  answer          TEXT NOT NULL,
+  category        VARCHAR(100),
+  sort_order      INTEGER DEFAULT 0,
+  is_active       BOOLEAN DEFAULT true,
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Destination Reviews
+DROP TABLE IF EXISTS destination_reviews CASCADE;
+CREATE TABLE destination_reviews (
+  id              SERIAL PRIMARY KEY,
+  destination_id  INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+  reviewer_name   VARCHAR(255) NOT NULL,
+  reviewer_country VARCHAR(100),
+  reviewer_avatar VARCHAR(500),
+  title           VARCHAR(255),
+  content         TEXT NOT NULL,
+  overall_rating  DECIMAL(3, 2) NOT NULL,
+  trip_date       DATE,
+  trip_type       VARCHAR(50),
+  images          TEXT[],
+  is_verified     BOOLEAN DEFAULT false,
+  is_featured     BOOLEAN DEFAULT false,
+  helpful_count   INTEGER DEFAULT 0,
+  status          VARCHAR(20) DEFAULT 'pending',
+  created_at      TIMESTAMP DEFAULT NOW()
+);
+
+-- Destination Tags
+DROP TABLE IF EXISTS destination_tags CASCADE;
+CREATE TABLE destination_tags (
+  id              SERIAL PRIMARY KEY,
+  destination_id  INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+  tag_name        VARCHAR(100) NOT NULL,
+  tag_slug        VARCHAR(100) NOT NULL,
+  tag_category    VARCHAR(50),
   created_at      TIMESTAMP DEFAULT NOW()
 );
 
@@ -207,19 +407,36 @@ CREATE TRIGGER trg_services_updated
 -- 8. Team Members
 DROP TABLE IF EXISTS team_members CASCADE;
 CREATE TABLE team_members (
-  id           SERIAL PRIMARY KEY,
-  name         VARCHAR(255) NOT NULL,
-  role         VARCHAR(255),
-  bio          TEXT,
-  image_url    VARCHAR(500),
-  email        VARCHAR(255),
-  phone        VARCHAR(50),
-  whatsapp     VARCHAR(50),
-  social_links JSONB DEFAULT '{}',
-  sort_order   INTEGER DEFAULT 0,
-  is_active    BOOLEAN DEFAULT true,
-  created_at   TIMESTAMP DEFAULT NOW(),
-  updated_at   TIMESTAMP DEFAULT NOW()
+  id               SERIAL PRIMARY KEY,
+  name             VARCHAR(255) NOT NULL,
+  slug             VARCHAR(255) UNIQUE,
+  role             VARCHAR(255),
+  department       VARCHAR(100),
+  bio              TEXT,
+  image_url        VARCHAR(500),
+  image_public_id  VARCHAR(255),
+  email            VARCHAR(255) UNIQUE,
+  phone            VARCHAR(50),
+  whatsapp         VARCHAR(50),
+  linkedin_url     VARCHAR(255),
+  twitter_url      VARCHAR(255),
+  instagram_url    VARCHAR(255),
+  website_url      VARCHAR(255),
+  expertise        JSONB DEFAULT '[]'::JSONB,
+  languages        JSONB DEFAULT '[]'::JSONB,
+  certifications   JSONB DEFAULT '[]'::JSONB,
+  years_experience INTEGER DEFAULT 0,
+  location         VARCHAR(200),
+  country          VARCHAR(100),
+  display_order    INTEGER DEFAULT 0,
+  is_featured      BOOLEAN DEFAULT false,
+  show_on_homepage BOOLEAN DEFAULT false,
+  is_active        BOOLEAN DEFAULT true,
+  meta_title       VARCHAR(255),
+  meta_description VARCHAR(500),
+  joined_date      DATE,
+  created_at       TIMESTAMP DEFAULT NOW(),
+  updated_at       TIMESTAMP DEFAULT NOW()
 );
 
 CREATE TRIGGER trg_team_members_updated
@@ -503,10 +720,7 @@ CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_google ON users(google_id) WHERE google_id IS NOT NULL;
 CREATE INDEX idx_users_github ON users(github_id) WHERE github_id IS NOT NULL;
 
--- User sessions f
-
-
-or tracking
+-- User sessions for tracking
 DROP TABLE IF EXISTS user_sessions CASCADE;
 CREATE TABLE user_sessions (
   id            SERIAL PRIMARY KEY,
@@ -650,7 +864,7 @@ VALUES
     'Visionary entrepreneur leading Altuvera''s mission to deliver transformative travel experiences across East Africa through the "True Adventures In High Places & Deep Culture" philosophy.',
     'fabrice@altuvera.com',
     'https://randomuser.me/api/portraits/men/32.jpg',
-    ARRAY['Strategic Planning', 'Tourism Innovation', 'Partnership Development', 'Business Leadership'],
+    to_jsonb(ARRAY['Strategic Planning', 'Tourism Innovation', 'Partnership Development', 'Business Leadership']),
     'Kigali',
     'Rwanda',
     TRUE,
@@ -665,7 +879,7 @@ VALUES
     'Ensures seamless coordination of every itinerary with precision, local expertise, and meticulous attention to detail across all operational touchpoints.',
     'grace@altuvera.com',
     'https://randomuser.me/api/portraits/women/44.jpg',
-    ARRAY['Logistics Management', 'Quality Assurance', 'Team Coordination', 'Process Optimization'],
+    to_jsonb(ARRAY['Logistics Management', 'Quality Assurance', 'Team Coordination', 'Process Optimization']),
     'Nairobi',
     'Kenya',
     FALSE,
@@ -680,7 +894,7 @@ VALUES
     'Expert wildlife guide combining extensive field knowledge with exceptional safety standards for unforgettable safari expeditions.',
     'jean@altuvera.com',
     'https://randomuser.me/api/portraits/men/67.jpg',
-    ARRAY['Wildlife Tracking', 'Bird Identification', 'Conservation Education', 'First Aid'],
+    to_jsonb(ARRAY['Wildlife Tracking', 'Bird Identification', 'Conservation Education', 'First Aid']),
     'Serengeti',
     'Tanzania',
     TRUE,
@@ -695,7 +909,7 @@ VALUES
     'Designs guest-first service experiences from initial inquiry through post-trip follow-up and comprehensive feedback collection.',
     'diane@altuvera.com',
     'https://randomuser.me/api/portraits/women/28.jpg',
-    ARRAY['Client Relations', 'Service Design', 'Feedback Analysis', 'Communication'],
+    to_jsonb(ARRAY['Client Relations', 'Service Design', 'Feedback Analysis', 'Communication']),
     'Kampala',
     'Uganda',
     FALSE,
@@ -710,7 +924,7 @@ VALUES
     'Manages partnerships with wildlife conservancies and oversees community development initiatives across the East African region.',
     'patrick@altuvera.com',
     'https://randomuser.me/api/portraits/men/52.jpg',
-    ARRAY['Conservation Strategy', 'Community Engagement', 'Sustainability', 'Partnership Management'],
+    to_jsonb(ARRAY['Conservation Strategy', 'Community Engagement', 'Sustainability', 'Partnership Management']),
     'Bwindi',
     'Uganda',
     FALSE,
@@ -725,7 +939,7 @@ VALUES
     'Leads brand strategy and digital marketing initiatives to connect global travelers with authentic African experiences.',
     'claudine@altuvera.com',
     'https://randomuser.me/api/portraits/women/65.jpg',
-    ARRAY['Digital Marketing', 'Brand Strategy', 'Content Creation', 'Social Media'],
+    to_jsonb(ARRAY['Digital Marketing', 'Brand Strategy', 'Content Creation', 'Social Media']),
     'Kigali',
     'Rwanda',
     FALSE,

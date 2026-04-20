@@ -8,5 +8,6 @@
             "approve": true,
             "matchCommandLine": true
         }
-    }
+    },
+    "github.copilot.chat.agent.autoFix": true
 }

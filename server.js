@@ -17,7 +17,7 @@ const cors = require("cors");
 const helmet = require("helmet");
 const morgan = require("morgan");
 const compression = require("compression");
-const { query } = require("./config/db");
+const { query, ensureContactSchema } = require("./config/db");
 const logger = require("./utils/logger");
 const swaggerUi = require("swagger-ui-express");
 const shutdown = require("./utils/shutdown");
@@ -403,6 +403,10 @@ async function initializeServer() {
     logger.info("🔄 Testing database connection...");
     await query("SELECT NOW()");
     logger.info("✅ Database connection established");
+
+    // Ensure contact messaging schema exists before serving traffic
+    await ensureContactSchema();
+    logger.info("✅ Contact messaging schema ensured");
 
     // Start server
     const server = app.listen(PORT, () => {
