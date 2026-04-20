@@ -177,6 +177,7 @@ const sanitizeUser = (row) => {
   return {
     id: safe.id,
     email: safe.email,
+    username: safe.username,
     fullName: safe.full_name,
     full_name: safe.full_name,
     name: safe.full_name,
@@ -543,7 +544,7 @@ exports.githubAuth = async (req, res) => {
       body: JSON.stringify({ client_id: process.env.GITHUB_CLIENT_ID, client_secret: process.env.GITHUB_CLIENT_SECRET, code }),
     }, "GitHub token exchange");
 
-    if (!tokenData.access_token) return res.status(401).json({ success: false, message: "GitHub token exchange failed." });
+    if (!tokenData.access_token) return res.status(401).json({ success: false, message: "GitHub did not return an access token." });
 
     const ghHeaders = { Authorization: `Bearer ${tokenData.access_token}`, Accept: "application/vnd.github.v3+json", "User-Agent": APP_NAME };
     const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
@@ -572,7 +573,7 @@ exports.githubAuth = async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 
 exports.getMe = async (req, res) => {
-  res.json({ success: true, data: { user: sanitizeUser(req.user) } });
+  res.json({ success: true, data: sanitizeUser(req.user) });
 };
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -641,10 +642,103 @@ exports.refreshToken = async (req, res) => {
 // 🚪 LOGOUT
 // ═════════════════════════════════════════════════════════════════════════════
 
+exports.adminLogin = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    const normalizedEmail = (email || "").trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
+      return res.status(400).json({ success: false, message: "Email and password are required." });
+    }
+
+    const result = await query("SELECT * FROM admin_users WHERE email = $1", [normalizedEmail]);
+    if (result.rows.length === 0) {
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
+    }
+
+    const admin = result.rows[0];
+    if (!admin.is_active) {
+      return res.status(401).json({ success: false, message: "Account deactivated." });
+    }
+
+    const isMatch = await bcrypt.compare(password, admin.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
+    }
+
+    await query("UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id]);
+    admin.last_login = new Date();
+
+    res.json({
+      success: true,
+      data: {
+        token: generateToken(admin, "admin"),
+        refreshToken: generateRefreshToken(admin, "admin"),
+        user: sanitizeUser(admin),
+      },
+    });
+  } catch (err) {
+    handleError(res, err, "Admin login failed");
+  }
+};
+
+exports.adminRegister = async (req, res) => {
+  try {
+    const { email, username, password, full_name, fullName, role } = req.body;
+    const normalizedEmail = (email || "").trim().toLowerCase();
+    const normalizedUsername = (username || "").trim();
+    const resolvedName = full_name || fullName || null;
+
+    if (!normalizedEmail || !normalizedUsername || !password) {
+      return res.status(400).json({ success: false, message: "Email, username, and password are required." });
+    }
+
+    const existing = await query("SELECT id FROM admin_users WHERE email = $1 OR username = $2", [normalizedEmail, normalizedUsername]);
+    if (existing.rows.length > 0) {
+      return res.status(409).json({ success: false, message: "Admin account already exists." });
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+    const created = await query(
+      `INSERT INTO admin_users (email, username, password_hash, full_name, role, is_active)
+       VALUES ($1, $2, $3, $4, $5, true) RETURNING *`,
+      [normalizedEmail, normalizedUsername, passwordHash, resolvedName, role || "admin"]
+    );
+
+    res.status(201).json({ success: true, data: { user: sanitizeUser(created.rows[0]) } });
+  } catch (err) {
+    handleError(res, err, "Admin registration failed");
+  }
+};
+
+exports.changePassword = async (req, res) => {
+  try {
+    const { oldPassword, newPassword } = req.body;
+    const user = req.user;
+
+    if (!oldPassword || !newPassword) {
+      return res.status(400).json({ success: false, message: "Old and new password are required." });
+    }
+
+    const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
+    if (!isMatch) {
+      return res.status(401).json({ success: false, message: "Current password is incorrect." });
+    }
+
+    const newHash = await bcrypt.hash(newPassword, 12);
+    await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [newHash, user.id]);
+
+    res.json({ success: true, message: "Password updated successfully." });
+  } catch (err) {
+    handleError(res, err, "Change password failed");
+  }
+};
+
 exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
-      await query("UPDATE users SET token_version = COALESCE(token_version,0)+1 WHERE id=$1", [req.user.id]);
+      const table = req.userType === "admin" ? "admin_users" : "users";
+      await query(`UPDATE ${table} SET token_version = COALESCE(token_version,0)+1 WHERE id=$1`, [req.user.id]);
     }
     res.json({ success: true, message: "Signed out." });
   } catch (err) {
@@ -659,6 +753,7 @@ exports.logout = async (req, res) => {
 exports.deleteAccount = async (req, res) => {
   try {
     const { id, email, full_name } = req.user;
+    const table = req.userType === "admin" ? "admin_users" : "users";
 
     if (email) {
       sendEmail({ to: email, subject: `Account Deleted — ${APP_NAME}`,
@@ -666,7 +761,7 @@ exports.deleteAccount = async (req, res) => {
       }).catch(() => {});
     }
 
-    await query("DELETE FROM users WHERE id=$1", [id]);
+    await query(`DELETE FROM ${table} WHERE id=$1`, [id]);
     res.json({ success: true, message: "Account deleted." });
   } catch (err) { handleError(res, err, "Deletion failed"); }
 };

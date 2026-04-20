@@ -4,7 +4,12 @@ exports.cacheMiddleware = (duration) => {
       return next();
     }
 
-    res.set("Cache-Control", `public, max-age=${duration}`);
+    if (req.headers.authorization) {
+      res.set("Cache-Control", "no-store");
+    } else {
+      res.set("Cache-Control", `public, max-age=${duration}`);
+    }
+
     next();
   };
 };

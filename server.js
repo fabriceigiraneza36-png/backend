@@ -41,6 +41,9 @@ const tipsRouter = require("./routes/tips");
 const virtualToursRouter = require("./routes/virtualTours");
 const subscribersRouter = require("./routes/subscribers");
 const settingsRouter = require("./routes/settings");
+const messageRouter = require("./routes/message");
+const pagesRouter = require("./routes/pages");
+const uploadsRouter = require("./routes/uploads");
 
 // Social auth routes
 const adminAuthRouter = require("./routes/adminAuth");
@@ -114,6 +117,7 @@ app.use(compression());
 // Body parsing
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: true, limit: "10mb" }));
+app.use(cacheMiddleware(120));
 
 // Static files
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
@@ -249,6 +253,18 @@ logger.info("📋 Mounted: /api/virtual-tours");
 // Subscribers
 app.use("/api/subscribers", subscribersRouter);
 logger.info("📋 Mounted: /api/subscribers");
+
+// Pages
+app.use("/api/pages", pagesRouter);
+logger.info("📋 Mounted: /api/pages");
+
+// Message alias for contact
+app.use("/api/message", messageRouter);
+logger.info("📋 Mounted: /api/message");
+
+// Uploads
+app.use("/api/uploads", uploadsRouter);
+logger.info("📋 Mounted: /api/uploads");
 
 // Settings
 app.use("/api/settings", settingsRouter);

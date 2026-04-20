@@ -41,7 +41,7 @@ const adminOnly = (req, res, next) => {
   if (!req.user) return res.status(401).json({ success: false, message: "Authentication required." });
   const role = req.user.role || "";
   if (req.userType === "admin" || role === "admin" || role === "super_admin") return next();
-  return res.status(403).json({ success: false, message: "Admin access required." });
+  return res.status(403).json({ success: false, message: "Admin privileges required." });
 };
 
 const optionalAuth = async (req, res, next) => {
