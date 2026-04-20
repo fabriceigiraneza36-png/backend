@@ -4,7 +4,7 @@
 const express = require("express");
 const router = express.Router();
 const destinationRatingsController = require("../controllers/destinationRatingsController");
-const { protect, admin } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:destinationId/ratings", destinationRatingsController.getRatings);
@@ -17,6 +17,6 @@ router.post("/:destinationId/ratings", protect, destinationRatingsController.cre
 router.delete("/:destinationId/ratings/:ratingId", protect, destinationRatingsController.deleteRating);
 
 // Admin routes
-router.patch("/:destinationId/ratings/:ratingId/approve", admin, destinationRatingsController.approveRating);
+router.patch("/:destinationId/ratings/:ratingId/approve", adminOnly, destinationRatingsController.approveRating);
 
 module.exports = router;

@@ -4,7 +4,7 @@
 const express = require("express");
 const router = express.Router();
 const destinationLikesController = require("../controllers/destinationLikesController");
-const { protect, admin } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:destinationId/likes", destinationLikesController.getLikes);

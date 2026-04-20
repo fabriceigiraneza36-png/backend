@@ -4,7 +4,7 @@
 const express = require("express");
 const router = express.Router();
 const countryCommentsController = require("../controllers/countryCommentsController");
-const { protect, admin } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:countryId/comments", countryCommentsController.getComments);
@@ -17,6 +17,6 @@ router.put("/:countryId/comments/:commentId", protect, countryCommentsController
 router.delete("/:countryId/comments/:commentId", protect, countryCommentsController.deleteComment);
 
 // Admin routes
-router.patch("/:countryId/comments/:commentId/approve", admin, countryCommentsController.approveComment);
+router.patch("/:countryId/comments/:commentId/approve", adminOnly, countryCommentsController.approveComment);
 
 module.exports = router;

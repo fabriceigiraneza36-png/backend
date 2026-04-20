@@ -4,7 +4,7 @@
 const express = require("express");
 const router = express.Router();
 const countryLikesController = require("../controllers/countryLikesController");
-const { protect, admin } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:countryId/likes", countryLikesController.getLikes);

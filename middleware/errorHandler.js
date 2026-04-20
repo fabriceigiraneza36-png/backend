@@ -69,4 +69,4 @@ const errorHandler = (err, req, res, next) => {
   res.status(statusCode).json(response);
 };
 
-module.exports = { AppError, notFound, errorHandler };
+module.exports = { AppError, notFound, notFoundHandler: notFound, errorHandler };
