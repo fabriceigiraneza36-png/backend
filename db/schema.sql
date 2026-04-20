@@ -292,17 +292,82 @@ CREATE TRIGGER trg_faqs_updated
 -- 12. Contact Messages
 DROP TABLE IF EXISTS contact_messages CASCADE;
 CREATE TABLE contact_messages (
-  id         SERIAL PRIMARY KEY,
-  full_name  VARCHAR(255) NOT NULL,
-  email      VARCHAR(255) NOT NULL,
-  phone      VARCHAR(50),
-  whatsapp   VARCHAR(50),
-  subject    VARCHAR(255),
-  message    TEXT NOT NULL,
-  is_read    BOOLEAN   DEFAULT false,
-  replied_at TIMESTAMP,
-  created_at TIMESTAMP DEFAULT NOW()
+  id                  SERIAL PRIMARY KEY,
+  full_name           VARCHAR(255) NOT NULL,
+  email               VARCHAR(255) NOT NULL,
+  phone               VARCHAR(50),
+  whatsapp            VARCHAR(50),
+  subject             VARCHAR(255),
+  message             TEXT NOT NULL,
+  
+  -- Trip details
+  trip_type           VARCHAR(100),
+  travel_date         DATE,
+  number_of_travelers INTEGER,
+  
+  -- Metadata
+  source              VARCHAR(100) DEFAULT 'website',
+  ip_address          VARCHAR(50),
+  user_agent          TEXT,
+  referrer_url        TEXT,
+  
+  -- Status & Categorization
+  status              VARCHAR(20)  DEFAULT 'new', -- new, read, replied, archived, spam
+  is_read             BOOLEAN      DEFAULT false,
+  is_starred          BOOLEAN      DEFAULT false,
+  priority            VARCHAR(20)  DEFAULT 'normal', -- low, normal, high, urgent
+  
+  -- Assignment & Response
+  assigned_to         INTEGER, -- References admin_users(id)
+  assigned_at         TIMESTAMP,
+  responded_at        TIMESTAMP,
+  response_notes      TEXT,
+  
+  -- Tags (PostgreSQL array type)
+  tags                TEXT[]       DEFAULT ARRAY[]::TEXT[],
+  
+  -- Timestamps
+  read_at             TIMESTAMP,
+  archived_at         TIMESTAMP,
+  created_at          TIMESTAMP    DEFAULT NOW(),
+  updated_at          TIMESTAMP    DEFAULT NOW()
 );
+
+CREATE TRIGGER trg_contact_messages_updated
+  BEFORE UPDATE ON contact_messages
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
+
+-- 12b. Contact Message Replies
+DROP TABLE IF EXISTS contact_replies CASCADE;
+CREATE TABLE contact_replies (
+  id            SERIAL PRIMARY KEY,
+  message_id    INTEGER NOT NULL REFERENCES contact_messages(id) ON DELETE CASCADE,
+  subject       VARCHAR(255),
+  body          TEXT NOT NULL,
+  sent_by       INTEGER REFERENCES admin_users(id) ON DELETE SET NULL,
+  sent_by_name  VARCHAR(255),
+  sent_by_email VARCHAR(255),
+  status        VARCHAR(50) DEFAULT 'sent',
+  sent_at       TIMESTAMP DEFAULT NOW(),
+  created_at    TIMESTAMP DEFAULT NOW()
+);
+
+-- 12c. Contact Statistics View
+CREATE OR REPLACE VIEW v_contact_stats AS
+SELECT
+  COUNT(*) AS total_messages,
+  COUNT(*) FILTER (WHERE status = 'new') AS new_messages,
+  COUNT(*) FILTER (WHERE is_read = false) AS unread_messages,
+  COUNT(*) FILTER (WHERE status = 'replied') AS replied_messages,
+  COUNT(*) FILTER (WHERE status = 'archived') AS archived_messages,
+  COUNT(*) FILTER (WHERE status = 'spam') AS spam_messages,
+  COUNT(*) FILTER (WHERE priority = 'urgent') AS urgent_messages,
+  COUNT(*) FILTER (WHERE priority = 'high') AS high_priority_messages,
+  COUNT(*) FILTER (WHERE is_starred = true) AS starred_messages,
+  COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE) AS today_messages,
+  COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days') AS week_messages,
+  COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') AS month_messages
+FROM contact_messages;
 
 -- 13. Pages
 DROP TABLE IF EXISTS pages CASCADE;

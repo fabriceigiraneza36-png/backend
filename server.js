@@ -19,7 +19,7 @@ const morgan = require("morgan");
 const compression = require("compression");
 const { query } = require("./config/db");
 const logger = require("./utils/logger");
-const routeManager = require("./utils/routeManager");
+const swaggerUi = require("swagger-ui-express");
 const shutdown = require("./utils/shutdown");
 const AppError = require("./utils/AppError");
 
@@ -75,7 +75,112 @@ const NODE_ENV = process.env.NODE_ENV || "development";
 
 // Trust proxy (for rate limiting behind reverse proxy)
 app.set("trust proxy", 1);
+const cleanRoutePath = (path) => {
+  if (!path) return "";
+  return path
+    .replace(/\\/g, "")
+    .replace(/\/+$/, "")
+    .replace(/\/\//g, "/")
+    .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, ":param")
+    .replace(/\(\[\^\\\/\]\+\?\)/g, ":param")
+    .replace(/\^/, "")
+    .replace(/\$\/i$/, "")
+    .replace(/\$$/, "")
+    .replace(/\(\?=\/\|\$\)/g, "");
+};
 
+const collectRoutes = (stack, prefix = "") => {
+  const routes = [];
+
+  stack.forEach((layer) => {
+    if (layer.route && layer.route.path) {
+      const routePath = cleanRoutePath(prefix + layer.route.path);
+      const methods = Object.keys(layer.route.methods).map((method) => method.toUpperCase());
+
+      methods.forEach((method) => {
+        routes.push({
+          method,
+          path: routePath || "/",
+          auth: "public",
+          category: "general",
+          description: layer.route.stack?.[0]?.name || `${method} ${routePath}`
+        });
+      });
+    } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
+      const nestedPrefix = cleanRoutePath(layer.regexp?.source ? layer.regexp.source : "");
+      routes.push(...collectRoutes(layer.handle.stack, prefix + nestedPrefix));
+    }
+  });
+
+  return routes;
+};
+
+const generateApiDocs = () => {
+  const routes = collectRoutes(app._router.stack).map((route) => ({
+    method: route.method,
+    path: route.path,
+    auth: route.auth,
+    category: route.category,
+    description: route.description
+  }));
+
+  const docs = {
+    total: routes.length,
+    byMethod: {},
+    byCategory: {},
+    byAuth: { public: [], protected: [], admin: [] },
+    routes
+  };
+
+  routes.forEach((route) => {
+    docs.byMethod[route.method] = (docs.byMethod[route.method] || 0) + 1;
+    docs.byCategory[route.category] = (docs.byCategory[route.category] || 0) + 1;
+    docs.byAuth[route.auth] = docs.byAuth[route.auth] || [];
+    docs.byAuth[route.auth].push(`${route.method} ${route.path}`);
+  });
+
+  return docs;
+};
+
+const buildOpenApiSpec = () => {
+  const docs = generateApiDocs();
+  const paths = {};
+
+  docs.routes.forEach((route) => {
+    paths[route.path] = paths[route.path] || {};
+    paths[route.path][route.method.toLowerCase()] = {
+      summary: route.description,
+      tags: [route.category],
+      responses: {
+        "200": { description: "Successful response" },
+        "400": { description: "Bad request" },
+        "401": { description: "Authentication required" },
+        "404": { description: "Resource not found" }
+      },
+      security: route.auth === "public" ? [] : [{ bearerAuth: [] }]
+    };
+  });
+
+  return {
+    openapi: "3.0.1",
+    info: {
+      title: "Altuvera Travel API",
+      version: "6.0",
+      description: "Interactive API documentation for the Altuvera Travel backend"
+    },
+    servers: [{ url: process.env.BACKEND_URL || `http://localhost:${PORT}` }],
+    components: {
+      securitySchemes: {
+        bearerAuth: {
+          type: "http",
+          scheme: "bearer",
+          bearerFormat: "JWT"
+        }
+      }
+    },
+    paths
+  };
+};
 // ═══════════════════════════════════════════════════════════════════════════════
 // GLOBAL MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -170,13 +275,13 @@ app.get("/api", (req, res) => {
 
 // API Routes list
 app.get("/api/routes", (req, res) => {
-  const docs = routeManager.generateDocs();
+  const docs = generateApiDocs();
   res.json({
     success: true,
     total: docs.total,
     byMethod: docs.byMethod,
     byCategory: docs.byCategory,
-    routes: docs.routes.map(r => ({
+    routes: docs.routes.map((r) => ({
       method: r.method,
       path: r.path,
       auth: r.auth,
@@ -274,7 +379,11 @@ logger.info("📋 Mounted: /api/settings");
 app.use("/api/admin/auth", adminAuthRouter);
 logger.info("📋 Mounted: /api/admin/auth");
 
-// ═══════════════════════════════════════════════════════════════════════════════
+const swaggerSpec = buildOpenApiSpec();
+app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+app.get("/api/docs/openapi.json", (req, res) => res.json(buildOpenApiSpec()));
+
+// ═══════════════════════════════════════════════════════════════════════
 // GLOBAL ERROR HANDLING
 // ═══════════════════════════════════════════════════════════════════════════════
 

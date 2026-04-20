@@ -71,6 +71,21 @@ const virtualToursData = [
   { title: "Victoria Falls Rainbow Experience", slug: "victoria-falls-rainbow", description: "Feel the thunder of one of the world's greatest waterfalls. Experience the spray, the rainbows, and the raw power of nature.", destination_id: null, video_url: "https://www.youtube.com/embed/example5", thumbnail_url: "https://images.unsplash.com/photo-1568430462989-44163eb1752f?w=800", duration: "6:20", view_count: 11200, is_featured: false, is_active: true, sort_order: 5 }
 ];
 
+const contactData = [
+  {
+    full_name: "John Doe",
+    email: "john.doe@example.com",
+    phone: "+1234567890",
+    subject: "Inquiry about Gorilla Trekking",
+    message: "Hello, I'm interested in booking a gorilla trekking tour in Rwanda. Could you please provide more information about the available dates, pricing, and what is included in the package? I have 2 adults and 1 child (12 years old). Looking forward to your response.",
+    trip_type: "gorilla-trekking",
+    travel_date: "2024-08-15",
+    number_of_travelers: 3,
+    source: "website",
+    priority: "normal"
+  }
+];
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SEED FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -158,6 +173,37 @@ async function seedVirtualTours() {
   console.log("✅ Virtual Tours seeded successfully!");
 }
 
+async function seedContacts() {
+  console.log("📞 Seeding Test Contact Messages...");
+  for (const contact of contactData) {
+    try {
+      await query(
+        `INSERT INTO contact_messages (
+          full_name, email, phone, subject, message,
+          trip_type, travel_date, number_of_travelers,
+          source, priority
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ON CONFLICT DO NOTHING`,
+        [
+          contact.full_name,
+          contact.email,
+          contact.phone,
+          contact.subject,
+          contact.message,
+          contact.trip_type,
+          contact.travel_date,
+          contact.number_of_travelers,
+          contact.source,
+          contact.priority
+        ]
+      );
+    } catch (err) {
+      console.log(`  ⚠ Contact exists or error: ${contact.full_name}`);
+    }
+  }
+  console.log("✅ Test Contact Messages seeded successfully!");
+}
+
 async function seedSiteSettings() {
   console.log("⚙️ Seeding Site Settings...");
   const settings = [
@@ -199,6 +245,7 @@ async function main() {
     await seedServices();
     await seedTips();
     await seedVirtualTours();
+    await seedContacts();
     await seedSiteSettings();
     
     console.log("\n🎉 All public data seeded successfully!");
@@ -207,6 +254,7 @@ async function main() {
     console.log(`   - ${servicesData.length} Services`);
     console.log(`   - ${tipsData.length} Travel Tips`);
     console.log(`   - ${virtualToursData.length} Virtual Tours`);
+    console.log(`   - ${contactData.length} Test Contact Messages`);
     console.log(`   - ${8} Site Settings`);
     
     process.exit(0);
