@@ -607,7 +607,7 @@ This comprehensive document describes the complete admin backend API surface for
 #### `POST /api/destinations`
 - **Description:** Create new destination
 - **Auth:** Admin required
-- **Body:** `{ title, slug, description, country_id, category, price, duration, status, is_featured, is_popular }`
+- **Body:** `{ title, slug, description, country_id, category, duration, status, is_featured, is_popular }`
 - **Upload:** `multipart/form-data` with `image`
 - **Response:** Created destination
 
@@ -1897,7 +1897,7 @@ Base: `/api/destinations`
 
 - `POST /api/destinations`
   - Description: Create a destination.
-  - Body: destination fields such as `title`, `slug`, `description`, `country_id`, `price`, `status`.
+  - Body: destination fields such as `title`, `slug`, `description`, `country_id`, `status`.
   - Upload: `multipart/form-data` with `image`.
 
 - `PUT /api/destinations/:id`

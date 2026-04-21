@@ -1836,10 +1836,10 @@ exports.create = async (req, res, next) => {
 /**
  * PUT /api/destinations/:id
  */
-exports.update = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const data = req.body;
+  exports.update = async (req, res, next) => {
+	  try {
+	    const { id } = req.params;
+	    const data = req.body;
 
     // Check exists
     const existing = await query("SELECT * FROM destinations WHERE id = $1", [id]);
@@ -1847,13 +1847,17 @@ exports.update = async (req, res, next) => {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
-    const current = existing.rows[0];
-    const fields = { ...data };
+	    const current = existing.rows[0];
+	    const fields = { ...data };
+	    // Destinations must be price-less; ignore any incoming price fields.
+	    // This also avoids "column does not exist" errors on older schemas.
+	    delete fields.price;
+	    delete fields.prices;
 
-    // Name change -> new slug
-    if (fields.name && fields.name !== current.name) {
-      fields.slug = await createUniqueSlug(fields.name, id);
-    }
+	    // Name change -> new slug
+	    if (fields.name && fields.name !== current.name) {
+	      fields.slug = await createUniqueSlug(fields.name, id);
+	    }
 
     // Country change
     if (fields.country_id && fields.country_id !== current.country_id) {

@@ -409,30 +409,34 @@ exports.getDestinations = async (req, res, next) => {
     );
 
     params.push(pagination.limit, pagination.offset);
-    const result = await query(
-      `SELECT d.* FROM destinations d ${where}
-       ORDER BY d.is_featured DESC, d.rating DESC, d.name ASC
-       LIMIT $${idx++} OFFSET $${idx}`,
-      params
-    );
+	    const result = await query(
+	      `SELECT d.* FROM destinations d ${where}
+	       ORDER BY d.is_featured DESC, d.rating DESC, d.name ASC
+	       LIMIT $${idx++} OFFSET $${idx}`,
+	      params
+	    );
 
-    res.json({
-      data: result.rows.map((r) => ({
-        ...r,
-        countryId: country.slug || String(country.id),
-        countryName: country.name,
-        mapPosition: { lat: toNumber(r.latitude), lng: toNumber(r.longitude) },
-        highlights: r.highlights || [],
-        activities: r.activities || [],
-        images: r.images || [],
-      })),
-      pagination,
-      country: { id: country.id, slug: country.slug, name: country.name },
-    });
-  } catch (err) {
-    next(err);
-  }
-};
+	    res.json({
+	      data: result.rows.map((r) => {
+	        // Destinations are price-less; ensure any legacy `price` column never leaks.
+	        const { price, ...rest } = r || {};
+	        return {
+	          ...rest,
+	          countryId: country.slug || String(country.id),
+	          countryName: country.name,
+	          mapPosition: { lat: toNumber(r?.latitude), lng: toNumber(r?.longitude) },
+	          highlights: r?.highlights || [],
+	          activities: r?.activities || [],
+	          images: r?.images || [],
+	        };
+	      }),
+	      pagination,
+	      country: { id: country.id, slug: country.slug, name: country.name },
+	    });
+	  } catch (err) {
+	    next(err);
+	  }
+	};
 
 /* ── ADMIN CRUD ──────────────────────────────────── */
 

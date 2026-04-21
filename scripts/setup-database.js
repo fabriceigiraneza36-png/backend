@@ -38,17 +38,17 @@ async function setupDatabase() {
     await sequelize.authenticate();
     console.log("✅ Connected!");
 
-    const schemaFile = path.join(__dirname, "..", "db", "schema.sql");
-    if (fs.existsSync(schemaFile)) {
-      console.log("\n📄 Found db/schema.sql — applying full schema (this will recreate tables)...");
-      const sql = fs.readFileSync(schemaFile, "utf8");
-      await sequelize.query(sql);
-      console.log("✅ Full schema applied from db/schema.sql");
-    } else {
-      console.log("\n📊 Creating tables...");
+	    const schemaFile = path.join(__dirname, "..", "db", "schema.sql");
+	    if (fs.existsSync(schemaFile)) {
+	      console.log("\n📄 Found db/schema.sql — applying full schema (this will recreate tables)...");
+	      const sql = fs.readFileSync(schemaFile, "utf8");
+	      await sequelize.query(sql);
+	      console.log("✅ Full schema applied from db/schema.sql");
+	    } else {
+	      console.log("\n📊 Creating tables...");
 
-      // (fallback) previous manual table creation will be executed below
-    }
+	      // (fallback) previous manual table creation will be executed below
+	    }
     
     // Users table
     await sequelize.query(`
@@ -89,23 +89,22 @@ async function setupDatabase() {
     console.log("✅ Countries table created");
 
     // Destinations table
-    await sequelize.query(`
-      CREATE TABLE IF NOT EXISTS destinations (
-        id SERIAL PRIMARY KEY,
-        country_id INTEGER REFERENCES countries(id) ON DELETE CASCADE,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        images JSONB DEFAULT '[]',
-        price DECIMAL(10, 2),
-        duration VARCHAR(100),
-        rating DECIMAL(3, 2) DEFAULT 0,
-        reviews_count INTEGER DEFAULT 0,
-        is_featured BOOLEAN DEFAULT false,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    console.log("✅ Destinations table created");
+	    await sequelize.query(`
+	      CREATE TABLE IF NOT EXISTS destinations (
+	        id SERIAL PRIMARY KEY,
+	        country_id INTEGER REFERENCES countries(id) ON DELETE CASCADE,
+	        name VARCHAR(255) NOT NULL,
+	        description TEXT,
+	        images JSONB DEFAULT '[]',
+	        duration VARCHAR(100),
+	        rating DECIMAL(3, 2) DEFAULT 0,
+	        reviews_count INTEGER DEFAULT 0,
+	        is_featured BOOLEAN DEFAULT false,
+	        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	      );
+	    `);
+	    console.log("✅ Destinations table created");
 
     // Posts table
     await sequelize.query(`
@@ -144,24 +143,27 @@ async function setupDatabase() {
     console.log("✅ Tips table created");
 
     // Services table
-    await sequelize.query(`
-      CREATE TABLE IF NOT EXISTS services (
-        id SERIAL PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        description TEXT,
-        icon VARCHAR(100),
-        price DECIMAL(10, 2),
-        is_active BOOLEAN DEFAULT true,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    console.log("✅ Services table created");
+	    await sequelize.query(`
+	      CREATE TABLE IF NOT EXISTS services (
+	        id SERIAL PRIMARY KEY,
+	        name VARCHAR(255) NOT NULL,
+	        description TEXT,
+	        icon VARCHAR(100),
+	        price DECIMAL(10, 2),
+	        is_active BOOLEAN DEFAULT true,
+	        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+	        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+	      );
+	    `);
+	    console.log("✅ Services table created");
 
-    // Team table
-    await sequelize.query(`
-      CREATE TABLE IF NOT EXISTS team (
-        id SERIAL PRIMARY KEY,
+	    // Ensure legacy destination price column is removed (destinations are price-less).
+	    await sequelize.query(`ALTER TABLE IF EXISTS destinations DROP COLUMN IF EXISTS price;`);
+
+	    // Team table
+	    await sequelize.query(`
+	      CREATE TABLE IF NOT EXISTS team (
+	        id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         position VARCHAR(255),
         bio TEXT,
