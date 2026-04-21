@@ -1,4 +1,5 @@
 const realTimeTracker = require("../utils/realTimeTracker");
+const { cloudinary, ensureCloudinaryConfigured } = require("../config/cloudinary");
 
 const toAsset = (file) => {
   const cloud = file?.cloudinary || {};
@@ -110,6 +111,50 @@ exports.uploadMultipleImages = async (req, res, next) => {
         count: assets.length,
         assets,
       },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.deleteAsset = async (req, res, next) => {
+  try {
+    ensureCloudinaryConfigured();
+
+    const { publicId } = req.params;
+    if (!publicId) {
+      throw badRequest("Public ID is required.", "MISSING_PUBLIC_ID");
+    }
+
+    // Delete from Cloudinary
+    const result = await cloudinary.uploader.destroy(publicId);
+
+    // Track deletion
+    realTimeTracker.trackEvent("upload:delete", {
+      publicId,
+      result: result.result,
+    });
+
+    res.json({
+      success: true,
+      message: "Asset deleted successfully.",
+      data: {
+        publicId,
+        result: result.result,
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getUploadStats = async (req, res, next) => {
+  try {
+    const stats = realTimeTracker.getUploadStats();
+
+    res.json({
+      success: true,
+      data: stats,
     });
   } catch (err) {
     next(err);

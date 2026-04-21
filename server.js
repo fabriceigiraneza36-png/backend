@@ -44,6 +44,7 @@ const settingsRouter = require("./routes/settings");
 const messageRouter = require("./routes/message");
 const pagesRouter = require("./routes/pages");
 const uploadsRouter = require("./routes/uploads");
+const mediaUploadsRouter = require("./routes/mediaUploads");
 
 // Social auth routes
 const adminAuthRouter = require("./routes/adminAuth");
@@ -389,6 +390,10 @@ logger.info("📋 Mounted: /api/message");
 // Uploads
 app.use("/api/uploads", uploadsRouter);
 logger.info("📋 Mounted: /api/uploads");
+
+// Media Uploads (Images for destinations, gallery, countries)
+app.use("/api/media", mediaUploadsRouter);
+logger.info("📋 Mounted: /api/media");
 
 // Settings
 app.use("/api/settings", settingsRouter);
