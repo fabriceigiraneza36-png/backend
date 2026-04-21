@@ -20,7 +20,7 @@ async function createAdmin() {
     console.log("🔧 Creating admin user...\n");
 
     const email = "admin@altuvera.com";
-    const password = "altuvera"; // Your password
+    const password = "123"; // Your password
     const username = "admin";
     const fullName = "Administrator";
 
