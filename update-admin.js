@@ -4,7 +4,7 @@ const { query } = require("./config/db");
 
 async function updateAdmin() {
   const newEmail = "admin@altuvera.com";
-  const newPassword = "123";
+  const newPassword = "altuvera";
   
   const hash = await bcrypt.hash(newPassword, 12);
   

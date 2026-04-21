@@ -192,30 +192,49 @@ app.use(helmet({
 }));
 
 // CORS configuration
+const envOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map(o => o.trim())
+  : [];
+
+const allowedOrigins = [
+  process.env.FRONTEND_URL,
+  ...envOrigins,
+  "https://altuvera.vercel.app",
+  "http://localhost:3000",
+  "http://localhost:5173",
+  "http://localhost:5174" // ✅ your current frontend
+].filter(Boolean);
+
 const corsOptions = {
   origin: function (origin, callback) {
-    const allowedOrigins = [
-      process.env.FRONTEND_URL,
-      process.env.CORS_ORIGINS,
-      "https://altuvera.vercel.app",
-      "http://localhost:3000",
-      "http://localhost:5173"
-    ].filter(Boolean);
-    
-    // Allow requests with no origin (mobile apps, curl, etc.)
-    if (!origin || allowedOrigins.some(o => origin.includes(o?.replace(/https?:\/\//, '')))) {
-      callback(null, true);
-    } else {
-      callback(new Error(`CORS: Origin ${origin} not allowed`));
+    // Allow requests without origin (like Postman, curl, mobile apps)
+    if (!origin) return callback(null, true);
+
+    // Allow any localhost in development
+    if (origin.startsWith("http://localhost")) {
+      return callback(null, true);
     }
+
+    // Exact match check (safe & reliable)
+    if (allowedOrigins.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // Block everything else
+    return callback(new Error(`CORS: Origin ${origin} not allowed`));
   },
   credentials: true,
   methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization", "X-Requested-With", "Accept", "Origin"]
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin"
+  ]
 };
 
 app.use(cors(corsOptions));
-
 // Compression
 app.use(compression());
 
