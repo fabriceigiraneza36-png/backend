@@ -49,6 +49,9 @@ const mediaUploadsRouter = require("./routes/mediaUploads");
 // Social auth routes
 const adminAuthRouter = require("./routes/adminAuth");
 
+// WebAuthn authentication routes
+const webauthnRouter = require("./routes/webauthn");
+
 // Like/Comment/Rating routes
 const countryLikesRouter = require("./routes/countryLikes");
 const countryCommentsRouter = require("./routes/countryComments");
@@ -402,6 +405,10 @@ logger.info("📋 Mounted: /api/settings");
 // Admin Auth
 app.use("/api/admin/auth", adminAuthRouter);
 logger.info("📋 Mounted: /api/admin/auth");
+
+// WebAuthn Authentication
+app.use("/auth/webauthn", webauthnRouter);
+logger.info("📋 Mounted: /auth/webauthn");
 
 const swaggerSpec = buildOpenApiSpec();
 app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));

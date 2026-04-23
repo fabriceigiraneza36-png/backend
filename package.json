@@ -23,6 +23,7 @@
     "legacyWatch": true
   },
   "dependencies": {
+    "@simplewebauthn/server": "^9.0.0",
     "bcryptjs": "^2.4.3",
     "cloudinary": "^2.9.0",
     "compression": "^1.8.1",
