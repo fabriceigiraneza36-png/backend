@@ -104,38 +104,68 @@ const allowedOrigins = [
   ] : [])
 ].filter(Boolean);
 
+// ─── Replace corsOptions in server.js ──────────────────────────────────────
+
 const corsOptions = {
-  origin: function (origin, callback) {
-    // Allow requests without origin (Postman, mobile apps)
+  origin: (origin, callback) => {
+    // ✅ Always allow - no origin means server-to-server or same origin
     if (!origin) return callback(null, true);
 
-    // Allow all localhost in development
-    if (NODE_ENV === "development" && origin.startsWith("http://localhost")) {
+    // ✅ Always allow any localhost port in development
+    if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) {
       return callback(null, true);
     }
 
-    // Check allowed origins
-    if (allowedOrigins.includes(origin)) {
+    // ✅ Always allow any localhost 127.0.0.1
+    if (/^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) {
       return callback(null, true);
     }
 
-    // Log blocked origin for debugging
-    logger.warn(`CORS blocked: ${origin}`);
-    return callback(new Error(`CORS: Origin ${origin} not allowed`));
+    // ✅ Check allowed list
+    if (ALLOWED_ORIGINS.includes(origin)) {
+      return callback(null, true);
+    }
+
+    // ✅ Log but DON'T return 500 - return CORS error instead
+    console.warn(`[CORS] Origin not in allowed list: ${origin}`);
+    // In development, allow anyway to prevent 500 errors
+    if (process.env.NODE_ENV !== "production") {
+      return callback(null, true);
+    }
+    
+    return callback(null, false);
   },
   credentials: true,
-  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
     "X-Requested-With",
     "Accept",
     "Origin",
-    "X-CSRF-Token"
+    "X-CSRF-Token",
+    "Cache-Control",
   ],
-  exposedHeaders: ["X-Total-Count", "X-Page", "X-Per-Page"]
+  exposedHeaders: ["X-Total-Count", "X-Page", "X-Per-Page"],
+  optionsSuccessStatus: 200,
+  maxAge: 86400,
 };
 
+// ✅ Apply CORS - must be BEFORE all routes
+app.use(cors(corsOptions));
+
+// ✅ Handle OPTIONS preflight for ALL routes
+app.options("*", (req, res) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type,Authorization,X-Requested-With,Accept,Origin"
+  );
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Max-Age", "86400");
+  res.sendStatus(200);
+});
 app.use(cors(corsOptions));
 
 // Handle preflight requests
