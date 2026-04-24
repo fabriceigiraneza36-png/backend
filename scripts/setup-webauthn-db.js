@@ -13,7 +13,7 @@
  *   - DATABASE_URL or (DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASSWORD)
  */
 
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') });
 const fs = require('fs');
 const path = require('path');
 const { query } = require('../config/db');
