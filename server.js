@@ -5,7 +5,9 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-require("dotenv").config({ path: require("path").resolve(process.cwd(), ".env") });
+require("dotenv").config({
+  path: require("path").resolve(process.cwd(), ".env"),
+});
 const path = require("path");
 const express = require("express");
 const cors = require("cors");
@@ -71,24 +73,26 @@ app.set("trust proxy", 1);
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // Security headers with Google OAuth support
-app.use(helmet({
-  contentSecurityPolicy: false,
-  crossOriginEmbedderPolicy: false,
-  crossOriginOpenerPolicy: false, // ✅ Critical for Google OAuth
-  crossOriginResourcePolicy: { policy: "cross-origin" }
-}));
+app.use(
+  helmet({
+    contentSecurityPolicy: false,
+    crossOriginEmbedderPolicy: false,
+    crossOriginOpenerPolicy: false, // ✅ Critical for Google OAuth
+    crossOriginResourcePolicy: { policy: "cross-origin" },
+  }),
+);
 
 // Enhanced CORS with Google OAuth popup support
 app.use((req, res, next) => {
   // ✅ Allow Google OAuth popups
-  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
-  res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none');
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
+  res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   next();
 });
 
 // CORS configuration
 const envOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map(o => o.trim())
+  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
   : [];
 
 const allowedOrigins = [
@@ -97,11 +101,13 @@ const allowedOrigins = [
   "https://altuvera.com",
   "https://www.altuvera.com",
   "https://altuvera.vercel.app",
-  ...(NODE_ENV === "development" ? [
-    "http://localhost:3000",
-    "http://localhost:5173",
-    "http://localhost:5174"
-  ] : [])
+  ...(NODE_ENV === "development"
+    ? [
+        "http://localhost:3000",
+        "http://localhost:5173",
+        "http://localhost:5174",
+      ]
+    : []),
 ].filter(Boolean);
 
 // ─── Replace corsOptions in server.js ──────────────────────────────────────
@@ -122,7 +128,7 @@ const corsOptions = {
     }
 
     // ✅ Check allowed list
-    if (ALLOWED_ORIGINS.includes(origin)) {
+    if (allowedOrigins.includes(origin)) {
       return callback(null, true);
     }
 
@@ -132,7 +138,7 @@ const corsOptions = {
     if (process.env.NODE_ENV !== "production") {
       return callback(null, true);
     }
-    
+
     return callback(null, false);
   },
   credentials: true,
@@ -157,19 +163,18 @@ app.use(cors(corsOptions));
 // ✅ Handle OPTIONS preflight for ALL routes
 app.options("*", (req, res) => {
   res.header("Access-Control-Allow-Origin", req.headers.origin || "*");
-  res.header("Access-Control-Allow-Methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,POST,PUT,PATCH,DELETE,OPTIONS",
+  );
   res.header(
     "Access-Control-Allow-Headers",
-    "Content-Type,Authorization,X-Requested-With,Accept,Origin"
+    "Content-Type,Authorization,X-Requested-With,Accept,Origin",
   );
   res.header("Access-Control-Allow-Credentials", "true");
   res.header("Access-Control-Max-Age", "86400");
   res.sendStatus(200);
 });
-app.use(cors(corsOptions));
-
-// Handle preflight requests
-app.options("*", cors(corsOptions));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // GLOBAL MIDDLEWARE
@@ -183,13 +188,17 @@ app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Logging
 if (NODE_ENV === "production") {
-  app.use(morgan("combined", {
-    stream: { write: message => logger.http(message.trim()) }
-  }));
+  app.use(
+    morgan("combined", {
+      stream: { write: (message) => logger.http(message.trim()) },
+    }),
+  );
 } else {
-  app.use(morgan("dev", {
-    skip: (req) => req.url === "/health"
-  }));
+  app.use(
+    morgan("dev", {
+      skip: (req) => req.url === "/health",
+    }),
+  );
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -215,18 +224,22 @@ const collectRoutes = (stack, prefix = "") => {
   stack.forEach((layer) => {
     if (layer.route && layer.route.path) {
       const routePath = cleanRoutePath(prefix + layer.route.path);
-      const methods = Object.keys(layer.route.methods).map((method) => method.toUpperCase());
+      const methods = Object.keys(layer.route.methods).map((method) =>
+        method.toUpperCase(),
+      );
       methods.forEach((method) => {
         routes.push({
           method,
           path: routePath || "/",
           auth: "public",
           category: "general",
-          description: layer.route.stack?.[0]?.name || `${method} ${routePath}`
+          description: layer.route.stack?.[0]?.name || `${method} ${routePath}`,
         });
       });
     } else if (layer.name === "router" && layer.handle && layer.handle.stack) {
-      const nestedPrefix = cleanRoutePath(layer.regexp?.source ? layer.regexp.source : "");
+      const nestedPrefix = cleanRoutePath(
+        layer.regexp?.source ? layer.regexp.source : "",
+      );
       routes.push(...collectRoutes(layer.handle.stack, prefix + nestedPrefix));
     }
   });
@@ -239,11 +252,12 @@ const generateApiDocs = () => {
     total: routes.length,
     byMethod: {},
     byCategory: {},
-    routes
+    routes,
   };
   routes.forEach((route) => {
     docs.byMethod[route.method] = (docs.byMethod[route.method] || 0) + 1;
-    docs.byCategory[route.category] = (docs.byCategory[route.category] || 0) + 1;
+    docs.byCategory[route.category] =
+      (docs.byCategory[route.category] || 0) + 1;
   });
   return docs;
 };
@@ -257,12 +271,12 @@ const buildOpenApiSpec = () => {
       summary: route.description,
       tags: [route.category],
       responses: {
-        "200": { description: "Successful response" },
-        "400": { description: "Bad request" },
-        "401": { description: "Unauthorized" },
-        "404": { description: "Not found" }
+        200: { description: "Successful response" },
+        400: { description: "Bad request" },
+        401: { description: "Unauthorized" },
+        404: { description: "Not found" },
       },
-      security: route.auth === "public" ? [] : [{ bearerAuth: [] }]
+      security: route.auth === "public" ? [] : [{ bearerAuth: [] }],
     };
   });
   return {
@@ -270,15 +284,15 @@ const buildOpenApiSpec = () => {
     info: {
       title: "Altuvera Travel API",
       version: "6.1",
-      description: "Interactive API documentation for Altuvera Travel backend"
+      description: "Interactive API documentation for Altuvera Travel backend",
     },
     servers: [{ url: process.env.BACKEND_URL || `http://localhost:${PORT}` }],
     components: {
       securitySchemes: {
-        bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" }
-      }
+        bearerAuth: { type: "http", scheme: "bearer", bearerFormat: "JWT" },
+      },
     },
-    paths
+    paths,
   };
 };
 
@@ -292,7 +306,7 @@ app.get("/health", (req, res) => {
     status: "healthy",
     timestamp: new Date().toISOString(),
     uptime: process.uptime(),
-    environment: NODE_ENV
+    environment: NODE_ENV,
   });
 });
 
@@ -305,8 +319,8 @@ app.get("/api", (req, res) => {
     endpoints: {
       health: "/health",
       docs: "/api/docs",
-      routes: "/api/routes"
-    }
+      routes: "/api/routes",
+    },
   });
 });
 
@@ -316,7 +330,7 @@ app.get("/api/routes", (req, res) => {
     success: true,
     total: docs.total,
     byMethod: docs.byMethod,
-    routes: docs.routes
+    routes: docs.routes,
   });
 });
 
@@ -353,7 +367,11 @@ app.use("/auth/webauthn", webauthnRouter);
 
 // Swagger docs
 const swaggerSpec = buildOpenApiSpec();
-app.use("/api/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec, { explorer: true }));
+app.use(
+  "/api/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, { explorer: true }),
+);
 app.get("/api/docs/openapi.json", (req, res) => res.json(swaggerSpec));
 
 logger.info("✅ All routes mounted successfully");
@@ -380,16 +398,24 @@ async function initializeServer() {
 
     const server = app.listen(PORT, () => {
       console.log("\n");
-      logger.info("═══════════════════════════════════════════════════════════════════");
+      logger.info(
+        "═══════════════════════════════════════════════════════════════════",
+      );
       logger.info("🌍 ALTUVERA TRAVEL - Enterprise Backend v6.1");
       logger.info('   "True Adventures In High Places & Deep Culture"');
-      logger.info("═══════════════════════════════════════════════════════════════════");
+      logger.info(
+        "═══════════════════════════════════════════════════════════════════",
+      );
       logger.info(`Environment: ${NODE_ENV}`);
       logger.info(`Port: ${PORT}`);
-      logger.info(`Backend: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+      logger.info(
+        `Backend: ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`,
+      );
       logger.info(`Frontend: ${process.env.FRONTEND_URL}`);
       logger.info(`CORS Origins: ${allowedOrigins.join(", ")}`);
-      logger.info("═══════════════════════════════════════════════════════════════════");
+      logger.info(
+        "═══════════════════════════════════════════════════════════════════",
+      );
       console.log("\n");
     });
 
