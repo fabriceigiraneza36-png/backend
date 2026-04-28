@@ -351,6 +351,56 @@ const ensureContactSchema = async () => {
   }
 };
 
+const ensureChatSchema = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_sessions (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(255) UNIQUE NOT NULL,
+        user_id INTEGER,
+        email VARCHAR(255),
+        full_name VARCHAR(255),
+        source VARCHAR(50) DEFAULT 'frontend',
+        status VARCHAR(20) DEFAULT 'active',
+        last_active TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id SERIAL PRIMARY KEY,
+        session_id VARCHAR(255) NOT NULL,
+        sender_type VARCHAR(50) NOT NULL,
+        sender_id INTEGER,
+        sender_name VARCHAR(255),
+        sender_email VARCHAR(255),
+        body TEXT NOT NULL,
+        metadata JSONB DEFAULT '{}'::JSONB,
+        is_read BOOLEAN DEFAULT false,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_chat_sessions_session_id ON chat_sessions(session_id);
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_session_id ON chat_messages(session_id);
+    `);
+
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_created_at ON chat_messages(created_at DESC);
+    `);
+
+    logger.info("[DB] ✅ Chat schema verified & ensured");
+  } catch (err) {
+    logger.warn("[DB] Chat schema ensure failed:", err.message);
+  }
+};
+
 // ── Graceful Close ───────────────────────────────────────────────────────────
 
 const closeConnections = async () => {
@@ -374,4 +424,5 @@ module.exports = {
   ensureUserSchema,
   ensureDestinationsSchema,
   ensureContactSchema,
+  ensureChatSchema,
 };

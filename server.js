@@ -18,6 +18,12 @@ const { query, ensureContactSchema } = require("./config/db");
 const logger = require("./utils/logger");
 const swaggerUi = require("swagger-ui-express");
 const shutdown = require("./utils/shutdown");
+const http = require("http");
+const jwt = require("jsonwebtoken");
+const { v4: uuidv4 } = require("uuid");
+const { Server } = require("socket.io");
+const { ensureChatSchema } = require("./config/db");
+const socketBus = require("./utils/socketBus");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ROUTES IMPORTS
@@ -39,6 +45,7 @@ const subscribersRouter = require("./routes/subscribers");
 const settingsRouter = require("./routes/settings");
 const messageRouter = require("./routes/message");
 const pagesRouter = require("./routes/pages");
+const chatRouter = require("./routes/chat");
 const uploadsRouter = require("./routes/uploads");
 const mediaUploadsRouter = require("./routes/mediaUploads");
 const adminAuthRouter = require("./routes/adminAuth");
@@ -49,6 +56,7 @@ const countryRatingsRouter = require("./routes/countryRatings");
 const destinationLikesRouter = require("./routes/destinationLikes");
 const destinationCommentsRouter = require("./routes/destinationComments");
 const destinationRatingsRouter = require("./routes/destinationRatings");
+const searchRoutes = require("./routes/search.routes");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE IMPORTS
@@ -362,8 +370,10 @@ app.use("/api/message", messageRouter);
 app.use("/api/uploads", uploadsRouter);
 app.use("/api/media", mediaUploadsRouter);
 app.use("/api/settings", settingsRouter);
+app.use("/api/chat", chatRouter);
 app.use("/api/admin/auth", adminAuthRouter);
 app.use("/auth/webauthn", webauthnRouter);
+app.use("/api/search", searchRoutes);
 
 // Swagger docs
 const swaggerSpec = buildOpenApiSpec();
@@ -373,6 +383,242 @@ app.use(
   swaggerUi.setup(swaggerSpec, { explorer: true }),
 );
 app.get("/api/docs/openapi.json", (req, res) => res.json(swaggerSpec));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// REALTIME CHAT / NOTIFICATIONS SOCKETS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const httpServer = http.createServer(app);
+const io = new Server(httpServer, {
+  cors: {
+    origin: allowedOrigins,
+    methods: ["GET", "POST"],
+    credentials: true,
+  },
+});
+
+socketBus.setIO(io);
+
+const verifySocketToken = (token) => {
+  if (!token) return null;
+  try {
+    return jwt.verify(token, process.env.JWT_SECRET);
+  } catch {
+    return null;
+  }
+};
+
+const getOrCreateChatSession = async ({ sessionId, userId, email, fullName, source }) => {
+  const normalizedSessionId = String(sessionId || "").trim();
+  if (!normalizedSessionId) {
+    throw new Error("Chat session ID is required");
+  }
+
+  const result = await query(
+    `INSERT INTO chat_sessions (session_id, user_id, email, full_name, source, last_active)
+     VALUES ($1, $2, $3, $4, $5, NOW())
+     ON CONFLICT (session_id)
+     DO UPDATE SET
+       user_id = COALESCE(EXCLUDED.user_id, chat_sessions.user_id),
+       email = COALESCE(NULLIF(EXCLUDED.email, ''), chat_sessions.email),
+       full_name = COALESCE(NULLIF(EXCLUDED.full_name, ''), chat_sessions.full_name),
+       source = COALESCE(NULLIF(EXCLUDED.source, ''), chat_sessions.source),
+       last_active = NOW(),
+       updated_at = NOW()
+     RETURNING *`,
+    [normalizedSessionId, userId || null, email || null, fullName || null, source || 'frontend'],
+  );
+
+  return result.rows[0];
+};
+
+const saveChatMessage = async ({ sessionId, senderType, senderId, senderName, senderEmail, body, metadata }) => {
+  const result = await query(
+    `INSERT INTO chat_messages (session_id, sender_type, sender_id, sender_name, sender_email, body, metadata, is_read)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     RETURNING *`,
+    [sessionId, senderType, senderId || null, senderName || null, senderEmail || null, body, metadata || {}, false],
+  );
+
+  await query(
+    `UPDATE chat_sessions SET last_active = NOW(), updated_at = NOW() WHERE session_id = $1`,
+    [sessionId],
+  );
+
+  return result.rows[0];
+};
+
+const fetchSessionMessages = async (sessionId) => {
+  const result = await query(
+    `SELECT * FROM chat_messages WHERE session_id = $1 ORDER BY created_at ASC`,
+    [sessionId],
+  );
+  return result.rows;
+};
+
+const countUnreadMessages = async (sessionId) => {
+  const result = await query(
+    `SELECT COUNT(*) AS unread_count FROM chat_messages WHERE session_id = $1 AND sender_type != 'admin' AND is_read = false`,
+    [sessionId],
+  );
+  return parseInt(result.rows[0]?.unread_count || 0, 10);
+};
+
+const serializeMessage = (row) => ({
+  id: row.id,
+  sessionId: row.session_id,
+  senderType: row.sender_type,
+  senderId: row.sender_id,
+  senderName: row.sender_name,
+  senderEmail: row.sender_email,
+  body: row.body,
+  metadata: row.metadata || {},
+  isRead: row.is_read,
+  createdAt: row.created_at,
+});
+
+io.use((socket, next) => {
+  const token = socket.handshake.auth?.token ||
+    socket.handshake.headers?.authorization?.split?.(' ')[1];
+  const decoded = verifySocketToken(token);
+  socket.data.user = decoded || null;
+  socket.data.isAdmin = decoded?.type === 'admin';
+  if (socket.data.isAdmin) {
+    socket.join('admins');
+  }
+  next();
+});
+
+io.on('connection', (socket) => {
+  const sessionId = socket.handshake.auth?.sessionId;
+  socket.data.sessionId = sessionId || null;
+
+  socket.on('chat:register', async (payload = {}, callback) => {
+    try {
+      const requestedSession = String(payload.sessionId || socket.data.sessionId || '').trim();
+      const name = String(payload.name || socket.data.user?.fullName || socket.data.user?.name || '').trim();
+      const email = String(payload.email || socket.data.user?.email || '').trim();
+      const sessionKey = requestedSession || `guest-${uuidv4()}`;
+
+      const session = await getOrCreateChatSession({
+        sessionId: sessionKey,
+        userId: socket.data.user?.id,
+        email: email || null,
+        fullName: name || null,
+        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
+      });
+
+      socket.data.sessionId = session.session_id;
+      socket.join(`chat:${session.session_id}`);
+
+      const messages = await fetchSessionMessages(session.session_id);
+      socket.emit('chat:session', {
+        sessionId: session.session_id,
+        userId: session.user_id,
+        email: session.email,
+        fullName: session.full_name,
+        source: session.source,
+        messages: messages.map(serializeMessage),
+      });
+
+      if (typeof callback === 'function') {
+        callback({ success: true, sessionId: session.session_id, messages: messages.map(serializeMessage) });
+      }
+    } catch (err) {
+      if (typeof callback === 'function') {
+        callback({ success: false, error: err.message || 'Chat registration failed' });
+      }
+    }
+  });
+
+  socket.on('chat:message', async (payload = {}, callback) => {
+    try {
+      if (socket.data.isAdmin) {
+        throw new Error('Admin must use admin:send-message for chat replies');
+      }
+
+      const sessionKey = String(payload.sessionId || socket.data.sessionId || '').trim();
+      if (!sessionKey) throw new Error('sessionId is required');
+      if (!payload.body || !String(payload.body).trim()) throw new Error('Message body is required');
+
+      const session = await getOrCreateChatSession({
+        sessionId: sessionKey,
+        userId: socket.data.user?.id,
+        email: String(payload.email || socket.data.user?.email || '').trim() || null,
+        fullName: String(payload.name || socket.data.user?.fullName || socket.data.user?.name || '').trim() || null,
+        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
+      });
+
+      socket.data.sessionId = session.session_id;
+      socket.join(`chat:${session.session_id}`);
+
+      const messageRow = await saveChatMessage({
+        sessionId: session.session_id,
+        senderType: 'user',
+        senderId: socket.data.user?.id,
+        senderName: String(payload.name || socket.data.user?.fullName || socket.data.user?.name || 'Guest'),
+        senderEmail: String(payload.email || socket.data.user?.email || ''),
+        body: String(payload.body).trim(),
+        metadata: payload.metadata || { source: 'frontend-chat' },
+      });
+
+      const message = serializeMessage(messageRow);
+      const unreadCount = await countUnreadMessages(session.session_id);
+
+      io.to(`chat:${session.session_id}`).emit('chat:message', message);
+      io.to('admins').emit('new-chat-message', {
+        sessionId: session.session_id,
+        userId: session.user_id,
+        email: session.email,
+        fullName: session.full_name,
+        body: message.body,
+        senderName: message.senderName,
+        unreadCount,
+      });
+
+      if (typeof callback === 'function') callback({ success: true, message });
+    } catch (err) {
+      if (typeof callback === 'function') {
+        callback({ success: false, error: err.message || 'Unable to send chat message' });
+      }
+    }
+  });
+
+  socket.on('admin:send-message', async (payload = {}, callback) => {
+    try {
+      if (!socket.data.isAdmin) throw new Error('Admin authentication required');
+
+      const sessionKey = String(payload.sessionId || '').trim();
+      if (!sessionKey) throw new Error('sessionId is required');
+      if (!payload.body || !String(payload.body).trim()) throw new Error('Message body is required');
+
+      const adminName = socket.data.user?.full_name || socket.data.user?.name || 'Admin';
+      const adminEmail = socket.data.user?.email || null;
+
+      const messageRow = await saveChatMessage({
+        sessionId: sessionKey,
+        senderType: 'admin',
+        senderId: socket.data.user?.id,
+        senderName: adminName,
+        senderEmail: adminEmail,
+        body: String(payload.body).trim(),
+        metadata: { source: 'admin-panel' },
+      });
+
+      const message = serializeMessage(messageRow);
+      io.to(`chat:${sessionKey}`).emit('chat:message', message);
+      if (typeof callback === 'function') callback({ success: true, message });
+    } catch (err) {
+      if (typeof callback === 'function') {
+        callback({ success: false, error: err.message || 'Unable to send admin message' });
+      }
+    }
+  });
+
+  socket.on('disconnect', () => {
+    console.log(`Socket disconnected: ${socket.id}`);
+  });
+});
 
 logger.info("✅ All routes mounted successfully");
 
@@ -396,7 +642,10 @@ async function initializeServer() {
     await ensureContactSchema();
     logger.info("✅ Contact schema ensured");
 
-    const server = app.listen(PORT, () => {
+    await ensureChatSchema();
+    logger.info("✅ Chat schema ensured");
+
+    const server = httpServer.listen(PORT, () => {
       console.log("\n");
       logger.info(
         "═══════════════════════════════════════════════════════════════════",

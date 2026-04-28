@@ -1,0 +1,1 @@
+const db = require("./config/db"); const bcrypt = require("bcryptjs"); (async () => { const r = await db.query("SELECT id, email, username, role FROM admin_users WHERE email = $1", ["admin@altuvera.com"]); console.log(JSON.stringify(r.rows[0], null, 2)); await db.closeConnections(); })();
