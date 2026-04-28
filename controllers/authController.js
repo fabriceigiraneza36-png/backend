@@ -989,7 +989,7 @@ exports.updateProfile = async (req, res) => {
 // REFRESH TOKEN
 // ═══════════════════════════════════════════════════════════════════════════
 
-// ── Replace ONLY the refreshToken export ──────────────────────────────────────
+
 exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
@@ -997,7 +997,7 @@ exports.refreshToken = async (req, res) => {
     if (!refreshToken) {
       return res.status(400).json({
         success: false,
-        message: "Refresh token required",
+        message: 'Refresh token required',
       });
     }
 
@@ -1005,26 +1005,26 @@ exports.refreshToken = async (req, res) => {
     try {
       decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
     } catch (err) {
-      if (err.name === "TokenExpiredError") {
+      if (err.name === 'TokenExpiredError') {
         return res.status(401).json({
           success: false,
-          message: "Session expired. Please log in again.",
+          message: 'Session expired. Please log in again.',
         });
       }
       return res.status(401).json({
         success: false,
-        message: "Invalid refresh token.",
+        message: 'Invalid refresh token.',
       });
     }
 
-    if (decoded.tokenType !== "refresh") {
+    if (decoded.tokenType !== 'refresh') {
       return res.status(401).json({
         success: false,
-        message: "Invalid token type",
+        message: 'Invalid token type',
       });
     }
 
-    const table = decoded.type === "admin" ? "admin_users" : "users";
+    const table = decoded.type === 'admin' ? 'admin_users' : 'users';
     const result = await query(
       `SELECT * FROM ${table} WHERE id = $1`,
       [decoded.id]
@@ -1033,7 +1033,7 @@ exports.refreshToken = async (req, res) => {
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: "Account not found.",
+        message: 'Account not found.',
       });
     }
 
@@ -1042,26 +1042,28 @@ exports.refreshToken = async (req, res) => {
     if (!entity.is_active) {
       return res.status(401).json({
         success: false,
-        message: "Account deactivated.",
+        message: 'Account deactivated.',
       });
     }
 
-    // ✅ FIX: Only validate tokenVersion if BOTH sides have it defined
-    // Prevents false "Session invalidated" errors
+    // ✅ Safe tokenVersion check — only if BOTH sides have a valid number
+    const decodedVersion = decoded.tokenVersion;
+    const storedVersion = entity.token_version;
+
     if (
-      decoded.tokenVersion !== undefined &&
-      decoded.tokenVersion !== null &&
-      entity.token_version !== undefined &&
-      entity.token_version !== null &&
-      decoded.tokenVersion !== entity.token_version
+      decodedVersion !== undefined &&
+      decodedVersion !== null &&
+      storedVersion !== undefined &&
+      storedVersion !== null &&
+      decodedVersion !== storedVersion
     ) {
       return res.status(401).json({
         success: false,
-        message: "Session invalidated.",
+        message: 'Session invalidated.',
       });
     }
 
-    res.json({
+    return res.json({
       success: true,
       data: {
         token: generateToken(entity, decoded.type),
@@ -1069,7 +1071,7 @@ exports.refreshToken = async (req, res) => {
       },
     });
   } catch (err) {
-    handleError(res, err, "Token refresh failed", 401);
+    handleError(res, err, 'Token refresh failed', 401);
   }
 };
 
@@ -1080,28 +1082,27 @@ exports.refreshToken = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 
-// ── Replace ONLY the adminLogin export ────────────────────────────────────────
 exports.adminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const normalizedEmail = (email || "").trim().toLowerCase();
+    const normalizedEmail = (email || '').trim().toLowerCase();
 
     if (!normalizedEmail || !password) {
       return res.status(400).json({
         success: false,
-        message: "Email and password are required.",
+        message: 'Email and password are required.',
       });
     }
 
     const result = await query(
-      "SELECT * FROM admin_users WHERE email = $1",
+      'SELECT * FROM admin_users WHERE email = $1',
       [normalizedEmail]
     );
 
     if (result.rows.length === 0) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials.",
+        message: 'Invalid credentials.',
       });
     }
 
@@ -1110,7 +1111,7 @@ exports.adminLogin = async (req, res) => {
     if (!admin.is_active) {
       return res.status(401).json({
         success: false,
-        message: "Account deactivated.",
+        message: 'Account deactivated.',
       });
     }
 
@@ -1118,33 +1119,42 @@ exports.adminLogin = async (req, res) => {
     if (!isMatch) {
       return res.status(401).json({
         success: false,
-        message: "Invalid credentials.",
+        message: 'Invalid credentials.',
       });
     }
 
-    // ✅ FIX: Increment token_version on each login so new tokens
-    // are always valid and old (logged-out) tokens are invalidated
-    const updated = await query(
-      `UPDATE admin_users 
-       SET last_login = NOW(),
-           token_version = COALESCE(token_version, 0) + 1
-       WHERE id = $1
-       RETURNING *`,
-      [admin.id]
-    );
+    // ✅ Safe: only increment token_version if the column exists
+    let freshAdmin = admin;
+    try {
+      const updated = await query(
+        `UPDATE admin_users 
+         SET last_login = NOW(),
+             token_version = COALESCE(token_version, 0) + 1
+         WHERE id = $1
+         RETURNING *`,
+        [admin.id]
+      );
+      freshAdmin = updated.rows[0];
+    } catch (updateErr) {
+      // token_version column doesn't exist yet — just update last_login
+      logger.warn('[adminLogin] token_version column missing, falling back:', updateErr.message);
+      await query(
+        'UPDATE admin_users SET last_login = NOW() WHERE id = $1',
+        [admin.id]
+      );
+      freshAdmin = { ...admin, last_login: new Date(), token_version: 0 };
+    }
 
-    const freshAdmin = updated.rows[0];
-
-    res.json({
+    return res.json({
       success: true,
       data: {
-        token: generateToken(freshAdmin, "admin"),
-        refreshToken: generateRefreshToken(freshAdmin, "admin"),
+        token: generateToken(freshAdmin, 'admin'),
+        refreshToken: generateRefreshToken(freshAdmin, 'admin'),
         user: sanitizeUser(freshAdmin),
       },
     });
   } catch (err) {
-    handleError(res, err, "Admin login failed");
+    handleError(res, err, 'Admin login failed');
   }
 };
 
@@ -1223,20 +1233,31 @@ exports.changePassword = async (req, res) => {
 // LOGOUT
 // ═══════════════════════════════════════════════════════════════════════════
 
+
+
 exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
-      const table = req.userType === "admin" ? "admin_users" : "users";
-      await query(
-        `UPDATE ${table} SET token_version = COALESCE(token_version, 0) + 1 WHERE id = $1`,
-        [req.user.id]
-      );
+      const table = req.userType === 'admin' ? 'admin_users' : 'users';
+
+      // ✅ Safe: try to increment token_version, ignore if column missing
+      try {
+        await query(
+          `UPDATE ${table} 
+           SET token_version = COALESCE(token_version, 0) + 1 
+           WHERE id = $1`,
+          [req.user.id]
+        );
+      } catch (updateErr) {
+        logger.warn('[logout] token_version update failed (column may not exist):', updateErr.message);
+      }
     }
-    res.json({ success: true, message: "Signed out." });
+    return res.json({ success: true, message: 'Signed out.' });
   } catch (err) {
-    res.json({ success: true, message: "Signed out." });
+    return res.json({ success: true, message: 'Signed out.' });
   }
 };
+
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELETE ACCOUNT
