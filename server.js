@@ -64,7 +64,7 @@ const searchRoutes              = require('./routes/search.routes');
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PORT     = parseInt(process.env.PORT || '5000', 10);
+const PORT     = parseInt(process.env.PORT || '3000', 10);
 const NODE_ENV = process.env.NODE_ENV || 'development';
 const IS_PROD  = NODE_ENV === 'production';
 

@@ -1367,28 +1367,28 @@ exports.getMostBookedDestinations = async (req, res, next) => {
       dateFilter = "AND b.created_at >= NOW() - INTERVAL '365 days'";
     }
 
-    const result = await query(`
-      SELECT 
-        d.id,
-        d.name,
-        d.slug,
-        d.image_url,
-        d.short_description,
-        d.duration,
-        d.difficulty,
-        c.name AS country_name,
-        c.slug AS country_slug,
-        COUNT(b.id) AS booking_count,
-        SUM(b.number_of_travelers) AS total_travelers,
-        AVG(CASE WHEN d.rating > 0 THEN d.rating ELSE NULL END)::DECIMAL(3,2) AS average_rating
-      FROM destinations d
-      LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
-      LEFT JOIN countries c ON d.country_id = c.id
-      WHERE d.is_active = true
-      GROUP BY d.id, d.name, d.slug, d.image_url, d.short_description, d.duration, d.difficulty, c.name, c.slug
-      ORDER BY booking_count DESC, total_travelers DESC
-      LIMIT $1
-    `, [parseInt(limit)]);
+     const result = await query(`
+       SELECT 
+         d.id,
+         d.name,
+         d.slug,
+         d.image_url,
+         d.short_description,
+         d.duration_display AS duration,
+         d.difficulty,
+         c.name AS country_name,
+         c.slug AS country_slug,
+         COUNT(b.id) AS booking_count,
+         SUM(b.number_of_travelers) AS total_travelers,
+         AVG(CASE WHEN d.rating > 0 THEN d.rating ELSE NULL END)::DECIMAL(3,2) AS average_rating
+       FROM destinations d
+       LEFT JOIN bookings b ON b.destination_id = d.id ${dateFilter}
+       LEFT JOIN countries c ON d.country_id = c.id
+       WHERE d.is_active = true
+       GROUP BY d.id, d.name, d.slug, d.image_url, d.short_description, d.duration_display, d.difficulty, c.name, c.slug
+       ORDER BY booking_count DESC, total_travelers DESC
+       LIMIT $1
+     `, [parseInt(limit)]);
 
     res.json({
       success: true,

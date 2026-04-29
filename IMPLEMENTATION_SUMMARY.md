@@ -163,12 +163,12 @@ Server available at: `http://localhost:5000`
 
 ```bash
 # Get registration options
-curl -X POST http://localhost:5000/auth/webauthn/register-options \
+curl -X POST http://localhost:3000/auth/webauthn/register-options \
   -H "Content-Type: application/json" \
   -d '{"email":"test@altuvera.com","name":"Test User"}'
 
 # Get login options  
-curl -X POST http://localhost:5000/auth/webauthn/login-options \
+curl -X POST http://localhost:3000/auth/webauthn/login-options \
   -H "Content-Type: application/json" \
   -d '{"email":"test@altuvera.com"}'
 ```
@@ -346,20 +346,20 @@ npm test -- webauthn.test.js          # Specific test file
 
 ```bash
 # Health check
-curl http://localhost:5000/health
+curl http://localhost:3000/health
 
 # Register options
-curl -X POST http://localhost:5000/auth/webauthn/register-options \
+curl -X POST http://localhost:3000/auth/webauthn/register-options \
   -H "Content-Type: application/json" \
   -d '{"email":"test@altuvera.com","name":"Test"}'
 
 # Login options
-curl -X POST http://localhost:5000/auth/webauthn/login-options \
+curl -X POST http://localhost:3000/auth/webauthn/login-options \
   -H "Content-Type: application/json" \
   -d '{"email":"test@altuvera.com"}'
 
 # Get profile
-curl http://localhost:5000/auth/webauthn/me \
+curl http://localhost:3000/auth/webauthn/me \
   -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
