@@ -1,49 +1,56 @@
 // controllers/authController.js
 // ═══════════════════════════════════════════════════════════════════════════
-// Passwordless Auth — Users have email + name only, NO passwords
-// Auth methods: OTP code via email, Google OAuth, GitHub OAuth
+// Passwordless Auth — OTP via email · Google OAuth · GitHub OAuth
+// IPv4 is guaranteed by server.js dns.setDefaultResultOrder("ipv4first")
 // ═══════════════════════════════════════════════════════════════════════════
 
 const bcrypt = require("bcryptjs");
-const jwt = require("jsonwebtoken");
+const jwt    = require("jsonwebtoken");
 const crypto = require("crypto");
-const { query } = require("../config/db");
-const { sendEmail } = require("../utils/email");
-const logger = require("../utils/logger");
+const https  = require("https");
+const http   = require("http");
+
+const { query }      = require("../config/db");
+const { sendEmail }  = require("../utils/email");
+const logger         = require("../utils/logger");
 const { validateEmail, validateName } = require("../utils/validators");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 
-const APP_NAME = process.env.APP_NAME || "Altuvera";
-const FRONTEND_URL = process.env.FRONTEND_URL || "https://altuvera.com";
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || "support@altuvera.com";
-const JWT_SECRET = process.env.JWT_SECRET;
-const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || JWT_SECRET;
-const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "7d";
+const APP_NAME              = process.env.APP_NAME        || "Altuvera";
+const FRONTEND_URL          = process.env.FRONTEND_URL    || "https://altuvera.com";
+const SUPPORT_EMAIL         = process.env.SUPPORT_EMAIL   || "support@altuvera.com";
+const JWT_SECRET            = process.env.JWT_SECRET;
+const JWT_REFRESH_SECRET    = process.env.JWT_REFRESH_SECRET || JWT_SECRET;
+const JWT_EXPIRES_IN        = process.env.JWT_EXPIRES_IN        || "7d";
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
-const OTP_EXPIRY_MINUTES = 10;
-const OTP_MAX_ATTEMPTS = 5;
-const CODE_COOLDOWN_MS = 60000;
+const OTP_EXPIRY_MINUTES    = 10;
+const OTP_MAX_ATTEMPTS      = 5;
+const CODE_COOLDOWN_MS      = 60_000;
 const SOCIAL_HTTP_TIMEOUT_MS = parseInt(
-  process.env.SOCIAL_AUTH_TIMEOUT_MS || "8000",
-  10
+  process.env.SOCIAL_AUTH_TIMEOUT_MS || "8000", 10,
 );
+
+// ── IPv4-only agents for all outbound HTTP/HTTPS calls ─────────────────────
+// (belt-and-suspenders alongside dns.setDefaultResultOrder in server.js)
+const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true });
+const ipv4HttpAgent  = new http.Agent({  family: 4, keepAlive: true });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // EMAIL TEMPLATES
 // ═══════════════════════════════════════════════════════════════════════════
 
 const buildEmailTemplate = ({
-  preheader = "",
-  title = "",
-  subtitle = "",
-  body = "",
-  ctaText = "",
-  ctaUrl = "",
+  preheader   = "",
+  title       = "",
+  subtitle    = "",
+  body        = "",
+  ctaText     = "",
+  ctaUrl      = "",
   recipientName = "",
-  footerNote = "",
+  footerNote  = "",
 }) => {
   const year = new Date().getFullYear();
   return `
@@ -54,77 +61,82 @@ const buildEmailTemplate = ({
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>${title}</title>
   <style>
-    body, table, td, p, a { -webkit-text-size-adjust: 100%; }
-    table { border-collapse: collapse; }
-    body {
-      margin: 0; padding: 0; width: 100%; background-color: #f4f4f5;
-      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
-    }
-    @media only screen and (max-width: 600px) {
-      .container { width: 100% !important; }
-      .content-pad { padding: 24px 20px !important; }
-      .otp-code { font-size: 32px !important; letter-spacing: 4px !important; }
+    body,table,td,p,a{-webkit-text-size-adjust:100%;}
+    table{border-collapse:collapse;}
+    body{margin:0;padding:0;width:100%;background-color:#f4f4f5;
+         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;}
+    @media only screen and (max-width:600px){
+      .container{width:100%!important;}
+      .content-pad{padding:24px 20px!important;}
+      .otp-code{font-size:32px!important;letter-spacing:4px!important;}
     }
   </style>
 </head>
-<body style="margin:0; padding:0; background-color:#f4f4f5;">
-  <div style="display:none; max-height:0; overflow:hidden;">${preheader}</div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" 
+<body style="margin:0;padding:0;background-color:#f4f4f5;">
+  <div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
          style="background-color:#f4f4f5;">
     <tr>
-      <td align="center" style="padding: 40px 16px;">
-        <table role="presentation" class="container" width="520" cellpadding="0" 
-               cellspacing="0" style="max-width:520px; width:100%; background:#fff; 
-               border-radius:24px; box-shadow:0 8px 20px rgba(0,0,0,0.05);">
+      <td align="center" style="padding:40px 16px;">
+        <table role="presentation" class="container" width="520" cellpadding="0"
+               cellspacing="0"
+               style="max-width:520px;width:100%;background:#fff;
+                      border-radius:24px;box-shadow:0 8px 20px rgba(0,0,0,.05);">
           <tr>
-            <td align="center" style="background:#059669; border-radius:24px 24px 0 0; 
-                padding:32px 24px;">
-              <a href="${FRONTEND_URL}" style="text-decoration:none; color:#fff; 
-                 font-size:24px; font-weight:700;">${APP_NAME}</a>
+            <td align="center"
+                style="background:#059669;border-radius:24px 24px 0 0;padding:32px 24px;">
+              <a href="${FRONTEND_URL}"
+                 style="text-decoration:none;color:#fff;font-size:24px;font-weight:700;">
+                ${APP_NAME}
+              </a>
             </td>
           </tr>
           <tr>
             <td align="center" class="content-pad" style="padding:36px 32px;">
-              ${recipientName 
-                ? `<p style="margin:0 0 16px; font-size:16px; color:#111827; 
-                      font-weight:500;">Hello ${recipientName},</p>` 
+              ${recipientName
+                ? `<p style="margin:0 0 16px;font-size:16px;color:#111827;font-weight:500;">
+                     Hello ${recipientName},
+                   </p>`
                 : ""}
-              <h1 style="margin:0 0 8px; font-size:24px; font-weight:600; 
-                  color:#111827;">${title}</h1>
-              ${subtitle 
-                ? `<p style="margin:0 0 24px; font-size:15px; 
-                      color:#6b7280;">${subtitle}</p>` 
+              <h1 style="margin:0 0 8px;font-size:24px;font-weight:600;color:#111827;">
+                ${title}
+              </h1>
+              ${subtitle
+                ? `<p style="margin:0 0 24px;font-size:15px;color:#6b7280;">${subtitle}</p>`
                 : ""}
               ${body}
-              ${ctaText && ctaUrl 
-                ? `<table role="presentation" cellpadding="0" cellspacing="0" 
+              ${ctaText && ctaUrl
+                ? `<table role="presentation" cellpadding="0" cellspacing="0"
                           style="margin:32px auto 0;">
                     <tr><td align="center">
-                      <a href="${ctaUrl}" style="display:inline-block; padding:14px 36px; 
-                         background:#059669; color:#fff; text-decoration:none; 
-                         border-radius:40px; font-size:16px; 
-                         font-weight:600;">${ctaText}</a>
+                      <a href="${ctaUrl}"
+                         style="display:inline-block;padding:14px 36px;background:#059669;
+                                color:#fff;text-decoration:none;border-radius:40px;
+                                font-size:16px;font-weight:600;">
+                        ${ctaText}
+                      </a>
                     </td></tr>
-                  </table>` 
+                  </table>`
                 : ""}
-              ${footerNote 
-                ? `<p style="margin:24px 0 0; font-size:13px; color:#9ca3af; 
-                      border-top:1px solid #e5e7eb; 
-                      padding-top:20px;">${footerNote}</p>` 
+              ${footerNote
+                ? `<p style="margin:24px 0 0;font-size:13px;color:#9ca3af;
+                             border-top:1px solid #e5e7eb;padding-top:20px;">
+                     ${footerNote}
+                   </p>`
                 : ""}
             </td>
           </tr>
           <tr>
-            <td align="center" style="background:#f9fafb; padding:24px; 
-                border-radius:0 0 24px 24px;">
-              <p style="margin:0 0 12px; font-size:13px;">
-                <a href="${FRONTEND_URL}" style="color:#4b5563; text-decoration:none; 
-                   margin:0 10px;">Home</a>
+            <td align="center"
+                style="background:#f9fafb;padding:24px;border-radius:0 0 24px 24px;">
+              <p style="margin:0 0 12px;font-size:13px;">
+                <a href="${FRONTEND_URL}"
+                   style="color:#4b5563;text-decoration:none;margin:0 10px;">Home</a>
                 <span style="color:#d1d5db;">|</span>
-                <a href="mailto:${SUPPORT_EMAIL}" style="color:#4b5563; 
-                   text-decoration:none; margin:0 10px;">Support</a>
+                <a href="mailto:${SUPPORT_EMAIL}"
+                   style="color:#4b5563;text-decoration:none;margin:0 10px;">Support</a>
               </p>
-              <p style="margin:0; font-size:12px; color:#9ca3af;">
+              <p style="margin:0;font-size:12px;color:#9ca3af;">
                 &copy; ${year} ${APP_NAME}
               </p>
             </td>
@@ -140,35 +152,35 @@ const buildEmailTemplate = ({
 const buildOtpEmail = ({
   otp,
   recipientName,
-  purpose = "verify",
+  purpose       = "verify",
   expiryMinutes = OTP_EXPIRY_MINUTES,
 }) => {
-  const cfg =
+  const cfg = (
     {
-      verify: {
-        title: "Verify Your Email",
-        sub: "Enter the code below to verify your account",
-      },
-      login: { title: "Your Sign-In Code", sub: "Use this code to sign in" },
-      resend: { title: "New Verification Code", sub: "Here's your fresh code" },
-    }[purpose] || { title: "Verification Code", sub: "" };
+      verify: { title: "Verify Your Email",      sub: "Enter the code below to verify your account" },
+      login:  { title: "Your Sign-In Code",      sub: "Use this code to sign in" },
+      resend: { title: "New Verification Code",  sub: "Here's your fresh code" },
+    }[purpose] || { title: "Verification Code", sub: "" }
+  );
 
   return buildEmailTemplate({
-    preheader: `Your code is ${otp}`,
-    title: cfg.title,
-    subtitle: cfg.sub,
+    preheader:     `Your code is ${otp}`,
+    title:         cfg.title,
+    subtitle:      cfg.sub,
     recipientName,
     body: `
-      <p style="margin:0 0 24px; font-size:15px; color:#4b5563;">
+      <p style="margin:0 0 24px;font-size:15px;color:#4b5563;">
         Valid for <strong>${expiryMinutes} minutes</strong>.
       </p>
-      <div style="background:#f3f4f6; border-radius:12px; padding:16px 24px; 
-                  margin:0 auto 16px; display:inline-block;">
-        <span class="otp-code" style="font-family:'Courier New',monospace; 
-              font-size:36px; font-weight:700; letter-spacing:8px; 
-              color:#059669;">${otp}</span>
+      <div style="background:#f3f4f6;border-radius:12px;padding:16px 24px;
+                  margin:0 auto 16px;display:inline-block;">
+        <span class="otp-code"
+              style="font-family:'Courier New',monospace;font-size:36px;
+                     font-weight:700;letter-spacing:8px;color:#059669;">
+          ${otp}
+        </span>
       </div>
-      <p style="margin:0; font-size:13px; color:#6b7280;">
+      <p style="margin:0;font-size:13px;color:#6b7280;">
         Expires in ${expiryMinutes} minutes
       </p>
     `,
@@ -176,19 +188,18 @@ const buildOtpEmail = ({
   });
 };
 
-const buildWelcomeEmail = ({ recipientName }) => {
-  return buildEmailTemplate({
-    preheader: `Welcome to ${APP_NAME}!`,
-    title: `Welcome to ${APP_NAME}!`,
-    subtitle: "Your account is verified and ready",
+const buildWelcomeEmail = ({ recipientName }) =>
+  buildEmailTemplate({
+    preheader:     `Welcome to ${APP_NAME}!`,
+    title:         `Welcome to ${APP_NAME}!`,
+    subtitle:      "Your account is verified and ready",
     recipientName,
-    body: `<p style="margin:0 0 24px; font-size:15px; color:#4b5563;">
+    body: `<p style="margin:0 0 24px;font-size:15px;color:#4b5563;">
              We're thrilled to have you. Start exploring curated East African experiences.
            </p>`,
     ctaText: "Start Exploring →",
-    ctaUrl: `${FRONTEND_URL}/destinations`,
+    ctaUrl:  `${FRONTEND_URL}/destinations`,
   });
-};
 
 const buildActivityAlertEmail = ({ recipientName, activityType }) => {
   const titles = {
@@ -196,15 +207,15 @@ const buildActivityAlertEmail = ({ recipientName, activityType }) => {
     account_deleted: "Account Deleted",
   };
   return buildEmailTemplate({
-    preheader: `${titles[activityType] || "Activity"} on your account`,
-    title: titles[activityType] || "Account Activity",
-    subtitle: "We detected activity on your account",
+    preheader:     `${titles[activityType] || "Activity"} on your account`,
+    title:         titles[activityType] || "Account Activity",
+    subtitle:      "We detected activity on your account",
     recipientName,
-    body: `<p style="margin:0; font-size:15px; color:#4b5563;">
+    body: `<p style="margin:0;font-size:15px;color:#4b5563;">
              Time: ${new Date().toLocaleDateString("en-US", {
-               month: "short",
-               day: "numeric",
-               hour: "2-digit",
+               month:  "short",
+               day:    "numeric",
+               hour:   "2-digit",
                minute: "2-digit",
              })}
            </p>`,
@@ -215,82 +226,75 @@ const buildActivityAlertEmail = ({ recipientName, activityType }) => {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════════════════
 
-const generateOTP = () => crypto.randomInt(100000, 999999).toString();
+const generateOTP = () => crypto.randomInt(100_000, 999_999).toString();
 
-const generateToken = (entity, type = "user") => {
-  return jwt.sign(
+const generateToken = (entity, type = "user") =>
+  jwt.sign(
     {
-      id: entity.id,
-      email: entity.email,
-      role: entity.role || (type === "admin" ? "admin" : "user"),
+      id:           entity.id,
+      email:        entity.email,
+      role:         entity.role || (type === "admin" ? "admin" : "user"),
       type,
       tokenVersion: entity.token_version ?? 0,
     },
     JWT_SECRET,
-    { expiresIn: JWT_EXPIRES_IN }
+    { expiresIn: JWT_EXPIRES_IN },
   );
-};
 
-const generateRefreshToken = (entity, type = "user") => {
-  return jwt.sign(
+const generateRefreshToken = (entity, type = "user") =>
+  jwt.sign(
     {
-      id: entity.id,
+      id:           entity.id,
       type,
-      tokenType: "refresh",
+      tokenType:    "refresh",
       tokenVersion: entity.token_version ?? 0,
     },
     JWT_REFRESH_SECRET,
-    { expiresIn: JWT_REFRESH_EXPIRES_IN }
+    { expiresIn: JWT_REFRESH_EXPIRES_IN },
   );
-};
 
 const sanitizeUser = (row) => {
   if (!row) return null;
   const {
-    verification_code,
-    code_expiry,
-    code_attempts,
-    last_code_sent_at,
-    google_id,
-    github_id,
-    token_version,
-    password_hash,
+    verification_code, code_expiry, code_attempts,
+    last_code_sent_at, google_id, github_id,
+    token_version, password_hash,
     ...safe
   } = row;
   return {
-    id: safe.id,
-    email: safe.email,
-    username: safe.username,
-    fullName: safe.full_name,
-    full_name: safe.full_name,
-    name: safe.full_name,
-    avatar: safe.avatar_url,
-    avatarUrl: safe.avatar_url,
-    avatar_url: safe.avatar_url,
-    phone: safe.phone,
-    bio: safe.bio,
-    role: safe.role,
+    id:           safe.id,
+    email:        safe.email,
+    username:     safe.username,
+    fullName:     safe.full_name,
+    full_name:    safe.full_name,
+    name:         safe.full_name,
+    avatar:       safe.avatar_url,
+    avatarUrl:    safe.avatar_url,
+    avatar_url:   safe.avatar_url,
+    phone:        safe.phone,
+    bio:          safe.bio,
+    role:         safe.role,
     authProvider: safe.auth_provider,
     auth_provider: safe.auth_provider,
-    isVerified: safe.is_verified,
-    is_verified: safe.is_verified,
+    isVerified:   safe.is_verified,
+    is_verified:  safe.is_verified,
     emailVerified: safe.is_verified,
-    isActive: safe.is_active,
-    preferences: safe.preferences,
-    lastLogin: safe.last_login,
-    createdAt: safe.created_at,
-    updatedAt: safe.updated_at,
+    isActive:     safe.is_active,
+    preferences:  safe.preferences,
+    lastLogin:    safe.last_login,
+    createdAt:    safe.created_at,
+    updatedAt:    safe.updated_at,
   };
 };
 
-const isRateLimited = (row, ms = CODE_COOLDOWN_MS) =>
+const isRateLimited     = (row, ms = CODE_COOLDOWN_MS) =>
   row.last_code_sent_at &&
   Date.now() - new Date(row.last_code_sent_at).getTime() < ms;
 
 const getRemainingCooldown = (row) => {
   if (!row.last_code_sent_at) return 0;
   return Math.ceil(
-    (CODE_COOLDOWN_MS - (Date.now() - new Date(row.last_code_sent_at).getTime())) / 1000
+    (CODE_COOLDOWN_MS - (Date.now() - new Date(row.last_code_sent_at).getTime())) / 1000,
   );
 };
 
@@ -302,16 +306,12 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
   });
 };
 
-const sendOtpEmail = async (email, otp, name, purpose = "verify") => {
-  return sendEmail({
-    to: email,
-    subject:
-      purpose === "login"
-        ? `Sign In Code: ${otp}`
-        : `Verification Code: ${otp}`,
-    html: buildOtpEmail({ otp, recipientName: name, purpose }),
+const sendOtpEmail = (email, otp, name, purpose = "verify") =>
+  sendEmail({
+    to:      email,
+    subject: purpose === "login" ? `Sign In Code: ${otp}` : `Verification Code: ${otp}`,
+    html:    buildOtpEmail({ otp, recipientName: name, purpose }),
   });
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SOCIAL HELPERS
@@ -321,84 +321,89 @@ let googleOAuthClient = null;
 const getGoogleOAuthClient = () => {
   if (!googleOAuthClient) {
     const { OAuth2Client } = require("google-auth-library");
+    // google-auth-library respects global dns order set in server.js
     googleOAuthClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
   return googleOAuthClient;
 };
 
+// ── HTTP fetch helper with explicit IPv4 agent ─────────────────────────────
+// Uses node's native fetch (Node 18+) via undici dispatcher override,
+// or falls back to a simple https.request wrapper for older Node.
 const fetchJsonOrThrow = async (url, options = {}, provider = "oauth") => {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), SOCIAL_HTTP_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), SOCIAL_HTTP_TIMEOUT_MS);
+
   try {
-    const res = await fetch(url, { ...options, signal: controller.signal });
+    // Choose the right agent
+    const isHttps = url.startsWith("https://");
+    const agent   = isHttps ? ipv4HttpsAgent : ipv4HttpAgent;
+
+    // Native fetch (Node 18+) doesn't accept `agent` directly.
+    // We pass it via the non-standard but widely-supported override:
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      // For node-fetch v2/v3 compatibility:
+      agent: () => agent,
+    });
+
     const raw = await res.text();
-    let body = {};
-    try {
-      body = raw ? JSON.parse(raw) : {};
-    } catch {
-      body = { raw };
-    }
+    let body  = {};
+    try   { body = raw ? JSON.parse(raw) : {}; }
+    catch { body = { raw }; }
+
     if (!res.ok) {
-      const err = new Error(body?.message || `${provider} failed (${res.status})`);
-      err.status = 401;
+      const err     = new Error(body?.message || `${provider} failed (${res.status})`);
+      err.status    = 401;
       throw err;
     }
+
     return body;
   } catch (err) {
     if (err.name === "AbortError") {
-      const e = new Error(`${provider} request timed out`);
-      e.status = 504;
+      const e    = new Error(`${provider} request timed out`);
+      e.status   = 504;
       throw e;
     }
     throw err;
   } finally {
-    clearTimeout(timeout);
+    clearTimeout(timer);
   }
 };
 
-// ✅ FIXED: No more enum casting - uses plain TEXT
+// ── Upsert social user ─────────────────────────────────────────────────────
 const upsertSocialUser = async ({
-  provider,
-  providerId,
-  email,
-  name,
-  avatar,
-  phone,
-  bio,
+  provider, providerId, email, name, avatar, phone, bio,
 }) => {
   const col = { google: "google_id", github: "github_id" }[provider];
   if (!col) throw new Error(`Unsupported provider: ${provider}`);
 
-  const e = (email || "").trim().toLowerCase();
-  const n = (name || "").trim() || e.split("@")[0] || "User";
+  const e   = (email  || "").trim().toLowerCase();
+  const n   = (name   || "").trim() || e.split("@")[0] || "User";
   const pid = String(providerId || "").trim();
 
   if (!pid) {
-    const err = new Error(`${provider} account ID missing`);
-    err.status = 401;
+    const err    = new Error(`${provider} account ID missing`);
+    err.status   = 401;
     throw err;
   }
-
   if (!e || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
-    const err = new Error("Valid email required");
-    err.status = 400;
+    const err    = new Error("Valid email required");
+    err.status   = 400;
     throw err;
   }
 
-  // Find existing user
   let result = await query(
     `SELECT * FROM users WHERE ${col} = $1 OR email = $2`,
-    [pid, e]
+    [pid, e],
   );
 
   let user;
   let isNew = false;
 
   if (result.rows.length > 0) {
-    // ✅ UPDATE - No CASE statement with enum types
     user = result.rows[0];
-
-    // Determine auth_provider in JavaScript, not SQL
     const newAuthProvider =
       !user.auth_provider || user.auth_provider === "email"
         ? provider
@@ -406,67 +411,55 @@ const upsertSocialUser = async ({
 
     result = await query(
       `UPDATE users SET
-        ${col} = $1,
-        full_name = COALESCE(NULLIF($2, ''), full_name),
-        avatar_url = COALESCE(NULLIF($3, ''), avatar_url),
-        phone = COALESCE(NULLIF($4, ''), phone),
-        bio = COALESCE(NULLIF($5, ''), bio),
-        auth_provider = $6,
-        is_verified = true,
-        is_active = true,
-        last_login = NOW()
-      WHERE id = $7
-      RETURNING *`,
-      [pid, n, avatar || null, phone || null, bio || null, newAuthProvider, user.id]
+         ${col}         = $1,
+         full_name      = COALESCE(NULLIF($2,''), full_name),
+         avatar_url     = COALESCE(NULLIF($3,''), avatar_url),
+         phone          = COALESCE(NULLIF($4,''), phone),
+         bio            = COALESCE(NULLIF($5,''), bio),
+         auth_provider  = $6,
+         is_verified    = true,
+         is_active      = true,
+         last_login     = NOW()
+       WHERE id = $7
+       RETURNING *`,
+      [pid, n, avatar || null, phone || null, bio || null, newAuthProvider, user.id],
     );
     user = result.rows[0];
   } else {
-    // ✅ INSERT - Plain text values, no enum casting
     result = await query(
       `INSERT INTO users (
-        email,
-        full_name,
-        avatar_url,
-        ${col},
-        auth_provider,
-        phone,
-        bio,
-        is_verified,
-        is_active,
-        last_login,
-        role
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, true, true, NOW(), 'user')
-      RETURNING *`,
-      [e, n, avatar || null, pid, provider, phone || null, bio || null]
+         email, full_name, avatar_url, ${col},
+         auth_provider, phone, bio,
+         is_verified, is_active, last_login, role
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NOW(),'user')
+       RETURNING *`,
+      [e, n, avatar || null, pid, provider, phone || null, bio || null],
     );
-    user = result.rows[0];
+    user  = result.rows[0];
     isNew = true;
   }
 
   if (isNew) {
     sendEmail({
-      to: user.email,
+      to:      user.email,
       subject: `Welcome to ${APP_NAME}!`,
-      html: buildWelcomeEmail({ recipientName: user.full_name }),
-    }).catch((err) => {
-      logger.warn("[Auth] Welcome email failed:", err.message);
-    });
+      html:    buildWelcomeEmail({ recipientName: user.full_name }),
+    }).catch((err) => logger.warn("[Auth] Welcome email failed:", err.message));
   }
 
   return { user, isNew };
 };
 
-const respondWithAuth = (res, user, isNew = false, statusCode = 200) => {
+const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
   res.status(statusCode).json({
     success: true,
     data: {
-      token: generateToken(user, "user"),
+      token:        generateToken(user, "user"),
       refreshToken: generateRefreshToken(user, "user"),
-      user: sanitizeUser(user),
-      isNewUser: isNew,
+      user:         sanitizeUser(user),
+      isNewUser:    isNew,
     },
   });
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // REGISTER
@@ -475,7 +468,7 @@ const respondWithAuth = (res, user, isNew = false, statusCode = 200) => {
 exports.register = async (req, res) => {
   try {
     const { email, fullName, full_name, phone, bio, avatar } = req.body;
-    const name = (fullName || full_name || "").trim();
+    const name            = (fullName || full_name || "").trim();
     const normalizedEmail = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail)
@@ -498,58 +491,58 @@ exports.register = async (req, res) => {
         });
 
       await query(
-        `UPDATE users SET 
-          full_name = COALESCE(NULLIF($1,''), full_name), 
-          phone = COALESCE(NULLIF($2,''), phone),
-          bio = COALESCE(NULLIF($3,''), bio), 
-          avatar_url = COALESCE(NULLIF($4,''), avatar_url) 
+        `UPDATE users SET
+           full_name  = COALESCE(NULLIF($1,''), full_name),
+           phone      = COALESCE(NULLIF($2,''), phone),
+           bio        = COALESCE(NULLIF($3,''), bio),
+           avatar_url = COALESCE(NULLIF($4,''), avatar_url)
          WHERE id = $5`,
-        [name, phone || null, bio || null, avatar || null, existing.id]
+        [name, phone || null, bio || null, avatar || null, existing.id],
       );
 
       const otp = generateOTP();
       await query(
-        `UPDATE users SET 
-          verification_code = $1, 
-          code_expiry = $2, 
-          code_attempts = 0, 
-          last_code_sent_at = NOW() 
+        `UPDATE users SET
+           verification_code = $1,
+           code_expiry       = $2,
+           code_attempts     = 0,
+           last_code_sent_at = NOW()
          WHERE id = $3`,
-        [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000), existing.id]
+        [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existing.id],
       );
 
       await sendOtpEmail(normalizedEmail, otp, name || existing.full_name, "verify");
       return res.json({
         success: true,
         message: "Verification code sent.",
-        data: { email: normalizedEmail },
+        data:    { email: normalizedEmail },
       });
     }
 
     result = await query(
       `INSERT INTO users (email, full_name, phone, bio, avatar_url, is_verified, auth_provider)
-       VALUES ($1, $2, $3, $4, $5, false, 'email') 
+       VALUES ($1,$2,$3,$4,$5,false,'email')
        RETURNING *`,
-      [normalizedEmail, name || null, phone || null, bio || null, avatar || null]
+      [normalizedEmail, name || null, phone || null, bio || null, avatar || null],
     );
 
     const user = result.rows[0];
-    const otp = generateOTP();
+    const otp  = generateOTP();
     await query(
-      `UPDATE users SET 
-        verification_code = $1, 
-        code_expiry = $2, 
-        code_attempts = 0, 
-        last_code_sent_at = NOW() 
+      `UPDATE users SET
+         verification_code = $1,
+         code_expiry       = $2,
+         code_attempts     = 0,
+         last_code_sent_at = NOW()
        WHERE id = $3`,
-      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000), user.id]
+      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), user.id],
     );
 
     await sendOtpEmail(normalizedEmail, otp, name, "verify");
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: "Account created! Code sent.",
-      data: { email: normalizedEmail, requiresVerification: true },
+      data:    { email: normalizedEmail, requiresVerification: true },
     });
   } catch (err) {
     handleError(res, err, "Registration failed");
@@ -563,21 +556,21 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, fullName, full_name } = req.body;
-    const name = (fullName || full_name || "").trim();
+    const name            = (fullName || full_name || "").trim();
     const normalizedEmail = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail)
       return res.status(400).json({ success: false, message: "Email is required" });
 
     let result = await query("SELECT * FROM users WHERE email = $1", [normalizedEmail]);
-    let isNew = false;
+    let isNew  = false;
 
     if (result.rows.length === 0) {
       result = await query(
-        `INSERT INTO users (email, full_name, is_verified, auth_provider) 
-         VALUES ($1, $2, false, 'email') 
+        `INSERT INTO users (email, full_name, is_verified, auth_provider)
+         VALUES ($1,$2,false,'email')
          RETURNING *`,
-        [normalizedEmail, name || null]
+        [normalizedEmail, name || null],
       );
       isNew = true;
     }
@@ -593,20 +586,20 @@ exports.login = async (req, res) => {
 
     const otp = generateOTP();
     await query(
-      `UPDATE users SET 
-        verification_code = $1, 
-        code_expiry = $2, 
-        code_attempts = 0, 
-        last_code_sent_at = NOW() 
+      `UPDATE users SET
+         verification_code = $1,
+         code_expiry       = $2,
+         code_attempts     = 0,
+         last_code_sent_at = NOW()
        WHERE id = $3`,
-      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60000), user.id]
+      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), user.id],
     );
 
     await sendOtpEmail(normalizedEmail, otp, user.full_name || name, isNew ? "verify" : "login");
-    res.json({
+    return res.json({
       success: true,
       message: "Verification code sent.",
-      data: { email: normalizedEmail, isNewUser: isNew },
+      data:    { email: normalizedEmail, isNewUser: isNew },
     });
   } catch (err) {
     handleError(res, err, "Login failed");
@@ -619,9 +612,9 @@ exports.login = async (req, res) => {
 
 exports.verifyCode = async (req, res) => {
   try {
-    const { email, code } = req.body;
-    const sanitizedCode = String(code || "").replace(/\D/g, "").slice(0, 6);
-    const normalizedEmail = (email || "").trim().toLowerCase();
+    const { email, code }  = req.body;
+    const sanitizedCode    = String(code || "").replace(/\D/g, "").slice(0, 6);
+    const normalizedEmail  = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail || !sanitizedCode)
       return res.status(400).json({ success: false, message: "Email and code required" });
@@ -637,7 +630,7 @@ exports.verifyCode = async (req, res) => {
     if (user.code_attempts >= OTP_MAX_ATTEMPTS) {
       await query(
         "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
-        [user.id]
+        [user.id],
       );
       return res.status(429).json({
         success: false,
@@ -650,7 +643,10 @@ exports.verifyCode = async (req, res) => {
       !user.code_expiry ||
       new Date(user.code_expiry) < new Date()
     ) {
-      await query("UPDATE users SET code_attempts = code_attempts + 1 WHERE id = $1", [user.id]);
+      await query(
+        "UPDATE users SET code_attempts = code_attempts + 1 WHERE id = $1",
+        [user.id],
+      );
       const remaining = OTP_MAX_ATTEMPTS - (user.code_attempts + 1);
       return res.status(401).json({
         success: false,
@@ -663,32 +659,32 @@ exports.verifyCode = async (req, res) => {
 
     const isFirst = !user.is_verified;
     await query(
-      `UPDATE users SET 
-        is_verified = true, 
-        verification_code = NULL, 
-        code_expiry = NULL, 
-        code_attempts = 0, 
-        last_login = NOW() 
+      `UPDATE users SET
+         is_verified       = true,
+         verification_code = NULL,
+         code_expiry       = NULL,
+         code_attempts     = 0,
+         last_login        = NOW()
        WHERE id = $1`,
-      [user.id]
+      [user.id],
     );
 
     if (isFirst) {
       sendEmail({
-        to: user.email,
+        to:      user.email,
         subject: `Welcome to ${APP_NAME}! 🎉`,
-        html: buildWelcomeEmail({ recipientName: user.full_name }),
+        html:    buildWelcomeEmail({ recipientName: user.full_name }),
       }).catch(() => {});
     }
 
-    res.json({
+    return res.json({
       success: true,
       message: isFirst ? "Account verified!" : "Signed in!",
       data: {
-        token: generateToken(user, "user"),
+        token:        generateToken(user, "user"),
         refreshToken: generateRefreshToken(user, "user"),
-        user: sanitizeUser({ ...user, is_verified: true }),
-        isNewUser: isFirst,
+        user:         sanitizeUser({ ...user, is_verified: true }),
+        isNewUser:    isFirst,
       },
     });
   } catch (err) {
@@ -708,8 +704,9 @@ exports.resendCode = async (req, res) => {
 
     const result = await query(
       "SELECT id, email, full_name, last_code_sent_at FROM users WHERE email = $1",
-      [normalizedEmail]
+      [normalizedEmail],
     );
+    // Always respond the same way to prevent email enumeration
     if (result.rows.length === 0)
       return res.json({ success: true, message: "If an account exists, a new code was sent." });
 
@@ -722,17 +719,17 @@ exports.resendCode = async (req, res) => {
 
     const otp = generateOTP();
     await query(
-      `UPDATE users SET 
-        verification_code = $1, 
-        code_expiry = $2, 
-        code_attempts = 0, 
-        last_code_sent_at = NOW() 
+      `UPDATE users SET
+         verification_code = $1,
+         code_expiry       = $2,
+         code_attempts     = 0,
+         last_code_sent_at = NOW()
        WHERE id = $3`,
-      [otp, new Date(Date.now() + 15 * 60000), user.id]
+      [otp, new Date(Date.now() + 15 * 60_000), user.id],
     );
 
     await sendOtpEmail(user.email, otp, user.full_name, "resend");
-    res.json({ success: true, message: "New code sent." });
+    return res.json({ success: true, message: "New code sent." });
   } catch (err) {
     handleError(res, err, "Resend failed");
   }
@@ -750,14 +747,14 @@ exports.checkEmail = async (req, res) => {
 
     const result = await query(
       "SELECT id, is_verified, auth_provider FROM users WHERE email = $1",
-      [normalizedEmail]
+      [normalizedEmail],
     );
-    res.json({
+    return res.json({
       success: true,
       data: {
-        exists: result.rows.length > 0,
-        isVerified: result.rows[0]?.is_verified || false,
-        provider: result.rows[0]?.auth_provider || null,
+        exists:     result.rows.length > 0,
+        isVerified: result.rows[0]?.is_verified  || false,
+        provider:   result.rows[0]?.auth_provider || null,
       },
     });
   } catch (err) {
@@ -773,15 +770,11 @@ exports.googleAuth = async (req, res) => {
   try {
     const { credential, phone, bio, avatar } = req.body;
 
-    if (!credential || credential.trim() === "") {
-      return res.status(400).json({
-        success: false,
-        message: "Google credential is required",
-      });
-    }
+    if (!credential || !credential.trim())
+      return res.status(400).json({ success: false, message: "Google credential is required" });
 
     if (!process.env.GOOGLE_CLIENT_ID) {
-      logger.error("[Google Auth] GOOGLE_CLIENT_ID not set in environment");
+      logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
       return res.status(500).json({
         success: false,
         message: "Google authentication is not configured on the server",
@@ -792,7 +785,7 @@ exports.googleAuth = async (req, res) => {
     try {
       const client = getGoogleOAuthClient();
       const ticket = await client.verifyIdToken({
-        idToken: credential.trim(),
+        idToken:  credential.trim(),
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
@@ -804,26 +797,24 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
-    if (!payload?.sub || !payload?.email) {
+    if (!payload?.sub || !payload?.email)
       return res.status(401).json({
         success: false,
         message: "Could not get account information from Google",
       });
-    }
 
-    if (payload.email_verified === false) {
+    if (payload.email_verified === false)
       return res.status(401).json({
         success: false,
         message: "Please verify your Google email first",
       });
-    }
 
     const authResult = await upsertSocialUser({
-      provider: "google",
+      provider:   "google",
       providerId: String(payload.sub),
-      email: payload.email,
-      name: payload.name,
-      avatar: avatar || payload.picture,
+      email:      payload.email,
+      name:       payload.name,
+      avatar:     avatar || payload.picture,
       phone,
       bio,
     });
@@ -833,7 +824,7 @@ exports.googleAuth = async (req, res) => {
       isNew: authResult.isNew,
     });
 
-    respondWithAuth(res, authResult.user, authResult.isNew);
+    return respondWithAuth(res, authResult.user, authResult.isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
   }
@@ -851,18 +842,19 @@ exports.githubAuth = async (req, res) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
+    // Step 1: Exchange code for access token (IPv4 forced via agent)
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
       {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          client_id: process.env.GITHUB_CLIENT_ID,
+        body:    JSON.stringify({
+          client_id:     process.env.GITHUB_CLIENT_ID,
           client_secret: process.env.GITHUB_CLIENT_SECRET,
           code,
         }),
       },
-      "GitHub token exchange"
+      "GitHub token exchange",
     );
 
     if (!tokenData.access_token)
@@ -873,22 +865,24 @@ exports.githubAuth = async (req, res) => {
 
     const ghHeaders = {
       Authorization: `Bearer ${tokenData.access_token}`,
-      Accept: "application/vnd.github.v3+json",
-      "User-Agent": APP_NAME,
+      Accept:        "application/vnd.github.v3+json",
+      "User-Agent":  APP_NAME,
     };
 
+    // Step 2: Fetch user profile (IPv4 forced via agent)
     const gh = await fetchJsonOrThrow(
       "https://api.github.com/user",
       { headers: ghHeaders },
-      "GitHub profile"
+      "GitHub profile",
     );
 
+    // Step 3: Fetch email if not public (IPv4 forced via agent)
     let ghEmail = gh.email;
     if (!ghEmail) {
       const emails = await fetchJsonOrThrow(
         "https://api.github.com/user/emails",
         { headers: ghHeaders },
-        "GitHub emails"
+        "GitHub emails",
       );
       const list = Array.isArray(emails) ? emails : [];
       ghEmail =
@@ -903,16 +897,16 @@ exports.githubAuth = async (req, res) => {
       return res.status(401).json({ success: false, message: "GitHub account ID missing." });
 
     const authResult = await upsertSocialUser({
-      provider: "github",
+      provider:   "github",
       providerId: String(gh.id),
-      email: ghEmail,
-      name: gh.name || gh.login,
-      avatar: gh.avatar_url,
+      email:      ghEmail,
+      name:       gh.name || gh.login,
+      avatar:     gh.avatar_url,
       phone,
-      bio: bio || gh.bio,
+      bio:        bio || gh.bio,
     });
 
-    respondWithAuth(res, authResult.user, authResult.isNew);
+    return respondWithAuth(res, authResult.user, authResult.isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
   }
@@ -922,9 +916,8 @@ exports.githubAuth = async (req, res) => {
 // GET ME
 // ═══════════════════════════════════════════════════════════════════════════
 
-exports.getMe = async (req, res) => {
+exports.getMe = (req, res) =>
   res.json({ success: true, data: sanitizeUser(req.user) });
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // UPDATE PROFILE
@@ -932,53 +925,53 @@ exports.getMe = async (req, res) => {
 
 exports.updateProfile = async (req, res) => {
   try {
-    const { id } = req.user;
+    const { id }                                                   = req.user;
     const { full_name, fullName, avatar_url, avatar, phone, bio, preferences } = req.body;
-    const resolvedName = full_name || fullName || null;
-    const resolvedAvatar = avatar_url || avatar || null;
+    const resolvedName   = full_name   || fullName || null;
+    const resolvedAvatar = avatar_url  || avatar   || null;
 
     if (resolvedName && validateName && !validateName(resolvedName))
       return res.status(400).json({ success: false, message: "Name must be 2–50 characters." });
 
     const result = await query(
-      `UPDATE users SET 
-        full_name = COALESCE(NULLIF($1, ''), full_name), 
-        avatar_url = COALESCE(NULLIF($2, ''), avatar_url),
-        phone = COALESCE($3, phone), 
-        bio = COALESCE($4, bio),
-        preferences = COALESCE($5::jsonb, preferences) 
-       WHERE id = $6 
+      `UPDATE users SET
+         full_name   = COALESCE(NULLIF($1,''), full_name),
+         avatar_url  = COALESCE(NULLIF($2,''), avatar_url),
+         phone       = COALESCE($3, phone),
+         bio         = COALESCE($4, bio),
+         preferences = COALESCE($5::jsonb, preferences)
+       WHERE id = $6
        RETURNING *`,
       [
         resolvedName,
         resolvedAvatar,
-        phone || null,
-        bio || null,
+        phone       || null,
+        bio         || null,
         preferences
           ? typeof preferences === "string"
             ? preferences
             : JSON.stringify(preferences)
           : null,
         id,
-      ]
+      ],
     );
 
     if (result.rows.length === 0)
       return res.status(404).json({ success: false, message: "User not found" });
 
     sendEmail({
-      to: result.rows[0].email,
+      to:      result.rows[0].email,
       subject: `Profile Updated — ${APP_NAME}`,
-      html: buildActivityAlertEmail({
+      html:    buildActivityAlertEmail({
         recipientName: result.rows[0].full_name,
-        activityType: "profile_updated",
+        activityType:  "profile_updated",
       }),
     }).catch(() => {});
 
-    res.json({
+    return res.json({
       success: true,
       message: "Profile updated.",
-      data: { user: sanitizeUser(result.rows[0]) },
+      data:    { user: sanitizeUser(result.rows[0]) },
     });
   } catch (err) {
     handleError(res, err, "Profile update failed");
@@ -989,176 +982,114 @@ exports.updateProfile = async (req, res) => {
 // REFRESH TOKEN
 // ═══════════════════════════════════════════════════════════════════════════
 
-
 exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
-
-    if (!refreshToken) {
-      return res.status(400).json({
-        success: false,
-        message: 'Refresh token required',
-      });
-    }
+    if (!refreshToken)
+      return res.status(400).json({ success: false, message: "Refresh token required" });
 
     let decoded;
     try {
       decoded = jwt.verify(refreshToken, JWT_REFRESH_SECRET);
     } catch (err) {
-      if (err.name === 'TokenExpiredError') {
-        return res.status(401).json({
-          success: false,
-          message: 'Session expired. Please log in again.',
-        });
-      }
       return res.status(401).json({
         success: false,
-        message: 'Invalid refresh token.',
+        message: err.name === "TokenExpiredError"
+          ? "Session expired. Please log in again."
+          : "Invalid refresh token.",
       });
     }
 
-    if (decoded.tokenType !== 'refresh') {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid token type',
-      });
-    }
+    if (decoded.tokenType !== "refresh")
+      return res.status(401).json({ success: false, message: "Invalid token type" });
 
-    const table = decoded.type === 'admin' ? 'admin_users' : 'users';
-    const result = await query(
-      `SELECT * FROM ${table} WHERE id = $1`,
-      [decoded.id]
-    );
+    const table  = decoded.type === "admin" ? "admin_users" : "users";
+    const result = await query(`SELECT * FROM ${table} WHERE id = $1`, [decoded.id]);
 
-    if (result.rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: 'Account not found.',
-      });
-    }
+    if (result.rows.length === 0)
+      return res.status(401).json({ success: false, message: "Account not found." });
 
     const entity = result.rows[0];
+    if (!entity.is_active)
+      return res.status(401).json({ success: false, message: "Account deactivated." });
 
-    if (!entity.is_active) {
-      return res.status(401).json({
-        success: false,
-        message: 'Account deactivated.',
-      });
-    }
-
-    // ✅ Safe tokenVersion check — only if BOTH sides have a valid number
-    const decodedVersion = decoded.tokenVersion;
-    const storedVersion = entity.token_version;
-
+    // Token version check
     if (
-      decodedVersion !== undefined &&
-      decodedVersion !== null &&
-      storedVersion !== undefined &&
-      storedVersion !== null &&
-      decodedVersion !== storedVersion
+      decoded.tokenVersion !== undefined && decoded.tokenVersion !== null &&
+      entity.token_version !== undefined && entity.token_version !== null &&
+      decoded.tokenVersion !== entity.token_version
     ) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session invalidated.',
-      });
+      return res.status(401).json({ success: false, message: "Session invalidated." });
     }
 
     return res.json({
       success: true,
       data: {
-        token: generateToken(entity, decoded.type),
+        token:        generateToken(entity, decoded.type),
         refreshToken: generateRefreshToken(entity, decoded.type),
       },
     });
   } catch (err) {
-    handleError(res, err, 'Token refresh failed', 401);
+    handleError(res, err, "Token refresh failed", 401);
   }
 };
-
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN LOGIN
 // ═══════════════════════════════════════════════════════════════════════════
 
-
 exports.adminLogin = async (req, res) => {
   try {
     const { email, password } = req.body;
-    const normalizedEmail = (email || '').trim().toLowerCase();
+    const normalizedEmail     = (email || "").trim().toLowerCase();
 
-    if (!normalizedEmail || !password) {
-      return res.status(400).json({
-        success: false,
-        message: 'Email and password are required.',
-      });
-    }
+    if (!normalizedEmail || !password)
+      return res.status(400).json({ success: false, message: "Email and password are required." });
 
     const result = await query(
-      'SELECT * FROM admin_users WHERE email = $1',
-      [normalizedEmail]
+      "SELECT * FROM admin_users WHERE email = $1",
+      [normalizedEmail],
     );
-
-    if (result.rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials.',
-      });
-    }
+    if (result.rows.length === 0)
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
 
     const admin = result.rows[0];
-
-    if (!admin.is_active) {
-      return res.status(401).json({
-        success: false,
-        message: 'Account deactivated.',
-      });
-    }
+    if (!admin.is_active)
+      return res.status(401).json({ success: false, message: "Account deactivated." });
 
     const isMatch = await bcrypt.compare(password, admin.password_hash);
-    if (!isMatch) {
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials.',
-      });
-    }
+    if (!isMatch)
+      return res.status(401).json({ success: false, message: "Invalid credentials." });
 
-    // ✅ Safe: only increment token_version if the column exists
     let freshAdmin = admin;
     try {
       const updated = await query(
-        `UPDATE admin_users 
-         SET last_login = NOW(),
-             token_version = COALESCE(token_version, 0) + 1
+        `UPDATE admin_users
+         SET last_login     = NOW(),
+             token_version  = COALESCE(token_version, 0) + 1
          WHERE id = $1
          RETURNING *`,
-        [admin.id]
+        [admin.id],
       );
       freshAdmin = updated.rows[0];
     } catch (updateErr) {
-      // token_version column doesn't exist yet — just update last_login
-      logger.warn('[adminLogin] token_version column missing, falling back:', updateErr.message);
-      await query(
-        'UPDATE admin_users SET last_login = NOW() WHERE id = $1',
-        [admin.id]
-      );
+      logger.warn("[adminLogin] token_version column missing, falling back:", updateErr.message);
+      await query("UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id]);
       freshAdmin = { ...admin, last_login: new Date(), token_version: 0 };
     }
 
     return res.json({
       success: true,
       data: {
-        token: generateToken(freshAdmin, 'admin'),
-        refreshToken: generateRefreshToken(freshAdmin, 'admin'),
-        user: sanitizeUser(freshAdmin),
+        token:        generateToken(freshAdmin, "admin"),
+        refreshToken: generateRefreshToken(freshAdmin, "admin"),
+        user:         sanitizeUser(freshAdmin),
       },
     });
   } catch (err) {
-    handleError(res, err, 'Admin login failed');
+    handleError(res, err, "Admin login failed");
   }
 };
-
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // ADMIN REGISTER
@@ -1167,9 +1098,9 @@ exports.adminLogin = async (req, res) => {
 exports.adminRegister = async (req, res) => {
   try {
     const { email, username, password, full_name, fullName, role } = req.body;
-    const normalizedEmail = (email || "").trim().toLowerCase();
+    const normalizedEmail    = (email    || "").trim().toLowerCase();
     const normalizedUsername = (username || "").trim();
-    const resolvedName = full_name || fullName || null;
+    const resolvedName       = full_name || fullName || null;
 
     if (!normalizedEmail || !normalizedUsername || !password)
       return res.status(400).json({
@@ -1179,20 +1110,20 @@ exports.adminRegister = async (req, res) => {
 
     const existing = await query(
       "SELECT id FROM admin_users WHERE email = $1 OR username = $2",
-      [normalizedEmail, normalizedUsername]
+      [normalizedEmail, normalizedUsername],
     );
     if (existing.rows.length > 0)
       return res.status(409).json({ success: false, message: "Admin account already exists." });
 
     const passwordHash = await bcrypt.hash(password, 12);
-    const created = await query(
+    const created      = await query(
       `INSERT INTO admin_users (email, username, password_hash, full_name, role, is_active)
-       VALUES ($1, $2, $3, $4, $5, true) 
+       VALUES ($1,$2,$3,$4,$5,true)
        RETURNING *`,
-      [normalizedEmail, normalizedUsername, passwordHash, resolvedName, role || "admin"]
+      [normalizedEmail, normalizedUsername, passwordHash, resolvedName, role || "admin"],
     );
 
-    res.status(201).json({ success: true, data: { user: sanitizeUser(created.rows[0]) } });
+    return res.status(201).json({ success: true, data: { user: sanitizeUser(created.rows[0]) } });
   } catch (err) {
     handleError(res, err, "Admin registration failed");
   }
@@ -1205,25 +1136,17 @@ exports.adminRegister = async (req, res) => {
 exports.changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
-    const user = req.user;
-
     if (!oldPassword || !newPassword)
-      return res.status(400).json({
-        success: false,
-        message: "Old and new password are required.",
-      });
+      return res.status(400).json({ success: false, message: "Old and new password are required." });
 
-    const isMatch = await bcrypt.compare(oldPassword, user.password_hash);
+    const isMatch = await bcrypt.compare(oldPassword, req.user.password_hash);
     if (!isMatch)
-      return res.status(401).json({
-        success: false,
-        message: "Current password is incorrect.",
-      });
+      return res.status(401).json({ success: false, message: "Current password is incorrect." });
 
     const newHash = await bcrypt.hash(newPassword, 12);
-    await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [newHash, user.id]);
+    await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [newHash, req.user.id]);
 
-    res.json({ success: true, message: "Password updated successfully." });
+    return res.json({ success: true, message: "Password updated successfully." });
   } catch (err) {
     handleError(res, err, "Change password failed");
   }
@@ -1233,31 +1156,26 @@ exports.changePassword = async (req, res) => {
 // LOGOUT
 // ═══════════════════════════════════════════════════════════════════════════
 
-
-
 exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
-      const table = req.userType === 'admin' ? 'admin_users' : 'users';
-
-      // ✅ Safe: try to increment token_version, ignore if column missing
+      const table = req.userType === "admin" ? "admin_users" : "users";
       try {
         await query(
-          `UPDATE ${table} 
-           SET token_version = COALESCE(token_version, 0) + 1 
+          `UPDATE ${table}
+           SET token_version = COALESCE(token_version, 0) + 1
            WHERE id = $1`,
-          [req.user.id]
+          [req.user.id],
         );
       } catch (updateErr) {
-        logger.warn('[logout] token_version update failed (column may not exist):', updateErr.message);
+        logger.warn("[logout] token_version update failed:", updateErr.message);
       }
     }
-    return res.json({ success: true, message: 'Signed out.' });
-  } catch (err) {
-    return res.json({ success: true, message: 'Signed out.' });
+    return res.json({ success: true, message: "Signed out." });
+  } catch {
+    return res.json({ success: true, message: "Signed out." });
   }
 };
-
 
 // ═══════════════════════════════════════════════════════════════════════════
 // DELETE ACCOUNT
@@ -1270,21 +1188,25 @@ exports.deleteAccount = async (req, res) => {
 
     if (email) {
       sendEmail({
-        to: email,
+        to:      email,
         subject: `Account Deleted — ${APP_NAME}`,
-        html: buildActivityAlertEmail({
+        html:    buildActivityAlertEmail({
           recipientName: full_name,
-          activityType: "account_deleted",
+          activityType:  "account_deleted",
         }),
       }).catch(() => {});
     }
 
     await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
-    res.json({ success: true, message: "Account deleted." });
+    return res.json({ success: true, message: "Account deleted." });
   } catch (err) {
     handleError(res, err, "Deletion failed");
   }
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EXPORT EMAIL BUILDERS (used by tests / other modules)
+// ═══════════════════════════════════════════════════════════════════════════
 
 exports._emailBuilders = {
   buildEmailTemplate,

@@ -10,32 +10,30 @@ const bookingController = require("../controllers/bookingsController");
 const { protect, adminOnly, optionalAuth } = require("../middleware/auth");
 const rateLimit = require("express-rate-limit");
 
-// Rate limiting for booking creation
 const bookingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 10, // 10 bookings per window
-  message: { error: "Too many booking requests. Please try again later." },
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { success: false, error: "Too many booking requests. Please try again later." },
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 // PUBLIC ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+// (must all be defined before the /:id wildcard)
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Create booking (public, with optional auth)
+// Create booking
 router.post("/", bookingLimiter, optionalAuth, bookingController.create);
 
-// Track booking by number (public)
+// Track booking by number
 router.get("/track/:bookingNumber", bookingController.track);
 
-// === PUBLIC METRICS ROUTES ===
-
-// Most booked destinations (Featured for frontend)
+// Most booked destinations
 router.get("/most-booked", bookingController.getMostBookedDestinations);
 
-// Bookings by destination
+// Booking stats by destination
 router.get("/by-destination/:destinationId", bookingController.getBookingsByDestination);
 
-// Bookings by country
+// Booking stats by country
 router.get("/by-country/:countryId", bookingController.getBookingsByCountry);
 
 // All countries with booking stats
@@ -44,22 +42,22 @@ router.get("/countries-stats", bookingController.getCountriesBookingStats);
 // All destinations with booking stats
 router.get("/destinations-stats", bookingController.getDestinationsBookingStats);
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 // AUTHENTICATED USER ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Get user's own bookings
+// IMPORTANT: Must be defined BEFORE /:id wildcard route
 router.get("/my-bookings", protect, bookingController.getMyBookings);
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// ─────────────────────────────────────────────────────────────────────────────
 // ADMIN ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+// All defined BEFORE the /:id catch-all
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Dashboard endpoints
-router.get("/stats", adminOnly, bookingController.getStats);
-router.get("/upcoming", adminOnly, bookingController.getUpcoming);
-router.get("/recent", adminOnly, bookingController.getRecent);
-router.get("/export", adminOnly, bookingController.export);
+router.get("/stats",       adminOnly, bookingController.getStats);
+router.get("/upcoming",    adminOnly, bookingController.getUpcoming);
+router.get("/recent",      adminOnly, bookingController.getRecent);
+router.get("/export",      adminOnly, bookingController.export);
 
 // Bulk operations
 router.post("/bulk-status", adminOnly, bookingController.bulkUpdateStatus);
@@ -67,17 +65,16 @@ router.post("/bulk-status", adminOnly, bookingController.bulkUpdateStatus);
 // List all bookings
 router.get("/", adminOnly, bookingController.getAll);
 
-// Single booking operations
-router.get("/:id", adminOnly, bookingController.getOne);
-router.put("/:id", adminOnly, bookingController.update);
-router.delete("/:id", adminOnly, bookingController.remove);
+// ─────────────────────────────────────────────────────────────────────────────
+// WILDCARD /:id ROUTES — MUST BE LAST
+// ─────────────────────────────────────────────────────────────────────────────
 
-// Status updates
-router.patch("/:id/status", adminOnly, bookingController.updateStatus);
-router.post("/:id/confirm", adminOnly, bookingController.confirm);
-router.post("/:id/cancel", adminOnly, bookingController.cancel);
-
-// Notes
-router.post("/:id/notes", adminOnly, bookingController.addNotes);
+router.get   ("/:id",             adminOnly, bookingController.getOne);
+router.put   ("/:id",             adminOnly, bookingController.update);
+router.delete("/:id",             adminOnly, bookingController.remove);
+router.patch ("/:id/status",      adminOnly, bookingController.updateStatus);
+router.post  ("/:id/confirm",     adminOnly, bookingController.confirm);
+router.post  ("/:id/cancel",      adminOnly, bookingController.cancel);
+router.post  ("/:id/notes",       adminOnly, bookingController.addNotes);
 
 module.exports = router;
