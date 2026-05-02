@@ -9,7 +9,9 @@
  * - Sequelize compatibility maintained
  */
 
-require("dotenv").config({ path: require("path").resolve(process.cwd(), ".env") });
+require("dotenv").config({
+  path: require("path").resolve(process.cwd(), ".env"),
+});
 const { Pool } = require("pg");
 const { Sequelize } = require("sequelize");
 const logger = require("../utils/logger");
@@ -35,10 +37,12 @@ const poolOptions = connectionString
   ? {
       connectionString,
       // If running against cloud providers, enable SSL by default
-      ssl: process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
+      ssl:
+        process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
       max: parseInt(process.env.DB_POOL_MAX, 10) || 30,
       idleTimeoutMillis: parseInt(process.env.DB_IDLE_MS, 10) || 300000,
-      connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
+      connectionTimeoutMillis:
+        parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
       allowExitOnIdle: false,
     }
   : {
@@ -46,9 +50,11 @@ const poolOptions = connectionString
       max: parseInt(process.env.DB_POOL_MAX, 10) || 30,
       min: parseInt(process.env.DB_POOL_MIN, 10) || 5,
       idleTimeoutMillis: parseInt(process.env.DB_IDLE_MS, 10) || 300000,
-      connectionTimeoutMillis: parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
+      connectionTimeoutMillis:
+        parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10000,
       allowExitOnIdle: false,
-      statement_timeout: parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30000,
+      statement_timeout:
+        parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30000,
     };
 
 const pool = new Pool(poolOptions);
@@ -115,7 +121,9 @@ const query = async (text, params = []) => {
     ) {
       const tableMatch =
         typeof err.message === "string"
-          ? err.message.match(/permission denied for (?:relation|table)\s+\"?([a-zA-Z0-9_]+)\"?/i)
+          ? err.message.match(
+              /permission denied for (?:relation|table)\s+\"?([a-zA-Z0-9_]+)\"?/i,
+            )
           : null;
       const table = tableMatch?.[1] || null;
       const user = dbConfig.user || process.env.DB_USER || "unknown";
@@ -259,6 +267,39 @@ const ensureUserSchema = async () => {
   }
 };
 
+
+const ensureGallerySchema = async () => {
+  try {
+    // Add missing columns
+    await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+    await pool.query(`ALTER TABLE gallery ADD COLUMN IF NOT EXISTS tags TEXT[] DEFAULT '{}'::TEXT[]`).catch(() => {});
+
+    // Backfill updated_at where null
+    await pool.query(`UPDATE gallery SET updated_at = created_at WHERE updated_at IS NULL`).catch(() => {});
+
+    // Performance indexes
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_is_active   ON gallery(is_active)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_is_featured ON gallery(is_featured)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_category    ON gallery(category)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_country_id  ON gallery(country_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_created_at  ON gallery(created_at DESC)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_sort_order  ON gallery(sort_order)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_gallery_active_featured ON gallery(is_active, is_featured, sort_order)`).catch(() => {});
+
+    // gallery_increment_views function
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION gallery_increment_views(gallery_id INTEGER)
+      RETURNS void AS $$
+        UPDATE gallery SET view_count = COALESCE(view_count, 0) + 1 WHERE id = gallery_id;
+      $$ LANGUAGE sql;
+    `).catch(() => {});
+
+    logger.info("[DB] ✅ Gallery schema verified & indexes ensured");
+  } catch (err) {
+    logger.warn("[DB] Gallery schema ensure failed:", err.message);
+  }
+};
+
 // ── Ensure Destinations Table Schema is Complete ─────────────────────────────
 
 const ensureDestinationsSchema = async () => {
@@ -344,10 +385,7 @@ const ensureContactSchema = async () => {
 
     logger.info("[DB] ✅ Contact messaging schema verified & ensured");
   } catch (err) {
-    logger.warn(
-      "[DB] Contact schema ensure failed:",
-      err.message,
-    );
+    logger.warn("[DB] Contact schema ensure failed:", err.message);
   }
 };
 
@@ -425,4 +463,5 @@ module.exports = {
   ensureDestinationsSchema,
   ensureContactSchema,
   ensureChatSchema,
+  ensureGallerySchema,
 };

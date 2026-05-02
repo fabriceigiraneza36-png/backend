@@ -6,7 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "start:prod": "cross-env NODE_ENV=production node server.js",
-    "dev": "node server.js",
+    "dev": "nodemon server.js",
     "build": "npm test",
     "migrate": "node scripts/migrate.js",
     "rollback": "node scripts/rollback.js",
