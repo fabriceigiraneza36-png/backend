@@ -105,83 +105,52 @@ const normaliseDistribution = (rows = []) => {
 // GET /api/reviews/stats
 // ═══════════════════════════════════════════════════════════════
 
+
 router.get("/stats", async (_req, res) => {
   try {
-    // ── Run all queries in parallel ────────────────────────────
-    const [
-      totalRes,
-      approvedStatsRes,
-      todayRes,
-      monthRes,
-      distributionRes,
-      recentRes,
-    ] = await Promise.all([
+    const [totalRes, approvedStatsRes, todayRes, monthRes, distributionRes] =
+      await Promise.all([
 
-      // All reviews (approved + unapproved) total count
-      query(`
-        SELECT COUNT(*) AS total
-        FROM   reviews
-      `),
+        query(`SELECT COUNT(*) AS total FROM reviews`),
 
-      // Stats for approved reviews only
-      query(`
-        SELECT
-          COUNT(*)                          AS approved_total,
-          ROUND(AVG(rating)::numeric, 2)    AS average,
-          MIN(rating)                       AS min_rating,
-          MAX(rating)                       AS max_rating
-        FROM reviews
-        WHERE is_approved = true
-      `),
+        query(`
+          SELECT
+            COUNT(*)                         AS approved_total,
+            ROUND(AVG(rating)::numeric, 2)   AS average,
+            MIN(rating)                      AS min_rating,
+            MAX(rating)                      AS max_rating
+          FROM reviews
+          WHERE is_approved = true
+        `),
 
-      // Submitted today (all, not just approved)
-      query(`
-        SELECT COUNT(*) AS count
-        FROM   reviews
-        WHERE  created_at >= CURRENT_DATE
-      `),
+        query(`
+          SELECT COUNT(*) AS count
+          FROM reviews
+          WHERE created_at >= CURRENT_DATE
+        `),
 
-      // Submitted this calendar month
-      query(`
-        SELECT COUNT(*) AS count
-        FROM   reviews
-        WHERE  created_at >= DATE_TRUNC('month', NOW())
-      `),
+        query(`
+          SELECT COUNT(*) AS count
+          FROM reviews
+          WHERE created_at >= DATE_TRUNC('month', NOW())
+        `),
 
-      // Rating distribution (approved only, stars 1–5)
-      query(`
-        SELECT
-          FLOOR(rating)::int AS star,
-          COUNT(*)           AS count
-        FROM   reviews
-        WHERE  is_approved = true
-          AND  rating >= 1
-          AND  rating <= 5
-        GROUP  BY FLOOR(rating)
-        ORDER  BY star DESC
-      `),
+        query(`
+          SELECT
+            FLOOR(rating)::int AS star,
+            COUNT(*)           AS count
+          FROM reviews
+          WHERE is_approved = true
+            AND rating BETWEEN 1 AND 5
+          GROUP BY FLOOR(rating)
+          ORDER BY star DESC
+        `),
+      ]);
 
-      // Last 5 approved reviews (preview cards)
-      query(`
-        SELECT
-          r.id,
-          r.rating,
-          r.title,
-          r.body,
-          r.entity_type,
-          r.entity_id,
-          r.created_at,
-          u.full_name  AS user_name,
-          u.avatar_url AS user_avatar
-        FROM   reviews r
-        LEFT   JOIN users u ON u.id = r.user_id
-        WHERE  r.is_approved = true
-        ORDER  BY r.created_at DESC
-        LIMIT  5
-      `),
-    ]);
+    // Safe number parsers
+    const toInt   = (v) => parseInt(v,   10) || 0;
+    const toFloat = (v) => parseFloat(v)     || 0;
 
-    // ── Parse scalar values ────────────────────────────────────
     const totalReviews     = toInt(totalRes.rows[0]?.total);
     const approvedTotal    = toInt(approvedStatsRes.rows[0]?.approved_total);
     const averageRating    = toFloat(approvedStatsRes.rows[0]?.average);
@@ -190,16 +159,20 @@ router.get("/stats", async (_req, res) => {
     const reviewsToday     = toInt(todayRes.rows[0]?.count);
     const reviewsThisMonth = toInt(monthRes.rows[0]?.count);
 
-    // ── Build distribution with percentages ───────────────────
-    const distribution = normaliseDistribution(distributionRes.rows);
-    for (const entry of distribution) {
-      entry.percentage =
-        approvedTotal > 0
-          ? Math.round((entry.count / approvedTotal) * 100)
-          : 0;
+    // Always return all 5 stars even if count = 0
+    const starMap = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    for (const row of distributionRes.rows) {
+      const s = parseInt(row.star, 10);
+      if (s >= 1 && s <= 5) starMap[s] = parseInt(row.count, 10) || 0;
     }
+    const ratingDistribution = [5, 4, 3, 2, 1].map((star) => ({
+      star,
+      count:      starMap[star],
+      percentage: approvedTotal > 0
+        ? Math.round((starMap[star] / approvedTotal) * 100)
+        : 0,
+    }));
 
-    // ── Response ───────────────────────────────────────────────
     return res.status(200).json({
       success: true,
       data: {
@@ -211,23 +184,23 @@ router.get("/stats", async (_req, res) => {
         maxRating,
         reviewsToday,
         reviewsThisMonth,
-        ratingDistribution: distribution,
-        recentReviews:      recentRes.rows,
+        ratingDistribution,
       },
     });
 
   } catch (error) {
     console.error("[Reviews] ❌ /stats error:", error);
     return res.status(500).json({
-      success:  false,
-      message:  "Failed to fetch review stats",
-      ...(process.env.NODE_ENV !== "production" && {
-        error: error.message,
-        stack: error.stack,
-      }),
+      success: false,
+      message: "Failed to fetch review stats",
+      error:   error.message,        // always expose in debug
+      code:    error.code,           // PostgreSQL error code
+      detail:  error.detail,         // which column/table
     });
   }
 });
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // GET /api/reviews — Paginated list (public)
