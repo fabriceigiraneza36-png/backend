@@ -317,11 +317,11 @@ app.post('/api/contact', async (req, res) => {
                 Can't wait? Reach us directly:
               </p>
               <p style="margin: 5px 0;">
-                <a href="tel:+254700123456" style="color: #34d399; text-decoration: none; font-size: 14px;">📞 +254 700 123 456</a>
+                <a href="tel:0792352409" style="color: #34d399; text-decoration: none; font-size: 14px;">📞 0792352409</a>
               </p>
-              <p style="margin: 5px 0;">
-                <a href="https://wa.me/254700123456" style="color: #34d399; text-decoration: none; font-size: 14px;">💬 WhatsApp Us</a>
-              </p>
+               <p style="margin: 5px 0;">
+                 <a href="https://wa.me/250792352409" style="color: #34d399; text-decoration: none; font-size: 14px;">💬 WhatsApp Us</a>
+               </p>
             </div>
             
             <!-- CTA Button -->
@@ -344,8 +344,8 @@ app.post('/api/contact', async (req, res) => {
               <a href="#" style="color: #059669; text-decoration: none; margin: 0 8px; font-size: 13px;">Twitter</a>
             </p>
             <p style="color: #9ca3af; margin: 15px 0 0; font-size: 11px;">
-              © ${new Date().getFullYear()} Altuvera Safaris. All rights reserved.<br>
-              Nairobi, Kenya
+               © ${new Date().getFullYear()} Altuvera Safaris. All rights reserved.<br>
+               Musanze, Rwanda
             </p>
           </div>
         </div>

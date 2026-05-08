@@ -30,6 +30,7 @@ const { Server } = require("socket.io");
 
 const {
   query,
+  ensureUserSchema,
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
@@ -766,6 +767,9 @@ async function initializeServer() {
     logger.info("🔄 Connecting to database…");
     await query("SELECT NOW()");
     logger.info("✅ Database connected");
+
+    await ensureUserSchema();
+    logger.info("✅ User schema ready");
 
     await ensureContactSchema();
     logger.info("✅ Contact schema ready");

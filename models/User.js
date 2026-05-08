@@ -114,6 +114,11 @@ const User = sequelize.define(
       type: DataTypes.DATE,
       field: "last_login",
     },
+    loginCounter: {
+      type: DataTypes.INTEGER,
+      defaultValue: 0,
+      field: "login_counter",
+    },
     preferences: {
       type: DataTypes.JSONB,
       defaultValue: {},

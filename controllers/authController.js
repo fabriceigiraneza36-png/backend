@@ -282,6 +282,8 @@ const sanitizeUser = (row) => {
     isActive:     safe.is_active,
     preferences:  safe.preferences,
     lastLogin:    safe.last_login,
+    loginCounter: safe.login_counter ?? 0,
+    login_counter: safe.login_counter ?? 0,
     createdAt:    safe.created_at,
     updatedAt:    safe.updated_at,
   };
@@ -599,7 +601,11 @@ exports.login = async (req, res) => {
     return res.json({
       success: true,
       message: "Verification code sent.",
-      data:    { email: normalizedEmail, isNewUser: isNew },
+      data:    {
+        email:         normalizedEmail,
+        isNewUser:     isNew,
+        loginCounter:  user.login_counter || 0,
+      },
     });
   } catch (err) {
     handleError(res, err, "Login failed");
@@ -612,7 +618,7 @@ exports.login = async (req, res) => {
 
 exports.verifyCode = async (req, res) => {
   try {
-    const { email, code }  = req.body;
+    const { email, code, isReVerification }  = req.body;
     const sanitizedCode    = String(code || "").replace(/\D/g, "").slice(0, 6);
     const normalizedEmail  = (email || "").trim().toLowerCase();
 
@@ -658,14 +664,26 @@ exports.verifyCode = async (req, res) => {
     }
 
     const isFirst = !user.is_verified;
+    const currentCounter = user.login_counter || 0;
+
+    // ── Update login_counter based on server state ─────────────────────────────
+    // If counter >= 2 (3rd login), reset to 0 after successful verification.
+    // Otherwise increment by 1.
+    const needsReset = currentCounter >= 2;
+    const counterUpdate = needsReset
+      ? `login_counter = 0`
+      : `login_counter = COALESCE(login_counter, 0) + 1`;
+
     await query(
       `UPDATE users SET
          is_verified       = true,
          verification_code = NULL,
          code_expiry       = NULL,
          code_attempts     = 0,
-         last_login        = NOW()
-       WHERE id = $1`,
+         last_login        = NOW(),
+         ${counterUpdate}
+        WHERE id = $1
+        RETURNING *`,
       [user.id],
     );
 
@@ -677,14 +695,18 @@ exports.verifyCode = async (req, res) => {
       }).catch(() => {});
     }
 
+    // Fetch updated user to get new counter value
+    const updated = await query("SELECT * FROM users WHERE id = $1", [user.id]);
+
     return res.json({
       success: true,
       message: isFirst ? "Account verified!" : "Signed in!",
       data: {
-        token:        generateToken(user, "user"),
-        refreshToken: generateRefreshToken(user, "user"),
-        user:         sanitizeUser({ ...user, is_verified: true }),
-        isNewUser:    isFirst,
+        token:         generateToken(updated.rows[0], "user"),
+        refreshToken:  generateRefreshToken(updated.rows[0], "user"),
+        user:          sanitizeUser(updated.rows[0]),
+        isNewUser:     isFirst,
+        loginCounter:  updated.rows[0].login_counter,
       },
     });
   } catch (err) {
@@ -809,22 +831,55 @@ exports.googleAuth = async (req, res) => {
         message: "Please verify your Google email first",
       });
 
+    const email      = payload.email.toLowerCase();
+    const providerId = String(payload.sub).trim();
+    const name       = payload.name || email.split("@")[0] || "User";
+
+    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    const existingResult = await query(
+      `SELECT id, login_counter FROM users WHERE google_id = $1 OR email = $2`,
+      [providerId, email],
+    );
+    if (existingResult.rows.length > 0) {
+      const existingUser = existingResult.rows[0];
+      if ((existingUser.login_counter || 0) >= 2) {
+        return res.status(403).json({
+          success: false,
+          message: "For your security, please verify your email to continue.",
+          code:           "REVERIFICATION_REQUIRED",
+          requiresReVerification: true,
+          email:          existingUser.email,
+        });
+      }
+    }
+
+    // ── Proceed with OAuth ────────────────────────────────────────────────────
     const authResult = await upsertSocialUser({
       provider:   "google",
-      providerId: String(payload.sub),
-      email:      payload.email,
-      name:       payload.name,
+      providerId: providerId,
+      email:      email,
+      name:       name,
       avatar:     avatar || payload.picture,
       phone,
       bio,
     });
 
+    // ── Increment login_counter on successful login ──────────────────────────
+    await query(
+      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
+      [authResult.user.id],
+    );
+
+    // Fetch updated user to include fresh counter
+    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+
     logger.info("[Google Auth] Success:", {
       email: authResult.user.email,
       isNew: authResult.isNew,
+      loginCounter: updated.rows[0].login_counter,
     });
 
-    return respondWithAuth(res, authResult.user, authResult.isNew);
+    return respondWithAuth(res, updated.rows[0], authResult.isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
   }
@@ -842,7 +897,7 @@ exports.githubAuth = async (req, res) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
-    // Step 1: Exchange code for access token (IPv4 forced via agent)
+    // Step 1: Exchange code for access token
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
       {
@@ -869,14 +924,14 @@ exports.githubAuth = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    // Step 2: Fetch user profile (IPv4 forced via agent)
+    // Step 2: Fetch user profile
     const gh = await fetchJsonOrThrow(
       "https://api.github.com/user",
       { headers: ghHeaders },
       "GitHub profile",
     );
 
-    // Step 3: Fetch email if not public (IPv4 forced via agent)
+    // Step 3: Fetch email if not public
     let ghEmail = gh.email;
     if (!ghEmail) {
       const emails = await fetchJsonOrThrow(
@@ -896,17 +951,55 @@ exports.githubAuth = async (req, res) => {
     if (!gh.id)
       return res.status(401).json({ success: false, message: "GitHub account ID missing." });
 
+    const email      = ghEmail.toLowerCase();
+    const providerId = String(gh.id).trim();
+    const name       = gh.name || gh.login || email.split("@")[0] || "User";
+
+    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    const existingResult = await query(
+      `SELECT id, login_counter FROM users WHERE github_id = $1 OR email = $2`,
+      [providerId, email],
+    );
+    if (existingResult.rows.length > 0) {
+      const existingUser = existingResult.rows[0];
+      if ((existingUser.login_counter || 0) >= 2) {
+        return res.status(403).json({
+          success: false,
+          message: "For your security, please verify your email to continue.",
+          code:           "REVERIFICATION_REQUIRED",
+          requiresReVerification: true,
+          email:          existingUser.email,
+        });
+      }
+    }
+
+    // ── Proceed with OAuth ────────────────────────────────────────────────────
     const authResult = await upsertSocialUser({
       provider:   "github",
-      providerId: String(gh.id),
-      email:      ghEmail,
-      name:       gh.name || gh.login,
+      providerId: providerId,
+      email:      email,
+      name:       name,
       avatar:     gh.avatar_url,
       phone,
       bio:        bio || gh.bio,
     });
 
-    return respondWithAuth(res, authResult.user, authResult.isNew);
+    // ── Increment login_counter on successful login ──────────────────────────
+    await query(
+      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
+      [authResult.user.id],
+    );
+
+    // Fetch updated user to include fresh counter
+    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+
+    logger.info("[GitHub Auth] Success:", {
+      email: authResult.user.email,
+      isNew: authResult.isNew,
+      loginCounter: updated.rows[0].login_counter,
+    });
+
+    return respondWithAuth(res, updated.rows[0], authResult.isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
   }

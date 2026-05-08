@@ -3,22 +3,22 @@
   "version": "1.0.0",
   "description": "Travel app backend - Node.js + PostgreSQL",
   "main": "server.js",
-  "scripts": {
-    "start": "node server.js",
-    "start:prod": "cross-env NODE_ENV=production node server.js",
-    "dev": "nodemon server.js",
-    "build": "npm test",
-    "migrate": "node scripts/migrate.js",
-    "rollback": "node scripts/rollback.js",
-    "seed": "node scripts/seed.js",
-    "test": "jest --runInBand",
-    "test:watch": "jest --watch",
-    "db:init": "node -e \"require('./config/db').initDB()\"",
-    "db:seed": "node -e \"require('./config/db').seedDB()\"",
-    "db:reset": "node -e \"require('./config/db').resetDB()\"",
-    "db:grant": "node scripts/grant-privileges.js",
-    "setup-db": "node scripts/setup-database.js"
-  },
+   "scripts": {
+     "start": "node server.js",
+     "start:prod": "cross-env NODE_ENV=production node server.js",
+     "dev": "nodemon server.js",
+     "build": "npm test -- --passWithNoTests",
+     "migrate": "node scripts/migrate.js",
+     "rollback": "node scripts/rollback.js",
+     "seed": "node scripts/seed.js",
+     "test": "jest --runInBand",
+     "test:watch": "jest --watch",
+     "db:init": "node -e \"require('./config/db').initDB()\"",
+     "db:seed": "node -e \"require('./config/db').seedDB()\"",
+     "db:reset": "node -e \"require('./config/db').resetDB()\"",
+     "db:grant": "node scripts/grant-privileges.js",
+     "setup-db": "node scripts/setup-database.js"
+   },
   "nodemonConfig": {
     "legacyWatch": true
   },

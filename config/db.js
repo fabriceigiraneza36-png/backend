@@ -212,6 +212,7 @@ const ensureUserSchema = async () => {
       { name: "avatar_url", type: "TEXT" },
       { name: "role", type: "VARCHAR(50) DEFAULT 'user'" },
       { name: "last_login", type: "TIMESTAMPTZ" },
+      { name: "login_counter", type: "INTEGER DEFAULT 0" },
       { name: "verification_code", type: "VARCHAR(10)" },
       { name: "code_expiry", type: "TIMESTAMPTZ" },
       { name: "code_attempts", type: "INTEGER DEFAULT 0" },
@@ -255,6 +256,11 @@ const ensureUserSchema = async () => {
     await pool
       .query(
         "CREATE INDEX IF NOT EXISTS idx_users_verification_token ON users(verification_token)",
+      )
+      .catch(() => {});
+    await pool
+      .query(
+        "CREATE INDEX IF NOT EXISTS idx_users_login_counter ON users(login_counter)",
       )
       .catch(() => {});
 
