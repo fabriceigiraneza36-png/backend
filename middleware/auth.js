@@ -263,91 +263,6 @@ const optionalAuth = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MIDDLEWARE: authMiddleware (WebAuthn / session-based)
-// Used for WebAuthn routes that require a session record in webauthn_sessions.
-// Sets req.user with decoded JWT payload — does NOT fetch from users table.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const authMiddleware = async (req, res, next) => {
-  try {
-    const token = extractToken(req);
-
-    if (!token) {
-      return res.status(401).json({
-        success: false,
-        message: 'No token provided.',
-        code: 'NO_TOKEN',
-      });
-    }
-
-    const decoded = verifyToken(token);
-
-    // Validate against webauthn_sessions table
-    const sessionResult = await query(
-      `SELECT * FROM webauthn_sessions 
-       WHERE token_jti = $1 
-         AND user_id   = $2`,
-      [decoded.jti, decoded.sub]
-    );
-
-    if (sessionResult.rows.length === 0) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session not found.',
-        code: 'SESSION_NOT_FOUND',
-      });
-    }
-
-    const session = sessionResult.rows[0];
-
-    if (session.revoked) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session has been revoked.',
-        code: 'SESSION_REVOKED',
-      });
-    }
-
-    if (new Date(session.expires_at) < new Date()) {
-      return res.status(401).json({
-        success: false,
-        message: 'Session has expired.',
-        code: 'SESSION_EXPIRED',
-      });
-    }
-
-    // Set minimal req.user from JWT payload (no DB user fetch needed here)
-    req.user = {
-      id:    decoded.sub,
-      email: decoded.email,
-      jti:   decoded.jti,
-      iat:   decoded.iat,
-      exp:   decoded.exp,
-    };
-
-    logger.debug('[Auth] authMiddleware — WebAuthn session valid', {
-      userId: decoded.sub,
-      jti:    decoded.jti,
-      path:   req.path,
-    });
-
-    next();
-  } catch (err) {
-    logger.warn('[Auth] authMiddleware — failed', {
-      error: err.message,
-      code:  err.code,
-      path:  req.path,
-    });
-
-    return res.status(err.statusCode || 500).json({
-      success: false,
-      message: err.message || 'Authentication failed.',
-      code:    err.code    || 'AUTH_ERROR',
-    });
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE: requireVerified
 // Must be used AFTER protect. Blocks unverified email accounts.
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -419,7 +334,6 @@ module.exports = {
   protect,
   adminOnly,
   optionalAuth,
-  authMiddleware,
   requireVerified,
   selfOrAdmin,
 };

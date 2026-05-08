@@ -66,7 +66,6 @@ const uploadsRouter = require("./routes/uploads");
 const mediaUploadsRouter = require("./routes/mediaUploads");
 const adminAuthRouter = require("./routes/adminAuth");
 const testimonialsRouter = require("./routes/testimonials");
-const webauthnRouter = require("./routes/webauthn");
 const countryLikesRouter = require("./routes/countryLikes");
 const countryCommentsRouter = require("./routes/countryComments");
 const countryRatingsRouter = require("./routes/countryRatings");
@@ -370,7 +369,6 @@ const buildOpenApiSpec = () => {
 
 // Auth
 app.use("/api/admin/auth", adminAuthRouter);
-app.use("/auth/webauthn", webauthnRouter);
 
 // Core resources
 app.use("/api/users", usersRouter);
