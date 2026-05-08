@@ -73,6 +73,7 @@ const destinationLikesRouter    = require("./routes/destinationLikes");
 const destinationCommentsRouter = require("./routes/destinationComments");
 const destinationRatingsRouter  = require("./routes/destinationRatings");
 const searchRoutes              = require("./routes/search.routes");
+const reviewsRouter             = require("./routes/reviews");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -395,6 +396,9 @@ app.use("/api/country-ratings",  countryRatingsRouter);
 app.use("/api/destination-likes",    destinationLikesRouter);
 app.use("/api/destination-comments", destinationCommentsRouter);
 app.use("/api/destination-ratings",  destinationRatingsRouter);
+
+// Reviews
+app.use("/api/reviews", reviewsRouter);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HTTP SERVER + SOCKET.IO
