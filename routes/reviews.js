@@ -108,98 +108,282 @@ const normaliseDistribution = (rows = []) => {
 
 router.get("/stats", async (_req, res) => {
   try {
-    const [totalRes, approvedStatsRes, todayRes, monthRes, distributionRes] =
-      await Promise.all([
-
-        query(`SELECT COUNT(*) AS total FROM reviews`),
-
-        query(`
-          SELECT
-            COUNT(*)                         AS approved_total,
-            ROUND(AVG(rating)::numeric, 2)   AS average,
-            MIN(rating)                      AS min_rating,
-            MAX(rating)                      AS max_rating
-          FROM reviews
-          WHERE is_approved = true
-        `),
-
-        query(`
-          SELECT COUNT(*) AS count
-          FROM reviews
-          WHERE created_at >= CURRENT_DATE
-        `),
-
-        query(`
-          SELECT COUNT(*) AS count
-          FROM reviews
-          WHERE created_at >= DATE_TRUNC('month', NOW())
-        `),
-
-        query(`
-          SELECT
-            FLOOR(rating)::int AS star,
-            COUNT(*)           AS count
-          FROM reviews
-          WHERE is_approved = true
-            AND rating BETWEEN 1 AND 5
-          GROUP BY FLOOR(rating)
-          ORDER BY star DESC
-        `),
-      ]);
-
-    // Safe number parsers
     const toInt   = (v) => parseInt(v,   10) || 0;
     const toFloat = (v) => parseFloat(v)     || 0;
 
-    const totalReviews     = toInt(totalRes.rows[0]?.total);
-    const approvedTotal    = toInt(approvedStatsRes.rows[0]?.approved_total);
-    const averageRating    = toFloat(approvedStatsRes.rows[0]?.average);
-    const minRating        = toFloat(approvedStatsRes.rows[0]?.min_rating);
-    const maxRating        = toFloat(approvedStatsRes.rows[0]?.max_rating);
-    const reviewsToday     = toInt(todayRes.rows[0]?.count);
-    const reviewsThisMonth = toInt(monthRes.rows[0]?.count);
+    const [
+      totalRes,
+      approvedStatsRes,
+      todayRes,
+      monthRes,
+      weekRes,
+      distributionRes,
+      categoryStatsRes,
+      tripTypeRes,
+      recentRes,
+    ] = await Promise.all([
 
-    // Always return all 5 stars even if count = 0
+      // ── Total reviews (all statuses) ──────────────────────────
+      query(`
+        SELECT
+          COUNT(*)                                          AS total,
+          COUNT(*) FILTER (WHERE status = 'approved')       AS approved,
+          COUNT(*) FILTER (WHERE status = 'pending')        AS pending,
+          COUNT(*) FILTER (WHERE status = 'rejected')       AS rejected,
+          COUNT(*) FILTER (WHERE status = 'spam')           AS spam,
+          COUNT(*) FILTER (WHERE verified_booking = true)   AS verified,
+          COUNT(*) FILTER (WHERE is_featured = true)        AS featured
+        FROM reviews
+      `),
+
+      // ── Approved rating averages (all rating dimensions) ──────
+      query(`
+        SELECT
+          COUNT(*)                                        AS approved_total,
+          ROUND(AVG(overall_rating)::numeric,     2)      AS avg_overall,
+          ROUND(AVG(cleanliness_rating)::numeric, 2)      AS avg_cleanliness,
+          ROUND(AVG(value_rating)::numeric,       2)      AS avg_value,
+          ROUND(AVG(service_rating)::numeric,     2)      AS avg_service,
+          ROUND(AVG(location_rating)::numeric,    2)      AS avg_location,
+          MIN(overall_rating)                             AS min_rating,
+          MAX(overall_rating)                             AS max_rating
+        FROM reviews
+        WHERE status = 'approved'
+          AND overall_rating IS NOT NULL
+      `),
+
+      // ── Reviews submitted today ───────────────────────────────
+      query(`
+        SELECT
+          COUNT(*)                                              AS total_today,
+          COUNT(*) FILTER (WHERE status = 'approved')           AS approved_today,
+          COUNT(*) FILTER (WHERE status = 'pending')            AS pending_today
+        FROM reviews
+        WHERE created_at >= CURRENT_DATE
+      `),
+
+      // ── Reviews this calendar month ───────────────────────────
+      query(`
+        SELECT
+          COUNT(*)                                              AS total_month,
+          COUNT(*) FILTER (WHERE status = 'approved')           AS approved_month
+        FROM reviews
+        WHERE created_at >= DATE_TRUNC('month', NOW())
+      `),
+
+      // ── Reviews this week ─────────────────────────────────────
+      query(`
+        SELECT COUNT(*) AS total_week
+        FROM reviews
+        WHERE created_at >= DATE_TRUNC('week', NOW())
+      `),
+
+      // ── Rating distribution (approved, overall_rating 1–5) ───
+      query(`
+        SELECT
+          FLOOR(overall_rating)::int  AS star,
+          COUNT(*)                    AS count
+        FROM reviews
+        WHERE status = 'approved'
+          AND overall_rating BETWEEN 1 AND 5
+        GROUP BY FLOOR(overall_rating)
+        ORDER BY star DESC
+      `),
+
+      // ── Sub-rating category averages breakdown ────────────────
+      query(`
+        SELECT
+          ROUND(AVG(cleanliness_rating)::numeric, 2) AS cleanliness,
+          ROUND(AVG(value_rating)::numeric,       2) AS value,
+          ROUND(AVG(service_rating)::numeric,     2) AS service,
+          ROUND(AVG(location_rating)::numeric,    2) AS location,
+          COUNT(*) FILTER (WHERE cleanliness_rating IS NOT NULL) AS cleanliness_count,
+          COUNT(*) FILTER (WHERE value_rating       IS NOT NULL) AS value_count,
+          COUNT(*) FILTER (WHERE service_rating     IS NOT NULL) AS service_count,
+          COUNT(*) FILTER (WHERE location_rating    IS NOT NULL) AS location_count
+        FROM reviews
+        WHERE status = 'approved'
+      `),
+
+      // ── Trip type breakdown ───────────────────────────────────
+      query(`
+        SELECT
+          COALESCE(trip_type, 'unspecified')  AS trip_type,
+          COUNT(*)                            AS count,
+          ROUND(AVG(overall_rating)::numeric, 2) AS avg_rating
+        FROM reviews
+        WHERE status = 'approved'
+        GROUP BY trip_type
+        ORDER BY count DESC
+        LIMIT 10
+      `),
+
+      // ── 5 most recent approved reviews (no JOIN needed) ───────
+      query(`
+        SELECT
+          id,
+          reviewer_name,
+          reviewer_avatar,
+          reviewer_location,
+          title,
+          review        AS body,
+          overall_rating,
+          trip_type,
+          travel_date,
+          verified_booking,
+          is_featured,
+          destination_id,
+          booking_id,
+          created_at
+        FROM reviews
+        WHERE status = 'approved'
+        ORDER BY created_at DESC
+        LIMIT 5
+      `),
+    ]);
+
+    // ── Parse totals ───────────────────────────────────────────────────────
+    const totalRow   = totalRes.rows[0]         || {};
+    const statsRow   = approvedStatsRes.rows[0] || {};
+    const todayRow   = todayRes.rows[0]         || {};
+    const monthRow   = monthRes.rows[0]         || {};
+    const weekRow    = weekRes.rows[0]           || {};
+    const catRow     = categoryStatsRes.rows[0] || {};
+
+    const totalReviews     = toInt(totalRow.total);
+    const approvedTotal    = toInt(totalRow.approved);
+    const pendingTotal     = toInt(totalRow.pending);
+    const rejectedTotal    = toInt(totalRow.rejected);
+    const spamTotal        = toInt(totalRow.spam);
+    const verifiedTotal    = toInt(totalRow.verified);
+    const featuredTotal    = toInt(totalRow.featured);
+
+    const averageRating    = toFloat(statsRow.avg_overall);
+    const minRating        = toFloat(statsRow.min_rating);
+    const maxRating        = toFloat(statsRow.max_rating);
+
+    const reviewsToday         = toInt(todayRow.total_today);
+    const approvedToday        = toInt(todayRow.approved_today);
+    const pendingToday         = toInt(todayRow.pending_today);
+    const reviewsThisMonth     = toInt(monthRow.total_month);
+    const approvedThisMonth    = toInt(monthRow.approved_month);
+    const reviewsThisWeek      = toInt(weekRow.total_week);
+
+    // ── Rating distribution — always return all 5 stars ───────────────────
     const starMap = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     for (const row of distributionRes.rows) {
-      const s = parseInt(row.star, 10);
-      if (s >= 1 && s <= 5) starMap[s] = parseInt(row.count, 10) || 0;
+      const s = toInt(row.star);
+      if (s >= 1 && s <= 5) starMap[s] = toInt(row.count);
     }
+
     const ratingDistribution = [5, 4, 3, 2, 1].map((star) => ({
       star,
+      label:      `${star} Star${star !== 1 ? "s" : ""}`,
       count:      starMap[star],
       percentage: approvedTotal > 0
         ? Math.round((starMap[star] / approvedTotal) * 100)
         : 0,
     }));
 
+    // ── Sub-rating category averages ──────────────────────────────────────
+    const categoryAverages = {
+      cleanliness: {
+        average: toFloat(catRow.cleanliness),
+        count:   toInt(catRow.cleanliness_count),
+      },
+      value: {
+        average: toFloat(catRow.value),
+        count:   toInt(catRow.value_count),
+      },
+      service: {
+        average: toFloat(catRow.service),
+        count:   toInt(catRow.service_count),
+      },
+      location: {
+        average: toFloat(catRow.location),
+        count:   toInt(catRow.location_count),
+      },
+    };
+
+    // ── Build response ─────────────────────────────────────────────────────
     return res.status(200).json({
       success: true,
       data: {
+
+        // Counts
         totalReviews,
         approvedTotal,
-        pendingTotal:      totalReviews - approvedTotal,
+        pendingTotal,
+        rejectedTotal,
+        spamTotal,
+        verifiedTotal,
+        featuredTotal,
+
+        // Ratings
         averageRating,
         minRating,
         maxRating,
-        reviewsToday,
-        reviewsThisMonth,
+
+        // Time periods
+        activity: {
+          today: {
+            total:    reviewsToday,
+            approved: approvedToday,
+            pending:  pendingToday,
+          },
+          thisWeek: {
+            total: reviewsThisWeek,
+          },
+          thisMonth: {
+            total:    reviewsThisMonth,
+            approved: approvedThisMonth,
+          },
+        },
+
+        // Distribution
         ratingDistribution,
+
+        // Category breakdown
+        categoryAverages,
+
+        // Trip types
+        tripTypeBreakdown: tripTypeRes.rows.map((r) => ({
+          tripType:  r.trip_type,
+          count:     toInt(r.count),
+          avgRating: toFloat(r.avg_rating),
+        })),
+
+        // Recent reviews preview
+        recentReviews: recentRes.rows.map((r) => ({
+          id:              r.id,
+          reviewerName:    r.reviewer_name    || "Anonymous",
+          reviewerAvatar:  r.reviewer_avatar  || null,
+          reviewerLocation: r.reviewer_location || null,
+          title:           r.title            || null,
+          body:            r.body             || null,
+          rating:          toFloat(r.overall_rating),
+          tripType:        r.trip_type        || null,
+          travelDate:      r.travel_date      || null,
+          verifiedBooking: r.verified_booking || false,
+          isFeatured:      r.is_featured      || false,
+          destinationId:   r.destination_id   || null,
+          bookingId:       r.booking_id       || null,
+          createdAt:       r.created_at,
+        })),
       },
     });
 
   } catch (error) {
     console.error("[Reviews] ❌ /stats error:", error);
     return res.status(500).json({
-      success: false,
-      message: "Failed to fetch review stats",
-      error:   error.message,        // always expose in debug
-      code:    error.code,           // PostgreSQL error code
-      detail:  error.detail,         // which column/table
+      success:  false,
+      message:  "Failed to fetch review stats",
+      error:    error.message,
+      code:     error.code,
+      detail:   error.detail,
     });
   }
 });
-
 
 
 // ═══════════════════════════════════════════════════════════════
