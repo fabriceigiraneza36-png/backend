@@ -42,7 +42,10 @@ const {
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
+  ensurePostsSchema,      // ← ADD
+  ensureBookingsSchema,   // ← ADD
 } = require('./config/db');
+
 const logger    = require('./utils/logger');
 const shutdown  = require('./utils/shutdown');
 const socketBus = require('./utils/socketBus');
@@ -224,6 +227,34 @@ app.get('/health', (_req, res) =>
     network: { dnsOrder: 'ipv4first' },
   }),
 );
+
+// Temporary debug route — REMOVE after fixing
+app.get('/api/debug/tables', async (req, res) => {
+  if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0,8)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  try {
+    const tables = await query(`
+      SELECT table_name 
+      FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      ORDER BY table_name
+    `);
+    
+    const results = {};
+    for (const { table_name } of tables.rows) {
+      try {
+        const count = await query(`SELECT COUNT(*) FROM "${table_name}"`);
+        results[table_name] = { exists: true, rows: count.rows[0].count };
+      } catch (e) {
+        results[table_name] = { exists: true, error: e.message };
+      }
+    }
+    res.json({ success: true, tables: results });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
 
 app.get('/api/health', (_req, res) =>
   res.json({ success: true, status: 'healthy', timestamp: new Date().toISOString() }),
@@ -1195,7 +1226,13 @@ async function initializeServer() {
     await ensureChatSchema();
     logger.info('✅ Chat schema ready');
 
-    // ── Ensure messaging tables exist (non-fatal if already present) ──────────
+    await ensurePostsSchema();
+    logger.info('✅ Posts schema ready');
+
+    await ensureBookingsSchema();
+    logger.info('✅ Bookings schema ready');
+
+    // ── Messaging schema (non-fatal if already present) ───────────────────────
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS conversations (
@@ -1223,6 +1260,7 @@ async function initializeServer() {
           updated_at      TIMESTAMP DEFAULT NOW()
         )
       `);
+
       await query(`
         CREATE TABLE IF NOT EXISTS messages (
           id               SERIAL PRIMARY KEY,
@@ -1244,6 +1282,7 @@ async function initializeServer() {
           created_at       TIMESTAMP DEFAULT NOW()
         )
       `);
+
       await query(`
         CREATE TABLE IF NOT EXISTS typing_indicators (
           id              SERIAL PRIMARY KEY,
@@ -1257,28 +1296,28 @@ async function initializeServer() {
         )
       `);
 
-      // Indexes (IF NOT EXISTS — safe to run repeatedly)
+      // Indexes
       await query(`CREATE INDEX IF NOT EXISTS idx_conversations_session  ON conversations(session_id)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_conversations_status   ON conversations(status)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_conversations_updated  ON conversations(updated_at DESC)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_messages_conversation  ON messages(conversation_id)`);
       await query(`CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`);
+      await query(`CREATE INDEX IF NOT EXISTS idx_typing_expires        ON typing_indicators(expires_at)`);
 
       logger.info('✅ Messaging schema ready');
     } catch (msgErr) {
-      logger.warn('⚠️  Messaging schema setup (non-fatal):', msgErr.message);
+      logger.warn('⚠️ Messaging schema setup (non-fatal):', msgErr.message);
     }
 
-
-
-    // ── Listen ─────────────────────────────────────────────────────────────────
+    // ── Server start ──────────────────────────────────────────────────────────
     httpServer.listen(PORT, () => {
       const divider = '═'.repeat(67);
+
       logger.info(`\n${divider}`);
       logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.2');
       logger.info('     "True Adventures In High Places & Deep Culture"');
       logger.info(divider);
+
       logger.info(`  Env        : ${NODE_ENV}`);
       logger.info(`  Port       : ${PORT}`);
       logger.info(`  Backend    : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
@@ -1289,16 +1328,21 @@ async function initializeServer() {
       logger.info(`  Health     : http://localhost:${PORT}/health`);
       logger.info(`  Messaging  : conversations + messages tables ✅`);
       logger.info(`  Legacy Chat: chat_sessions + chat_messages ✅`);
+      logger.info(`  Posts      : enabled ✅`);
+      logger.info(`  Bookings   : enabled ✅`);
       logger.info(`  Socket.io  : msg:* + chat:* + admin:* events ✅`);
+
       logger.info(`${divider}\n`);
     });
 
     shutdown(httpServer);
+
   } catch (err) {
     logger.error('❌ Server boot failed:', err.message);
     process.exit(1);
   }
 }
+
 
 initializeServer();
 

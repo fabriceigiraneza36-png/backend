@@ -195,6 +195,185 @@ const testConnection = async () => {
   return true;
 };
 
+
+const ensurePostsSchema = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS posts (
+        id            SERIAL PRIMARY KEY,
+        title         VARCHAR(500) NOT NULL,
+        slug          VARCHAR(500) UNIQUE,
+        excerpt       TEXT,
+        content       TEXT,
+        featured_image VARCHAR(1000),
+        category      VARCHAR(100),
+        tags          TEXT[]    DEFAULT '{}'::TEXT[],
+        status        VARCHAR(50)  DEFAULT 'draft',
+        is_featured   BOOLEAN      DEFAULT false,
+        is_active     BOOLEAN      DEFAULT true,
+        author_id     INTEGER,
+        author_name   VARCHAR(255),
+        view_count    INTEGER      DEFAULT 0,
+        like_count    INTEGER      DEFAULT 0,
+        comment_count INTEGER      DEFAULT 0,
+        read_time     INTEGER,
+        meta_title    VARCHAR(500),
+        meta_desc     TEXT,
+        published_at  TIMESTAMP,
+        created_at    TIMESTAMP    DEFAULT NOW(),
+        updated_at    TIMESTAMP    DEFAULT NOW()
+      )
+    `);
+
+    // Add any missing columns to existing table
+    const postColumns = [
+      { name: 'slug',          type: 'VARCHAR(500)' },
+      { name: 'excerpt',       type: 'TEXT' },
+      { name: 'is_featured',   type: 'BOOLEAN DEFAULT false' },
+      { name: 'is_active',     type: 'BOOLEAN DEFAULT true' },
+      { name: 'author_name',   type: 'VARCHAR(255)' },
+      { name: 'view_count',    type: 'INTEGER DEFAULT 0' },
+      { name: 'like_count',    type: 'INTEGER DEFAULT 0' },
+      { name: 'comment_count', type: 'INTEGER DEFAULT 0' },
+      { name: 'read_time',     type: 'INTEGER' },
+      { name: 'meta_title',    type: 'VARCHAR(500)' },
+      { name: 'meta_desc',     type: 'TEXT' },
+      { name: 'published_at',  type: 'TIMESTAMP' },
+      { name: 'updated_at',    type: 'TIMESTAMP DEFAULT NOW()' },
+    ];
+
+    for (const col of postColumns) {
+      await pool
+        .query(`ALTER TABLE posts ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`)
+        .catch(() => {});
+    }
+
+    // Indexes
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_status     ON posts(status)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_slug       ON posts(slug)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_is_active  ON posts(is_active)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_created_at ON posts(created_at DESC)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_category   ON posts(category)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_posts_author_id  ON posts(author_id)`).catch(() => {});
+
+    logger.info('[DB] ✅ Posts schema verified & ensured');
+  } catch (err) {
+    logger.warn('[DB] Posts schema ensure failed:', err.message);
+  }
+};
+
+const ensureBookingsSchema = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS bookings (
+        id                SERIAL PRIMARY KEY,
+        booking_ref       VARCHAR(50) UNIQUE,
+        user_id           INTEGER,
+        destination_id    INTEGER,
+        country_id        INTEGER,
+        service_id        INTEGER,
+        full_name         VARCHAR(255) NOT NULL,
+        email             VARCHAR(255) NOT NULL,
+        phone             VARCHAR(50),
+        whatsapp          VARCHAR(50),
+        nationality       VARCHAR(100),
+        travelers         INTEGER      DEFAULT 1,
+        adults            INTEGER      DEFAULT 1,
+        children          INTEGER      DEFAULT 0,
+        infants           INTEGER      DEFAULT 0,
+        travel_date       DATE,
+        end_date          DATE,
+        duration_days     INTEGER,
+        trip_type         VARCHAR(100),
+        accommodation     VARCHAR(100),
+        budget            DECIMAL(12,2),
+        currency          VARCHAR(10)  DEFAULT 'USD',
+        total_price       DECIMAL(12,2),
+        deposit_paid      DECIMAL(12,2) DEFAULT 0,
+        payment_status    VARCHAR(50)  DEFAULT 'pending',
+        payment_method    VARCHAR(100),
+        status            VARCHAR(50)  DEFAULT 'pending',
+        priority          VARCHAR(20)  DEFAULT 'normal',
+        special_requests  TEXT,
+        dietary_needs     TEXT,
+        medical_notes     TEXT,
+        pickup_location   VARCHAR(500),
+        notes             TEXT,
+        admin_notes       TEXT,
+        source            VARCHAR(100) DEFAULT 'website',
+        ip_address        VARCHAR(50),
+        user_agent        TEXT,
+        assigned_to       INTEGER,
+        confirmed_at      TIMESTAMP,
+        cancelled_at      TIMESTAMP,
+        completed_at      TIMESTAMP,
+        created_at        TIMESTAMP    DEFAULT NOW(),
+        updated_at        TIMESTAMP    DEFAULT NOW()
+      )
+    `);
+
+    // Add missing columns to existing table
+    const bookingColumns = [
+      { name: 'booking_ref',    type: "VARCHAR(50) DEFAULT CONCAT('BK-', TO_CHAR(NOW(), 'YYYYMMDD'), '-', LPAD(NEXTVAL(\'booking_ref_seq\')::TEXT, 4, \'0\'))" },
+      { name: 'country_id',     type: 'INTEGER' },
+      { name: 'service_id',     type: 'INTEGER' },
+      { name: 'whatsapp',       type: 'VARCHAR(50)' },
+      { name: 'nationality',    type: 'VARCHAR(100)' },
+      { name: 'adults',         type: 'INTEGER DEFAULT 1' },
+      { name: 'children',       type: 'INTEGER DEFAULT 0' },
+      { name: 'infants',        type: 'INTEGER DEFAULT 0' },
+      { name: 'end_date',       type: 'DATE' },
+      { name: 'duration_days',  type: 'INTEGER' },
+      { name: 'accommodation',  type: 'VARCHAR(100)' },
+      { name: 'currency',       type: "VARCHAR(10) DEFAULT 'USD'" },
+      { name: 'total_price',    type: 'DECIMAL(12,2)' },
+      { name: 'deposit_paid',   type: 'DECIMAL(12,2) DEFAULT 0' },
+      { name: 'payment_status', type: "VARCHAR(50) DEFAULT 'pending'" },
+      { name: 'payment_method', type: 'VARCHAR(100)' },
+      { name: 'priority',       type: "VARCHAR(20) DEFAULT 'normal'" },
+      { name: 'dietary_needs',  type: 'TEXT' },
+      { name: 'medical_notes',  type: 'TEXT' },
+      { name: 'pickup_location',type: 'VARCHAR(500)' },
+      { name: 'admin_notes',    type: 'TEXT' },
+      { name: 'source',         type: "VARCHAR(100) DEFAULT 'website'" },
+      { name: 'ip_address',     type: 'VARCHAR(50)' },
+      { name: 'user_agent',     type: 'TEXT' },
+      { name: 'assigned_to',    type: 'INTEGER' },
+      { name: 'confirmed_at',   type: 'TIMESTAMP' },
+      { name: 'cancelled_at',   type: 'TIMESTAMP' },
+      { name: 'completed_at',   type: 'TIMESTAMP' },
+      { name: 'updated_at',     type: 'TIMESTAMP DEFAULT NOW()' },
+    ];
+
+    for (const col of bookingColumns) {
+      await pool
+        .query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`)
+        .catch(() => {});
+    }
+
+    // Auto-generate booking_ref if empty
+    await pool.query(`
+      UPDATE bookings 
+      SET booking_ref = CONCAT('BK-', TO_CHAR(created_at, 'YYYYMMDD'), '-', LPAD(id::TEXT, 4, '0'))
+      WHERE booking_ref IS NULL
+    `).catch(() => {});
+
+    // Indexes
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_status      ON bookings(status)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_email       ON bookings(email)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_user_id     ON bookings(user_id)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_created_at  ON bookings(created_at DESC)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_travel_date ON bookings(travel_date)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_booking_ref ON bookings(booking_ref)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_payment     ON bookings(payment_status)`).catch(() => {});
+
+    logger.info('[DB] ✅ Bookings schema verified & ensured');
+  } catch (err) {
+    logger.warn('[DB] Bookings schema ensure failed:', err.message);
+  }
+};
+
+
 // ── Ensure Users Table Schema is Complete ────────────────────────────────────
 
 const ensureUserSchema = async () => {
@@ -470,4 +649,6 @@ module.exports = {
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
+  ensurePostsSchema,      // ← ADD
+  ensureBookingsSchema,   // ← ADD
 };
