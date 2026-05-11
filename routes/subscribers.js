@@ -1,33 +1,39 @@
-const router = require("express").Router();
-const ctrl = require("../controllers/subscribersController");
-const { protect, adminOnly } = require("../middleware/auth");
-const { contactLimiter } = require("../middleware/rateLimiter");
-const asyncHandler = require("../middleware/asyncHandler");
+const router      = require('express').Router();
+const ctrl        = require('../controllers/subscribersController');
+const { protect, adminOnly } = require('../middleware/auth');
+const { contactLimiter }     = require('../middleware/rateLimiter');
+const asyncHandler           = require('../middleware/asyncHandler');
 
-// ═══════════════════════════════════════════════════
-// PUBLIC ROUTES
-// ═══════════════════════════════════════════════════
+// ── Public ────────────────────────────────────────────────────────────────────
 
-// Subscribe to newsletter
-router.post("/", contactLimiter, asyncHandler(ctrl.subscribe));
+router.post('/',
+  contactLimiter,
+  asyncHandler(ctrl.subscribe),
+);
 
-// Unsubscribe from newsletter (DELETE for API, GET for email links)
-router.delete("/unsubscribe/:email", asyncHandler(ctrl.unsubscribe));
-router.get("/unsubscribe/:email", asyncHandler(ctrl.unsubscribe));
+router.delete('/unsubscribe/:email', asyncHandler(ctrl.unsubscribe));
+router.get('/unsubscribe/:email',    asyncHandler(ctrl.unsubscribe));
 
-// ═══════════════════════════════════════════════════
-// ADMIN ROUTES
-// ═══════════════════════════════════════════════════
+// ── Admin ─────────────────────────────────────────────────────────────────────
 
-// Get all subscribers
-router.get("/", protect, adminOnly, asyncHandler(ctrl.getAll));
+router.get('/',
+  protect, adminOnly,
+  asyncHandler(ctrl.getAll),
+);
 
-// Delete subscriber
-router.delete(
-  "/:id",
-  protect,
-  adminOnly,
-  asyncHandler(ctrl.remove)
+router.get('/stats',
+  protect, adminOnly,
+  asyncHandler(ctrl.getStats),
+);
+
+router.post('/resend-welcome/:id',
+  protect, adminOnly,
+  asyncHandler(ctrl.resendWelcome),
+);
+
+router.delete('/:id',
+  protect, adminOnly,
+  asyncHandler(ctrl.remove),
 );
 
 module.exports = router;

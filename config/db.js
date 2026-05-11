@@ -374,6 +374,62 @@ const ensureBookingsSchema = async () => {
 };
 
 
+const ensureSubscribersSchema = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS subscribers (
+        id                SERIAL PRIMARY KEY,
+        email             VARCHAR(255) UNIQUE NOT NULL,
+        name              VARCHAR(255),
+        source            VARCHAR(100)  DEFAULT 'website',
+        ip_address        VARCHAR(50),
+        user_agent        TEXT,
+        is_active         BOOLEAN       DEFAULT true,
+        welcome_sent      BOOLEAN       DEFAULT false,
+        welcome_sent_at   TIMESTAMP,
+        welcome_error     TEXT,
+        tags              TEXT[]        DEFAULT '{}'::TEXT[],
+        subscribed_at     TIMESTAMP     DEFAULT NOW(),
+        unsubscribed_at   TIMESTAMP,
+        resubscribed_at   TIMESTAMP,
+        created_at        TIMESTAMP     DEFAULT NOW(),
+        updated_at        TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // Add missing columns to existing table safely
+    const cols = [
+      { name: 'name',             type: 'VARCHAR(255)' },
+      { name: 'source',           type: "VARCHAR(100) DEFAULT 'website'" },
+      { name: 'ip_address',       type: 'VARCHAR(50)' },
+      { name: 'user_agent',       type: 'TEXT' },
+      { name: 'welcome_sent',     type: 'BOOLEAN DEFAULT false' },
+      { name: 'welcome_sent_at',  type: 'TIMESTAMP' },
+      { name: 'welcome_error',    type: 'TEXT' },
+      { name: 'tags',             type: "TEXT[] DEFAULT '{}'::TEXT[]" },
+      { name: 'unsubscribed_at',  type: 'TIMESTAMP' },
+      { name: 'resubscribed_at',  type: 'TIMESTAMP' },
+      { name: 'updated_at',       type: 'TIMESTAMP DEFAULT NOW()' },
+    ];
+
+    for (const col of cols) {
+      await pool
+        .query(`ALTER TABLE subscribers ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`)
+        .catch(() => {});
+    }
+
+    // Indexes
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_email     ON subscribers(email)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_is_active ON subscribers(is_active)`).catch(() => {});
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_subscribers_subbed_at ON subscribers(subscribed_at DESC)`).catch(() => {});
+
+    logger.info('[DB] ✅ Subscribers schema verified & ensured');
+  } catch (err) {
+    logger.warn('[DB] Subscribers schema ensure failed:', err.message);
+  }
+};
+
+
 // ── Ensure Users Table Schema is Complete ────────────────────────────────────
 
 const ensureUserSchema = async () => {
@@ -649,6 +705,5 @@ module.exports = {
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
-  ensurePostsSchema,      // ← ADD
-  ensureBookingsSchema,   // ← ADD
+  ensureSubscribersSchema, // ← ADD
 };
