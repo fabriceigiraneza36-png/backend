@@ -243,6 +243,37 @@ app.get("/health", (_req, res) =>
   }),
 );
 
+// ── Temporary: test email sending ─────────────────────────────────────────────
+app.get('/api/debug/email-test', async (req, res) => {
+  if (req.query.secret !== 'altuvera-test') {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const { sendEmail } = require('./utils/emailService');
+  const to = req.query.to || process.env.ADMIN_EMAIL;
+
+  const result = await sendEmail(
+    to,
+    '✅ Altuvera Email Test — SMTP Working!',
+    `<div style="font-family:sans-serif;padding:32px;background:#F0FDF4;border-radius:12px;">
+       <h2 style="color:#15803D;">✅ Email is Working!</h2>
+       <p>Your SMTP configuration is correctly set up.</p>
+       <p><strong>Sent at:</strong> ${new Date().toISOString()}</p>
+       <p><strong>SMTP Host:</strong> ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}</p>
+       <p><strong>From:</strong> ${process.env.SMTP_FROM}</p>
+     </div>`,
+  );
+
+  res.json({
+    success:   result.success,
+    messageId: result.messageId || null,
+    error:     result.error     || null,
+    sentTo:    to,
+    smtpHost:  process.env.SMTP_HOST,
+    smtpUser:  process.env.SMTP_USER,
+  });
+});
+
 // Temporary debug route — REMOVE after fixing
 app.get("/api/debug/tables", async (req, res) => {
   if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0, 8)) {
