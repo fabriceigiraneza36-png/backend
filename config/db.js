@@ -706,4 +706,6 @@ module.exports = {
   ensureChatSchema,
   ensureGallerySchema,
   ensureSubscribersSchema, // ← ADD
+  ensurePostsSchema,
+  ensureBookingsSchema,
 };
