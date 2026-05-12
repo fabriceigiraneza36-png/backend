@@ -53,6 +53,7 @@ const shutdown = require("./utils/shutdown");
 const socketBus = require("./utils/socketBus");
 
 const { verifyEmailConnection } = require("./utils/emailService");
+const { verifyTransporter: verifyAuthEmail } = require("./utils/email");
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
@@ -1507,11 +1508,17 @@ async function initializeServer() {
     process.exit(1);
   }
 
-  try {
-    await verifyEmailConnection();
-  } catch (e) {
-    logger.warn("Email service startup check failed (non-fatal):", e.message);
-  }
+   try {
+     await verifyEmailConnection();
+   } catch (e) {
+     logger.warn("Email service startup check failed (non-fatal):", e.message);
+   }
+
+   try {
+     await verifyAuthEmail();
+   } catch (e) {
+     logger.warn("Auth email SMTP check failed (non-fatal):", e.message);
+   }
 }
 
 initializeServer();

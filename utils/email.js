@@ -108,6 +108,62 @@ const escape = (value) =>
     .replace(/'/g,  "&#039;");
 
 // ═══════════════════════════════════════════════════════════════════════════
+// RETRY & MASKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+const MAX_EMAIL_RETRIES = 3;
+const RETRY_DELAYS_MS = [200, 500, 1000]; // milliseconds between retries
+
+function isTransientNetworkError(err) {
+  if (!err || !err.code) return false;
+  const transientCodes = [
+    'ENOTFOUND',
+    'ENETUNREACH',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'EPIPE',
+    'ESOCKETTIMEDOUT',
+    'EHOSTUNREACH',
+  ];
+  return transientCodes.includes(err.code);
+}
+
+function maskSensitiveInfo(str) {
+  if (typeof str !== 'string') return str;
+  // Mask any sequence of 6 or more consecutive digits (OTP/codes)
+  return str.replace(/\b\d{6,}\b/g, '******');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// RETRY & MASKING
+// ═══════════════════════════════════════════════════════════════════════════
+
+const MAX_EMAIL_RETRIES = 3;
+const RETRY_DELAYS_MS = [200, 500, 1000]; // milliseconds
+
+function isTransientNetworkError(err) {
+  if (!err || !err.code) return false;
+  const transientCodes = [
+    'ENOTFOUND',
+    'ENETUNREACH',
+    'ECONNREFUSED',
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'EPIPE',
+    'ESOCKETTIMEDOUT',
+    'EHOSTUNREACH',
+  ];
+  return transientCodes.includes(err.code);
+}
+
+function maskSensitiveInfo(str) {
+  if (typeof str !== 'string') return str;
+  // Mask any sequence of 6 or more consecutive digits (OTP/codes)
+  return str.replace(/\b\d{6,}\b/g, '******');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // CORE SEND FUNCTION
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -123,70 +179,142 @@ const escape = (value) =>
  * @returns {Promise<{delivered: boolean, messageId?: string, fallback?: string}>}
  */
 const sendEmail = async ({ to, subject, html, text, from } = {}) => {
-  // Validate required fields
+  // Validate required fields — throw on programmer error
   if (!to || !subject) {
-    logger.warn("[Email] Missing required fields (to / subject) — skipping", { to, subject });
-    return { delivered: false, fallback: "missing-fields" };
+    const msg = `Missing required email fields: to=${to}, subject=${subject}`;
+    logger.error(`[Email] ${msg}`);
+    throw new Error(msg);
   }
   if (!html && !text) {
-    logger.warn("[Email] No html or text body provided — skipping", { to, subject });
-    return { delivered: false, fallback: "no-body" };
+    const msg = "Email body missing: either html or text must be provided";
+    logger.error(`[Email] ${msg}`, { to, subject });
+    throw new Error(msg);
   }
 
-  const config      = getEmailConfig();
-  const transporter = getTransporter();
+  const config = getEmailConfig();
+  let transporter = getTransporter();
 
+  // Handle unconfigured SMTP
   if (!transporter) {
-    logger.warn("[Email] SMTP not configured — skipping send", { to, subject });
-    // In development, log the email to console so developers can still see OTPs
     if (process.env.NODE_ENV !== "production") {
-      logger.info("──────────────────────────────────────────");
-      logger.info(`[Email DEV LOG] To: ${to}`);
-      logger.info(`[Email DEV LOG] Subject: ${subject}`);
-      if (text)  logger.info(`[Email DEV LOG] Text: ${text}`);
-      if (html)  logger.info(`[Email DEV LOG] HTML: (rendered, check above)`);
-      logger.info("──────────────────────────────────────────");
+      // Development fallback: log email to console (includes OTP for easy testing)
+      logger.info("[Email DEV FALLBACK] SMTP not configured. Email would be sent with the following details:");
+      logger.info(`  To: ${to}`);
+      logger.info(`  Subject: ${subject}`);
+      if (text) logger.info(`  Text: ${text}`);
+      if (html) logger.info(`  HTML: (rendered - see above)`);
+      return { delivered: false, fallback: "console" };
+    } else {
+      const msg = "SMTP service not configured — cannot send email in production";
+      logger.error(`[Email] ${msg}`, {
+        host: config.smtpHost,
+        port: config.smtpPort,
+        user: config.smtpUser,
+      });
+      throw new Error(msg);
     }
-    return { delivered: false, fallback: "console" };
   }
 
-  const appName = process.env.APP_NAME || "Altuvera";
   const mailOptions = {
-    from:    from || config.smtpFrom || `"${appName}" <${config.smtpUser}>`,
+    from: from || config.smtpFrom || `"${process.env.APP_NAME || "Altuvera"}" <${config.smtpUser}>`,
     to,
     subject,
     html,
-    // Strip HTML tags for plain-text fallback if text not provided
     text: text || (html ? html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim() : ""),
   };
 
-  try {
-    const info = await transporter.sendMail(mailOptions);
-    logger.info(`✅ Email sent`, {
-      to,
-      subject,
-      messageId: info.messageId,
-      response:  info.response,
-    });
-    return { delivered: true, messageId: info.messageId };
-  } catch (err) {
-    logger.error(`❌ Email failed`, {
-      to,
-      subject,
-      error:   err.message,
-      code:    err.code,
-      command: err.command,
-      // Actionable hints
-      hint: err.message?.includes("ENETUNREACH")
-        ? "IPv6 routing issue — verify family:4 is set and server has IPv4 outbound access"
-        : err.message?.includes("ECONNREFUSED")
-        ? "SMTP server refused connection — check SMTP_HOST and SMTP_PORT"
-        : err.message?.includes("auth")
-        ? "SMTP authentication failed — verify SMTP_USER and SMTP_PASS (use App Password for Gmail)"
-        : undefined,
-    });
-    throw err; // re-throw so callers can handle / suppress as needed
+  let attempt = 0;
+  let lastError;
+
+  while (true) {
+    try {
+      const info = await transporter.sendMail(mailOptions);
+      logger.info("✅ Email sent", {
+        to,
+        subject: maskSensitiveInfo(subject),
+        messageId: info.messageId,
+        attempt: attempt + 1,
+        response: info.response,
+      });
+      return { delivered: true, messageId: info.messageId };
+    } catch (err) {
+      lastError = err;
+      const isTransient = isTransientNetworkError(err);
+      const isAuth = err.code === 'EAUTH' || err.responseCode === 535;
+
+      logger.warn(`[Email] ❌ Send attempt ${attempt + 1} failed for ${to}: ${err.message} (code:${err.code})`);
+
+      // Do not retry auth errors or non-transient errors
+      if (isAuth || !isTransient) {
+        break;
+      }
+
+      if (attempt >= MAX_EMAIL_RETRIES) {
+        break;
+      }
+
+      // Wait before retrying
+      const delay = RETRY_DELAYS_MS[attempt] || RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
+      await new Promise(resolve => setTimeout(resolve, delay));
+
+      // Recreate transporter to clear stale connections
+      _transporter = null;
+      transporter = getTransporter();
+      attempt++;
+    }
   }
+
+  // All retries exhausted or non-retryable error
+  const err = lastError;
+
+  // Reset transporter for persistent auth/connection failures
+  if (err && (err.code === 'EAUTH' || err.code === 'ECONNECTION' || err.code === 'ETIMEDOUT')) {
+    logger.warn("[Email] Resetting transporter due to persistent error");
+    _transporter = null;
+  }
+
+  // Provide actionable hint for common errors
+  let hint = null;
+  if (err) {
+    if (err.code === 'EAUTH' || err.responseCode === 535) {
+      hint = "SMTP authentication failed — verify SMTP_USER and SMTP_PASS (use App Password if 2FA enabled)";
+    } else if (['ENOTFOUND','ENETUNREACH','EHOSTUNREACH'].includes(err.code)) {
+      hint = "DNS/network error — check SMTP_HOST and outbound connectivity";
+    } else if (err.code === 'ECONNREFUSED') {
+      hint = "SMTP server refused connection — verify SMTP_HOST and SMTP_PORT";
+    } else if (err.code === 'ETIMEDOUT') {
+      hint = "SMTP connection timed out — possible firewall or network issue";
+    }
+  }
+
+  logger.error(`[Email] ❌ Failed to send to ${to} after ${attempt + 1} attempt(s): ${err.message}`, {
+    code: err?.code,
+    hint,
+    subject: maskSensitiveInfo(subject),
+  });
+
+  throw err;
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TRANSPORTER VERIFICATION
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Verify SMTP connection. Useful for startup health checks.
+ * @returns {Promise<boolean>}
+ */
+const verifyTransporter = async () => {
+  const t = getTransporter();
+  if (!t) {
+    throw new Error("Cannot verify SMTP connection: transporter not initialized (check SMTP config)");
+  }
+  return new Promise((resolve, reject) => {
+    t.verify((err) => {
+      if (err) reject(err);
+      else resolve(true);
+    });
+  });
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -302,6 +430,7 @@ module.exports = {
   sendAdminBookingNotification,
   sendContactNotification,
   sendContactReply,
+  verifyTransporter,
   // Exposed for testing
   _getEmailConfig:   getEmailConfig,
   _getTransporter:   getTransporter,
