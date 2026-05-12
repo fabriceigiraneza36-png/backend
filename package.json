@@ -7,21 +7,31 @@
     "start": "node server.js",
     "start:prod": "cross-env NODE_ENV=production node server.js",
     "dev": "nodemon server.js",
-    "build": "npm test -- --passWithNoTests",
+
+    "build": "npm run clean && npm install && npm run verify",
+
+    "verify": "node -c server.js",
+
+    "clean": "node -e \"const fs=require('fs'); fs.rmSync('node_modules/.cache',{recursive:true,force:true}); console.log('Build cache cleaned successfully')\"",
+
+    "rebuild": "npm run clean && rd /s /q node_modules && del package-lock.json && npm install",
+
     "migrate": "node scripts/migrate.js",
     "rollback": "node scripts/rollback.js",
     "seed": "node scripts/seed.js",
-    "test": "jest --runInBand",
-    "test:watch": "jest --watch",
+
     "db:init": "node -e \"require('./config/db').initDB()\"",
     "db:seed": "node -e \"require('./config/db').seedDB()\"",
     "db:reset": "node -e \"require('./config/db').resetDB()\"",
+
     "db:grant": "node scripts/grant-privileges.js",
     "setup-db": "node scripts/setup-database.js"
   },
+
   "nodemonConfig": {
     "legacyWatch": true
   },
+
   "dependencies": {
     "@sendgrid/mail": "^8.1.6",
     "bcryptjs": "^2.4.3",
@@ -49,10 +59,13 @@
     "yamljs": "^0.3.0",
     "zod": "^3.24.2"
   },
+
   "devDependencies": {
     "cross-env": "^7.0.3",
-    "jest": "^29.7.0",
-    "nodemon": "^3.1.14",
-    "supertest": "^7.1.1"
+    "nodemon": "^3.1.14"
+  },
+
+  "engines": {
+    "node": ">=18"
   }
 }

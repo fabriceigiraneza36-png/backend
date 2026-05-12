@@ -251,7 +251,7 @@ app.get('/api/debug/email-test', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' });
   }
 
-  const { sendEmail, verifyTransporter } = require('./utils/email');
+  const { sendEmail } = require('./utils/email');
   const to = req.query.to || process.env.ADMIN_EMAIL || process.env.SMTP_USER;
 
   try {
@@ -268,13 +268,13 @@ app.get('/api/debug/email-test', async (req, res) => {
     });
 
     res.json({
-      success:     true,
-      delivered:   result.delivered,
-      messageId:   result.messageId || null,
-      sentTo:      to,
-      provider:    process.env.SENDGRID_API_KEY ? 'sendgrid' : 'smtp',
-      smtpHost:    process.env.SMTP_HOST,
-      smtpUser:    process.env.SMTP_USER ? 'configured' : 'not set',
+      success: true,
+      delivered: result.delivered,
+      messageId: result.messageId || null,
+      sentTo: to,
+      provider: process.env.SENDGRID_API_KEY ? 'sendgrid' : 'smtp',
+      smtpHost: process.env.SMTP_HOST,
+      smtpUser: process.env.SMTP_USER ? 'configured' : 'not set',
     });
   } catch (err) {
     logger.error('[Debug] Email test failed:', err);
@@ -289,7 +289,6 @@ app.get('/api/debug/email-test', async (req, res) => {
         : undefined,
     });
   }
-});
 });
 
 // Temporary debug route — REMOVE after fixing

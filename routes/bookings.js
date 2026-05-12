@@ -1,80 +1,108 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL - BOOKING ROUTES
+ * BOOKING ROUTES v2.0
  * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * Fix: ensureBookingsSchema() called once on startup so 500 errors caused by
+ * missing columns (e.g. booking_ref, whatsapp, etc.) never reach route handlers.
  */
 
-const express = require("express");
-const router = express.Router();
-const bookingController = require("../controllers/bookingsController");
-const { protect, adminOnly, optionalAuth } = require("../middleware/auth");
-const rateLimit = require("express-rate-limit");
+"use strict";
 
-const bookingLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { success: false, error: "Too many booking requests. Please try again later." },
+const express    = require("express");
+const rateLimit  = require("express-rate-limit");
+const router     = express.Router();
+const ctrl       = require("../controllers/bookingsController");
+const { protect, adminOnly, optionalAuth } = require("../middleware/auth");
+const { ensureBookingsSchema } = require("../config/db");
+const logger     = require("../utils/logger");
+
+// ── Schema guard: run once, non-blocking ──────────────────────────────────────
+
+let _schemaReady = false;
+
+(async () => {
+  try {
+    await ensureBookingsSchema();
+    _schemaReady = true;
+    logger.info("[Bookings] Schema ready");
+  } catch (err) {
+    logger.error("[Bookings] Schema init failed:", err.message);
+  }
+})();
+
+// Middleware: ensure schema before any request is processed
+router.use(async (_req, _res, next) => {
+  if (_schemaReady) return next();
+  try {
+    await ensureBookingsSchema();
+    _schemaReady = true;
+    next();
+  } catch (err) {
+    logger.error("[Bookings] Schema ensure failed on request:", err.message);
+    next(err);
+  }
 });
 
-// ─────────────────────────────────────────────────────────────────────────────
-// PUBLIC ROUTES
-// (must all be defined before the /:id wildcard)
-// ─────────────────────────────────────────────────────────────────────────────
+// ── Rate limiter ──────────────────────────────────────────────────────────────
 
-// Create booking
-router.post("/", bookingLimiter, optionalAuth, bookingController.create);
+const bookingLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 min
+  max:      10,
+  message:  {
+    success: false,
+    error:   "Too many booking requests. Please try again later.",
+  },
+  standardHeaders: true,
+  legacyHeaders:   false,
+});
 
-// Track booking by number
-router.get("/track/:bookingNumber", bookingController.track);
+// ═══════════════════════════════════════════════════════════════════════════════
+// PUBLIC ROUTES  (no auth required)
+// ─── All named routes MUST appear before /:id wildcard ───────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// Most booked destinations
-router.get("/most-booked", bookingController.getMostBookedDestinations);
+// Create a booking
+router.post("/",                              bookingLimiter, optionalAuth, ctrl.create);
 
-// Booking stats by destination
-router.get("/by-destination/:destinationId", bookingController.getBookingsByDestination);
+// Track by booking number
+router.get("/track/:bookingNumber",           ctrl.track);
 
-// Booking stats by country
-router.get("/by-country/:countryId", bookingController.getBookingsByCountry);
+// Public stats
+router.get("/most-booked",                   ctrl.getMostBookedDestinations);
+router.get("/countries-stats",               ctrl.getCountriesBookingStats);
+router.get("/destinations-stats",            ctrl.getDestinationsBookingStats);
+router.get("/by-destination/:destinationId", ctrl.getBookingsByDestination);
+router.get("/by-country/:countryId",         ctrl.getBookingsByCountry);
 
-// All countries with booking stats
-router.get("/countries-stats", bookingController.getCountriesBookingStats);
-
-// All destinations with booking stats
-router.get("/destinations-stats", bookingController.getDestinationsBookingStats);
-
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
 // AUTHENTICATED USER ROUTES
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// IMPORTANT: Must be defined BEFORE /:id wildcard route
-router.get("/my-bookings", protect, bookingController.getMyBookings);
+router.get("/my-bookings", protect, ctrl.getMyBookings);
 
-// ─────────────────────────────────────────────────────────────────────────────
-// ADMIN ROUTES
-// All defined BEFORE the /:id catch-all
-// ─────────────────────────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// ADMIN ROUTES  (named — must come before /:id wildcard)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-router.get("/stats",       adminOnly, bookingController.getStats);
-router.get("/upcoming",    adminOnly, bookingController.getUpcoming);
-router.get("/recent",      adminOnly, bookingController.getRecent);
-router.get("/export",      adminOnly, bookingController.export);
+router.get ("/stats",       adminOnly, ctrl.getStats);
+router.get ("/upcoming",    adminOnly, ctrl.getUpcoming);
+router.get ("/recent",      adminOnly, ctrl.getRecent);
+router.get ("/export",      adminOnly, ctrl.export);
+router.get ("/",            adminOnly, ctrl.getAll);
 
-// Bulk operations
-router.post("/bulk-status", adminOnly, bookingController.bulkUpdateStatus);
+router.post("/bulk-status", adminOnly, ctrl.bulkUpdateStatus);
 
-// List all bookings
-router.get("/", adminOnly, bookingController.getAll);
+// ═══════════════════════════════════════════════════════════════════════════════
+// WILDCARD /:id  — MUST be last
+// ═══════════════════════════════════════════════════════════════════════════════
 
-// ─────────────────────────────────────────────────────────────────────────────
-// WILDCARD /:id ROUTES — MUST BE LAST
-// ─────────────────────────────────────────────────────────────────────────────
-
-router.get   ("/:id",             adminOnly, bookingController.getOne);
-router.put   ("/:id",             adminOnly, bookingController.update);
-router.delete("/:id",             adminOnly, bookingController.remove);
-router.patch ("/:id/status",      adminOnly, bookingController.updateStatus);
-router.post  ("/:id/confirm",     adminOnly, bookingController.confirm);
-router.post  ("/:id/cancel",      adminOnly, bookingController.cancel);
-router.post  ("/:id/notes",       adminOnly, bookingController.addNotes);
+router.get   ("/:id",          adminOnly, ctrl.getOne);
+router.put   ("/:id",          adminOnly, ctrl.update);
+router.delete("/:id",          adminOnly, ctrl.remove);
+router.patch ("/:id/status",   adminOnly, ctrl.updateStatus);
+router.post  ("/:id/confirm",  adminOnly, ctrl.confirm);
+router.post  ("/:id/cancel",   adminOnly, ctrl.cancel);
+router.post  ("/:id/notes",    adminOnly, ctrl.addNotes);
 
 module.exports = router;
