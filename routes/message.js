@@ -817,6 +817,46 @@ router.delete("/:messageId", protect, async (req, res) => {
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// DELETE /api/messages/conversations/:id (admin only)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+router.delete("/conversations/:id", adminOnly, async (req, res) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    if (!id || id < 1) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid conversation id",
+      });
+    }
+
+    const result = await query(
+      `DELETE FROM conversations WHERE id = $1 RETURNING *`,
+      [id]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found",
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: "Conversation deleted permanently",
+    });
+  } catch (err) {
+    logger.error("[Messages] DELETE /conversations/:id error:", err.message);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to delete conversation",
+      ...(IS_DEV && { error: err.message }),
+    });
+  }
+});
+
 logger.info("[Messages] Router registered ✓");
 
 module.exports = router;

@@ -1,35 +1,44 @@
 {
   "name": "travel-backend",
   "version": "1.0.0",
-  "description": "Travel app backend - Node.js + PostgreSQL",
+  "description": "Altuvera Travel — Enterprise Backend API",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "start:prod": "cross-env NODE_ENV=production node server.js",
     "dev": "nodemon server.js",
 
-    "build": "npm run clean && npm install && npm run verify",
+    "build": "npm run clean && npm run verify:all && npm run check:env && echo Build complete",
 
-    "verify": "node -c server.js",
+    "verify": "node -c server.js && echo server.js OK",
 
-    "clean": "node -e \"const fs=require('fs'); fs.rmSync('node_modules/.cache',{recursive:true,force:true}); console.log('Build cache cleaned successfully')\"",
+    "verify:all": "node scripts/verify-syntax.js",
 
-    "rebuild": "npm run clean && rd /s /q node_modules && del package-lock.json && npm install",
+    "check:env": "node scripts/check-env.js",
+
+    "clean": "node scripts/clean.js",
 
     "migrate": "node scripts/migrate.js",
     "rollback": "node scripts/rollback.js",
     "seed": "node scripts/seed.js",
 
-    "db:init": "node -e \"require('./config/db').initDB()\"",
-    "db:seed": "node -e \"require('./config/db').seedDB()\"",
-    "db:reset": "node -e \"require('./config/db').resetDB()\"",
-
+    "db:init": "node -e \"require('./config/db').testConnection().then(() => process.exit(0)).catch(e => { console.error(e.message); process.exit(1); })\"",
     "db:grant": "node scripts/grant-privileges.js",
-    "setup-db": "node scripts/setup-database.js"
+    "setup-db": "node scripts/setup-database.js",
+
+    "lint": "node scripts/lint-check.js",
+
+    "health": "node scripts/health-check.js",
+
+    "rebuild": "node scripts/rebuild.js"
   },
 
   "nodemonConfig": {
-    "legacyWatch": true
+    "watch": ["server.js", "routes/", "controllers/", "middleware/", "config/", "utils/"],
+    "ext": "js,json",
+    "ignore": ["node_modules/", "uploads/", "*.test.js"],
+    "delay": "500",
+    "legacyWatch": false
   },
 
   "dependencies": {
@@ -66,6 +75,7 @@
   },
 
   "engines": {
-    "node": ">=18"
+    "node": ">=18",
+    "npm": ">=9"
   }
 }
