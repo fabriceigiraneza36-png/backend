@@ -23,4 +23,7 @@ router.patch("/sessions/:sessionId/status", protect, adminOnly, chatController.u
 // ── Public: chat history for the frontend widget ──────────────────────────────
 router.get("/history/:sessionId", chatController.getHistory);
 
+// ── Public: get session by ID (alias for history, used by widget) ─────────────
+router.get("/sessions/:sessionId", chatController.getHistory);
+
 module.exports = router;
