@@ -17,6 +17,7 @@ const getTransporter = () => {
     host:   process.env.SMTP_HOST || 'smtp.gmail.com',
     port:   parseInt(process.env.SMTP_PORT || '587', 10),
     secure: parseInt(process.env.SMTP_PORT || '587', 10) === 465,
+    family: 4, // Force IPv4 — prevents ENETUNREACH errors
     auth: {
       user: process.env.SMTP_USER,
       pass: process.env.SMTP_PASS,
@@ -26,15 +27,21 @@ const getTransporter = () => {
       rejectUnauthorized: false,
       minVersion: 'TLSv1.2',
     },
-    // Connection timeouts
-    connectionTimeout: 10000, // 10s
+    // Connection pool — reuse connections
+    pool:           true,
+    maxConnections: 5,
+    maxMessages:    100,
+    rateDelta:      1000,
+    rateLimit:      5,
+    // Timeouts
+    connectionTimeout: 10000,
     greetingTimeout:   10000,
-    socketTimeout:     15000,
+    socketTimeout:     30000,
   };
 
   transporter = nodemailer.createTransport(config);
 
-  logger.info(`[Email] Transporter created — ${config.host}:${config.port}`);
+  logger.info(`[Email] Transporter created — ${config.host}:${config.port} (IPv4 forced)`);
   return transporter;
 };
 

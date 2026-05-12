@@ -1,9 +1,11 @@
 // utils/email.js
 // ═══════════════════════════════════════════════════════════════════════════
-// Centralized email utility
-// ✅ IPv4 forced via:
-//    1. dns.setDefaultResultOrder("ipv4first") in server.js (global)
-//    2. family: 4 in nodemailer transport (belt-and-suspenders)
+// Centralized email utility — production-grade with SendGrid & SMTP support
+// Features:
+//   • Auto IPv4 + retry for SMTP
+//   • OTP masking in logs
+//   • SendGrid primary (HTTPS) with SMTP fallback
+//   • Comprehensive error hints
 // ═══════════════════════════════════════════════════════════════════════════
 
 "use strict";
@@ -12,7 +14,7 @@ const nodemailer = require("nodemailer");
 const logger     = require("./logger");
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONFIG READER
+// CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 
 const getEmailConfig = () => {
@@ -33,9 +35,8 @@ const getEmailConfig = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// SINGLETON TRANSPORTER
+// TRANSPORTER (SMTP)
 // ═══════════════════════════════════════════════════════════════════════════
-// Created once and reused — avoids opening a new TCP connection per email.
 
 let _transporter = null;
 let _transporterConfig = null;
@@ -45,37 +46,34 @@ const getTransporter = () => {
 
   if (!config.isConfigured) return null;
 
-  // Re-create if SMTP config changed at runtime (edge case / hot reload)
   const configKey = `${config.smtpHost}:${config.smtpPort}:${config.smtpUser}`;
   if (_transporter && _transporterConfig === configKey) return _transporter;
 
   _transporter = nodemailer.createTransport({
     host:   config.smtpHost,
     port:   config.smtpPort,
-    family: 4,                           // ✅ Force IPv4 — prevents ENETUNREACH
-    secure: config.smtpPort === 465,     // true = TLS, false = STARTTLS (587)
+    family: 4,                           // Force IPv4
+    secure: config.smtpPort === 465,
     auth: {
       user: config.smtpUser,
       pass: config.smtpPass,
     },
     tls: {
-      rejectUnauthorized: true,          // enforce valid TLS certs in production
+      rejectUnauthorized: true,
     },
-    // Connection pool — reuse connections, don't open a new one per email
     pool:           true,
     maxConnections: 5,
     maxMessages:    100,
-    rateDelta:      1000,                // ms window for rate limiting
-    rateLimit:      5,                   // max messages per rateDelta window
-    // Timeouts
-    connectionTimeout: 10_000,          // 10s to establish connection
-    greetingTimeout:   10_000,          // 10s for SMTP greeting
-    socketTimeout:     30_000,          // 30s socket idle timeout
+    rateDelta:      1000,
+    rateLimit:      5,
+    connectionTimeout: 10_000,
+    greetingTimeout:   10_000,
+    socketTimeout:     30_000,
   });
 
   _transporterConfig = configKey;
 
-  // Verify on first creation (non-blocking)
+  // Non-blocking connection test
   _transporter.verify((err) => {
     if (err) {
       logger.error("❌ SMTP connection failed:", {
@@ -84,7 +82,7 @@ const getTransporter = () => {
         port:    config.smtpPort,
         user:    config.smtpUser,
         hint:    err.message.includes("ENETUNREACH")
-          ? "IPv6 connectivity issue — family:4 is set, check your SMTP_HOST env var"
+          ? "IPv6 routing issue — verify IPv4 egress allowed"
           : undefined,
       });
     } else {
@@ -96,7 +94,7 @@ const getTransporter = () => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// HTML ESCAPE HELPER
+// UTILITIES
 // ═══════════════════════════════════════════════════════════════════════════
 
 const escape = (value) =>
@@ -107,112 +105,40 @@ const escape = (value) =>
     .replace(/"/g,  "&quot;")
     .replace(/'/g,  "&#039;");
 
-// ═══════════════════════════════════════════════════════════════════════════
-// RETRY & MASKING
-// ═══════════════════════════════════════════════════════════════════════════
-
 const MAX_EMAIL_RETRIES = 3;
-const RETRY_DELAYS_MS = [200, 500, 1000]; // milliseconds between retries
+const RETRY_DELAYS_MS   = [200, 500, 1000];
 
-function isTransientNetworkError(err) {
+const isTransientNetworkError = (err) => {
   if (!err || !err.code) return false;
-  const transientCodes = [
-    'ENOTFOUND',
-    'ENETUNREACH',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'ECONNRESET',
-    'EPIPE',
-    'ESOCKETTIMEDOUT',
-    'EHOSTUNREACH',
+  const transient = [
+    'ENOTFOUND','ENETUNREACH','ECONNREFUSED','ETIMEDOUT',
+    'ECONNRESET','EPIPE','ESOCKETTIMEDOUT','EHOSTUNREACH',
   ];
-  return transientCodes.includes(err.code);
-}
+  return transient.includes(err.code);
+};
 
-function maskSensitiveInfo(str) {
+const maskSensitiveInfo = (str) => {
   if (typeof str !== 'string') return str;
-  // Mask any sequence of 6 or more consecutive digits (OTP/codes)
   return str.replace(/\b\d{6,}\b/g, '******');
-}
+};
 
 // ═══════════════════════════════════════════════════════════════════════════
-// RETRY & MASKING
+// SMTP SEND (IPv4 + retry)
 // ═══════════════════════════════════════════════════════════════════════════
 
-const MAX_EMAIL_RETRIES = 3;
-const RETRY_DELAYS_MS = [200, 500, 1000]; // milliseconds
-
-function isTransientNetworkError(err) {
-  if (!err || !err.code) return false;
-  const transientCodes = [
-    'ENOTFOUND',
-    'ENETUNREACH',
-    'ECONNREFUSED',
-    'ETIMEDOUT',
-    'ECONNRESET',
-    'EPIPE',
-    'ESOCKETTIMEDOUT',
-    'EHOSTUNREACH',
-  ];
-  return transientCodes.includes(err.code);
-}
-
-function maskSensitiveInfo(str) {
-  if (typeof str !== 'string') return str;
-  // Mask any sequence of 6 or more consecutive digits (OTP/codes)
-  return str.replace(/\b\d{6,}\b/g, '******');
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CORE SEND FUNCTION
-// ═══════════════════════════════════════════════════════════════════════════
-
-/**
- * Send a single email.
- *
- * @param {object} opts
- * @param {string}  opts.to       - Recipient address
- * @param {string}  opts.subject  - Email subject
- * @param {string}  [opts.html]   - HTML body
- * @param {string}  [opts.text]   - Plain-text body (auto-derived from html if omitted)
- * @param {string}  [opts.from]   - Sender (defaults to SMTP_FROM env / SMTP_USER)
- * @returns {Promise<{delivered: boolean, messageId?: string, fallback?: string}>}
- */
-const sendEmail = async ({ to, subject, html, text, from } = {}) => {
-  // Validate required fields — throw on programmer error
-  if (!to || !subject) {
-    const msg = `Missing required email fields: to=${to}, subject=${subject}`;
-    logger.error(`[Email] ${msg}`);
-    throw new Error(msg);
-  }
-  if (!html && !text) {
-    const msg = "Email body missing: either html or text must be provided";
-    logger.error(`[Email] ${msg}`, { to, subject });
-    throw new Error(msg);
-  }
-
+async function sendEmailSMTP({ to, subject, html, text, from }) {
   const config = getEmailConfig();
   let transporter = getTransporter();
 
-  // Handle unconfigured SMTP
+  // — Unconfigured SMTP —
   if (!transporter) {
     if (process.env.NODE_ENV !== "production") {
-      // Development fallback: log email to console (includes OTP for easy testing)
-      logger.info("[Email DEV FALLBACK] SMTP not configured. Email would be sent with the following details:");
-      logger.info(`  To: ${to}`);
-      logger.info(`  Subject: ${subject}`);
-      if (text) logger.info(`  Text: ${text}`);
-      if (html) logger.info(`  HTML: (rendered - see above)`);
+      logger.info("[Email DEV] SMTP not configured — email not sent", { to, subject });
       return { delivered: false, fallback: "console" };
-    } else {
-      const msg = "SMTP service not configured — cannot send email in production";
-      logger.error(`[Email] ${msg}`, {
-        host: config.smtpHost,
-        port: config.smtpPort,
-        user: config.smtpUser,
-      });
-      throw new Error(msg);
     }
+    const msg = "SMTP service not configured — cannot send email in production";
+    logger.error(`[Email] ${msg}`, { host: config.smtpHost, port: config.smtpPort });
+    throw new Error(msg);
   }
 
   const mailOptions = {
@@ -229,33 +155,25 @@ const sendEmail = async ({ to, subject, html, text, from } = {}) => {
   while (true) {
     try {
       const info = await transporter.sendMail(mailOptions);
-      logger.info("✅ Email sent", {
+      logger.info("✅ Email sent (SMTP)", {
         to,
         subject: maskSensitiveInfo(subject),
         messageId: info.messageId,
         attempt: attempt + 1,
-        response: info.response,
       });
       return { delivered: true, messageId: info.messageId };
     } catch (err) {
       lastError = err;
       const isTransient = isTransientNetworkError(err);
-      const isAuth = err.code === 'EAUTH' || err.responseCode === 535;
+      const isAuth      = err.code === 'EAUTH' || err.responseCode === 535;
 
-      logger.warn(`[Email] ❌ Send attempt ${attempt + 1} failed for ${to}: ${err.message} (code:${err.code})`);
+      logger.warn(`[Email] ❌ SMTP attempt ${attempt + 1} failed: ${err.message}`);
 
-      // Do not retry auth errors or non-transient errors
-      if (isAuth || !isTransient) {
-        break;
-      }
+      if (isAuth || !isTransient) break;        // don't retry
+      if (attempt >= MAX_EMAIL_RETRIES) break;  // max retries
 
-      if (attempt >= MAX_EMAIL_RETRIES) {
-        break;
-      }
-
-      // Wait before retrying
       const delay = RETRY_DELAYS_MS[attempt] || RETRY_DELAYS_MS[RETRY_DELAYS_MS.length - 1];
-      await new Promise(resolve => setTimeout(resolve, delay));
+      await new Promise(r => setTimeout(r, delay));
 
       // Recreate transporter to clear stale connections
       _transporter = null;
@@ -264,50 +182,150 @@ const sendEmail = async ({ to, subject, html, text, from } = {}) => {
     }
   }
 
-  // All retries exhausted or non-retryable error
   const err = lastError;
-
-  // Reset transporter for persistent auth/connection failures
-  if (err && (err.code === 'EAUTH' || err.code === 'ECONNECTION' || err.code === 'ETIMEDOUT')) {
-    logger.warn("[Email] Resetting transporter due to persistent error");
+  if (err && ['EAUTH','ECONNECTION','ETIMEDOUT'].includes(err.code)) {
+    logger.warn("[Email] Resetting SMTP transporter due to persistent error");
     _transporter = null;
   }
 
-  // Provide actionable hint for common errors
   let hint = null;
   if (err) {
     if (err.code === 'EAUTH' || err.responseCode === 535) {
-      hint = "SMTP authentication failed — verify SMTP_USER and SMTP_PASS (use App Password if 2FA enabled)";
+      hint = "SMTP authentication failed — verify credentials / use App Password if 2FA enabled";
     } else if (['ENOTFOUND','ENETUNREACH','EHOSTUNREACH'].includes(err.code)) {
-      hint = "DNS/network error — check SMTP_HOST and outbound connectivity";
+      hint = "DNS/network error — check SMTP_HOST and IPv4 egress";
     } else if (err.code === 'ECONNREFUSED') {
-      hint = "SMTP server refused connection — verify SMTP_HOST and SMTP_PORT";
+      hint = "SMTP server refused connection — check SMTP_HOST and SMTP_PORT";
     } else if (err.code === 'ETIMEDOUT') {
-      hint = "SMTP connection timed out — possible firewall or network issue";
+      hint = "Connection timed out — firewall may be blocking outbound SMTP";
     }
   }
 
-  logger.error(`[Email] ❌ Failed to send to ${to} after ${attempt + 1} attempt(s): ${err.message}`, {
-    code: err?.code,
-    hint,
-    subject: maskSensitiveInfo(subject),
-  });
-
+  logger.error(`[Email] ❌ SMTP failed after ${attempt + 1} attempt(s): ${err.message}`, { code: err?.code, hint });
   throw err;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SENDGRID (HTTPS) — bypasses Render's SMTP block
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _sgEnabled = false;
+let _sgWarned  = false;
+
+function checkSendGridEnabled() {
+  if (_sgEnabled) return true;
+  if (_sgWarned) return false;
+
+  const key = process.env.SENDGRID_API_KEY;
+  if (!key || key.length < 10) {
+    if (process.env.NODE_ENV !== 'production') {
+      logger.info('[Email] SENDGRID_API_KEY not set — SMTP-only mode');
+    }
+    _sgWarned = true;
+    return false;
+  }
+
+  try {
+    const sgMail = require('@sendgrid/mail');
+    sgMail.setApiKey(key);
+    _sgEnabled = true;
+    logger.info('[Email] ✅ SendGrid mail client initialized');
+    return true;
+  } catch (err) {
+    logger.warn('[Email] SendGrid init failed:', err.message);
+    _sgWarned = true;
+    return false;
+  }
+}
+
+async function sendEmailViaSendGrid({ to, subject, html, text, from }) {
+  if (!checkSendGridEnabled()) {
+    throw new Error("SendGrid not available — SENDGRID_API_KEY missing or invalid");
+  }
+
+  const sgMail = require('@sendgrid/mail');
+  const fromEmail = from || process.env.SMTP_FROM || process.env.SMTP_USER || process.env.ADMIN_EMAIL || 'noreply@altuvera.com';
+
+  const msg = {
+    to,
+    from: fromEmail,
+    subject,
+    html,
+    text: text || (html ? html.replace(/<[^>]*>/g, ' ').trim() : ''),
+  };
+
+  try {
+    const [response] = await sgMail.send(msg);
+    const messageId = response.headers['x-message-id'] || response.headers['X-Message-Id'];
+    logger.info('✅ Email sent (SendGrid)', {
+      to,
+      subject: maskSensitiveInfo(subject),
+      messageId: messageId || 'unknown',
+      status: response.statusCode,
+    });
+    return { delivered: true, messageId };
+  } catch (err) {
+    logger.error('❌ SendGrid send failed:', {
+      to,
+      subject: maskSensitiveInfo(subject),
+      error: err.message,
+      code: err.code,
+    });
+    throw err;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PUBLIC API
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Send email — unified entry point
+ * Priority: SendGrid (if configured) → SMTP (fallback)
+ */
+const sendEmail = async ({ to, subject, html, text, from } = {}) => {
+  // Validate required fields first
+  if (!to || !subject) {
+    const msg = `Missing required email fields: to=${to}, subject=${subject}`;
+    logger.error(`[Email] ${msg}`);
+    throw new Error(msg);
+  }
+  if (!html && !text) {
+    throw new Error("Email body missing: either html or text must be provided");
+  }
+
+  // — Try SendGrid if key is present —
+  if (process.env.SENDGRID_API_KEY) {
+    try {
+      return await sendEmailViaSendGrid({ to, subject, html, text, from });
+    } catch (err) {
+      logger.warn('[Email] SendGrid failed, falling back to SMTP:', err.message);
+      // fall through
+    }
+  }
+
+  // — SMTP fallback —
+  return sendEmailSMTP({ to, subject, html, text, from });
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TRANSPORTER VERIFICATION
 // ═══════════════════════════════════════════════════════════════════════════
 
-/**
- * Verify SMTP connection. Useful for startup health checks.
- * @returns {Promise<boolean>}
- */
 const verifyTransporter = async () => {
+  if (process.env.SENDGRID_API_KEY) {
+    try {
+      checkSendGridEnabled();
+      logger.info('[Email] ✅ SendGrid credentials verified');
+      return true;
+    } catch (e) {
+      logger.warn('[Email] SendGrid verification failed:', e.message);
+    }
+  }
+
   const t = getTransporter();
   if (!t) {
-    throw new Error("Cannot verify SMTP connection: transporter not initialized (check SMTP config)");
+    throw new Error("SMTP transporter not initialized — check SMTP credentials");
   }
   return new Promise((resolve, reject) => {
     t.verify((err) => {
@@ -351,10 +369,6 @@ const buildSimpleBookingHtml = (booking, heading) => {
   `;
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// CONVENIENCE WRAPPERS
-// ═══════════════════════════════════════════════════════════════════════════
-
 const sendBookingConfirmation = (booking) =>
   sendEmail({
     to:      booking?.email,
@@ -383,16 +397,16 @@ const sendAdminBookingNotification = (booking) =>
     html:    buildSimpleBookingHtml(booking, "New Booking Received 🌍"),
   });
 
-const sendContactNotification = ({ name, email, subject, message } = {}) =>
+const sendContactNotification = ({ name, email, subject: msgSubject, message } = {}) =>
   sendEmail({
     to:      process.env.ADMIN_EMAIL || process.env.EMAIL_FROM || process.env.SMTP_USER,
-    subject: `New contact: ${subject || "Message"}`,
+    subject: `New contact: ${msgSubject || "Message"}`,
     html: `
       <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;line-height:1.6;color:#111;">
         <h2 style="color:#059669;">New Contact Message</h2>
         <p><strong>Name:</strong>    ${escape(name)}</p>
         <p><strong>Email:</strong>   ${escape(email)}</p>
-        <p><strong>Subject:</strong> ${escape(subject)}</p>
+        <p><strong>Subject:</strong> ${escape(msgSubject)}</p>
         <p><strong>Message:</strong><br>
           <span style="white-space:pre-wrap;">${escape(message)}</span>
         </p>
@@ -404,11 +418,11 @@ const sendContactNotification = ({ name, email, subject, message } = {}) =>
     `,
   });
 
-const sendContactReply = ({ to, subject, html } = {}) =>
+const sendContactReply = ({ to, subject, html: bodyHtml } = {}) =>
   sendEmail({
     to,
     subject: subject || "Thanks for contacting us",
-    html:    html    || `
+    html: bodyHtml || `
       <div style="font-family:Segoe UI,Roboto,Arial,sans-serif;line-height:1.6;">
         <p>We received your message and will get back to you shortly.</p>
         <p style="color:#9ca3af;font-size:12px;">
@@ -431,7 +445,7 @@ module.exports = {
   sendContactNotification,
   sendContactReply,
   verifyTransporter,
-  // Exposed for testing
-  _getEmailConfig:   getEmailConfig,
-  _getTransporter:   getTransporter,
+  // Exposed for testing / health checks
+  _getEmailConfig: getEmailConfig,
+  _getTransporter: getTransporter,
 };

@@ -251,29 +251,45 @@ app.get('/api/debug/email-test', async (req, res) => {
     return res.status(403).json({ error: 'forbidden' });
   }
 
-  const { sendEmail } = require('./utils/emailService');
-  const to = req.query.to || process.env.ADMIN_EMAIL;
+  const { sendEmail, verifyTransporter } = require('./utils/email');
+  const to = req.query.to || process.env.ADMIN_EMAIL || process.env.SMTP_USER;
 
-  const result = await sendEmail(
-    to,
-    '✅ Altuvera Email Test — SMTP Working!',
-    `<div style="font-family:sans-serif;padding:32px;background:#F0FDF4;border-radius:12px;">
-       <h2 style="color:#15803D;">✅ Email is Working!</h2>
-       <p>Your SMTP configuration is correctly set up.</p>
-       <p><strong>Sent at:</strong> ${new Date().toISOString()}</p>
-       <p><strong>SMTP Host:</strong> ${process.env.SMTP_HOST}:${process.env.SMTP_PORT}</p>
-       <p><strong>From:</strong> ${process.env.SMTP_FROM}</p>
-     </div>`,
-  );
+  try {
+    const result = await sendEmail({
+      to,
+      subject: '✅ Altuvera Email Test — SMTP/SendGrid Working!',
+      html: `<div style="font-family:sans-serif;padding:32px;background:#F0FDF4;border-radius:12px;">
+               <h2 style="color:#15803D;">✅ Email Delivery Works!</h2>
+               <p>Your email configuration is correctly set up.</p>
+               <p><strong>Sent at:</strong> ${new Date().toISOString()}</p>
+               <p><strong>Provider:</strong> ${process.env.SENDGRID_API_KEY ? 'SendGrid (HTTPS)' : 'SMTP (IPv4)'}</p>
+               <p><strong>From:</strong> ${process.env.SMTP_FROM || process.env.SMTP_USER}</p>
+             </div>`,
+    });
 
-  res.json({
-    success:   result.success,
-    messageId: result.messageId || null,
-    error:     result.error     || null,
-    sentTo:    to,
-    smtpHost:  process.env.SMTP_HOST,
-    smtpUser:  process.env.SMTP_USER,
-  });
+    res.json({
+      success:     true,
+      delivered:   result.delivered,
+      messageId:   result.messageId || null,
+      sentTo:      to,
+      provider:    process.env.SENDGRID_API_KEY ? 'sendgrid' : 'smtp',
+      smtpHost:    process.env.SMTP_HOST,
+      smtpUser:    process.env.SMTP_USER ? 'configured' : 'not set',
+    });
+  } catch (err) {
+    logger.error('[Debug] Email test failed:', err);
+    res.status(500).json({
+      success: false,
+      delivered: false,
+      error: err.message,
+      sentTo: to,
+      provider: process.env.SENDGRID_API_KEY ? 'sendgrid' : 'smtp',
+      hint: err.code === 'ECONNECTION' || err.code === 'ETIMEDOUT'
+        ? 'Outbound SMTP blocked on this host — switch provider or use HTTPS email API'
+        : undefined,
+    });
+  }
+});
 });
 
 // Temporary debug route — REMOVE after fixing
