@@ -1326,11 +1326,14 @@ async function initializeServer() {
     await query("SELECT NOW()");
     logger.info("✅ Database connected");
 
-    const {
-      ensureDestinationSchema,
-    } = require("./controllers/destinationsController");
-    await ensureDestinationSchema();
-    logger.info("✅ Destinations schema ready");
+    // ── Destination schema bootstrap ──────────────────────────────
+    try {
+      const { ensureDestinationSchema } = require("./controllers/destinationsController");
+      await ensureDestinationSchema();
+      logger.info("✅ Destinations extended schema ready");
+    } catch (destSchemaErr) {
+      logger.warn("⚠️ Destination schema bootstrap (non-fatal):", destSchemaErr.message);
+    }
 
     await ensureSubscribersSchema();
     logger.info("✅ Subscribers schema ready");

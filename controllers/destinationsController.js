@@ -1,9 +1,10 @@
 // controllers/destinationsController.js
 // ============================================================
-// Destinations Controller — Full Implementation
-// Includes: Details, Highlights, Best Time, Gallery,
-//           Practical Info & Tips (linked), How to Get There,
-//           Map Data, Traveler Reviews
+// Destinations Controller — Full Production Implementation
+// ✅ All related tables wrapped in safeTask (fault-tolerant)
+// ✅ ensureDestinationSchema() bootstraps all tables on startup
+// ✅ No pricing / payment anywhere
+// ✅ Strong country relationship
 // ============================================================
 
 const { query } = require("../config/db");
@@ -12,171 +13,22 @@ const { getUploadedFileUrl } = require("../utils/uploadHelpers");
 
 /* ═══════════════════════════════════════════════════════════════
    SCHEMA BOOTSTRAP
-   — Called once at startup from server.js (or on first request)
-   — All CREATE IF NOT EXISTS / ADD COLUMN IF NOT EXISTS → safe to
-     run multiple times against an existing DB.
+   Safe to call on every server start — all IF NOT EXISTS
    ═══════════════════════════════════════════════════════════════ */
 
 exports.ensureDestinationSchema = async () => {
-  /* ── core destinations table ───────────────────────────────── */
-  await query(`
-    CREATE TABLE IF NOT EXISTS destinations (
-      id                      SERIAL PRIMARY KEY,
-      country_id              INTEGER NOT NULL,
-      slug                    VARCHAR(500) UNIQUE NOT NULL,
-      name                    VARCHAR(500) NOT NULL,
-      tagline                 VARCHAR(500),
-      short_description       TEXT,
-      description             TEXT,
-      overview                TEXT,
+  const run = (sql) => query(sql).catch((e) =>
+    console.warn("[Schema] Non-fatal:", e.message.slice(0, 120))
+  );
 
-      -- extended content
-      highlights              TEXT[]   DEFAULT '{}'::TEXT[],
-      activities              TEXT[]   DEFAULT '{}'::TEXT[],
-      wildlife                TEXT[]   DEFAULT '{}'::TEXT[],
-      best_time_to_visit      TEXT,
-      getting_there           TEXT,
-      what_to_expect          TEXT,
-      local_tips              TEXT,
-      safety_info             TEXT,
+  // ── Core destination columns (safe additions) ──────────────
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at    TIMESTAMP`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by     INTEGER`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS share_count    INTEGER DEFAULT 0`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_display VARCHAR(100)`);
 
-      -- classification
-      category                VARCHAR(100),
-      difficulty              VARCHAR(50)  DEFAULT 'moderate',
-      destination_type        VARCHAR(100),
-
-      -- location
-      region                  VARCHAR(255),
-      nearest_city            VARCHAR(255),
-      nearest_airport         VARCHAR(255),
-      distance_from_airport_km NUMERIC(8,2),
-      address                 TEXT,
-      latitude                NUMERIC(10,6),
-      longitude               NUMERIC(10,6),
-      altitude_meters         NUMERIC(8,2),
-
-      -- media
-      image_url               TEXT,
-      image_urls              TEXT[]   DEFAULT '{}'::TEXT[],
-      hero_image              TEXT,
-      thumbnail_url           TEXT,
-      video_url               TEXT,
-      virtual_tour_url        TEXT,
-
-      -- duration & group
-      duration_days           INTEGER,
-      duration_nights         INTEGER,
-      duration_display        VARCHAR(100),
-      min_group_size          INTEGER  DEFAULT 1,
-      max_group_size          INTEGER,
-      min_age                 INTEGER,
-      fitness_level           VARCHAR(50),
-
-      -- entrance / hours
-      entrance_fee            TEXT,
-      operating_hours         TEXT,
-
-      -- engagement counters
-      rating                  NUMERIC(3,2) DEFAULT 0,
-      review_count            INTEGER  DEFAULT 0,
-      view_count              INTEGER  DEFAULT 0,
-      booking_count           INTEGER  DEFAULT 0,
-      wishlist_count          INTEGER  DEFAULT 0,
-      share_count             INTEGER  DEFAULT 0,
-
-      -- availability
-      is_sold_out             BOOLEAN  DEFAULT false,
-
-      -- flags
-      status                  VARCHAR(30)  DEFAULT 'draft',
-      is_active               BOOLEAN  DEFAULT true,
-      is_featured             BOOLEAN  DEFAULT false,
-      is_popular              BOOLEAN  DEFAULT false,
-      is_new                  BOOLEAN  DEFAULT false,
-      is_eco_friendly         BOOLEAN  DEFAULT false,
-      is_family_friendly      BOOLEAN  DEFAULT false,
-
-      -- SEO
-      meta_title              VARCHAR(500),
-      meta_description        TEXT,
-
-      -- timestamps
-      published_at            TIMESTAMP,
-      featured_at             TIMESTAMP,
-      created_at              TIMESTAMP DEFAULT NOW(),
-      updated_at              TIMESTAMP DEFAULT NOW(),
-      created_by              INTEGER
-    )
-  `).catch(() => {});
-
-  /* ── safe column additions for existing tables ─────────────── */
-  const destCols = [
-    { name: "tagline",                  type: "VARCHAR(500)" },
-    { name: "short_description",        type: "TEXT" },
-    { name: "overview",                 type: "TEXT" },
-    { name: "highlights",               type: "TEXT[] DEFAULT '{}'::TEXT[]" },
-    { name: "activities",               type: "TEXT[] DEFAULT '{}'::TEXT[]" },
-    { name: "wildlife",                 type: "TEXT[] DEFAULT '{}'::TEXT[]" },
-    { name: "best_time_to_visit",       type: "TEXT" },
-    { name: "getting_there",            type: "TEXT" },
-    { name: "what_to_expect",           type: "TEXT" },
-    { name: "local_tips",               type: "TEXT" },
-    { name: "safety_info",              type: "TEXT" },
-    { name: "category",                 type: "VARCHAR(100)" },
-    { name: "difficulty",               type: "VARCHAR(50) DEFAULT 'moderate'" },
-    { name: "destination_type",         type: "VARCHAR(100)" },
-    { name: "region",                   type: "VARCHAR(255)" },
-    { name: "nearest_city",             type: "VARCHAR(255)" },
-    { name: "nearest_airport",          type: "VARCHAR(255)" },
-    { name: "distance_from_airport_km", type: "NUMERIC(8,2)" },
-    { name: "address",                  type: "TEXT" },
-    { name: "latitude",                 type: "NUMERIC(10,6)" },
-    { name: "longitude",                type: "NUMERIC(10,6)" },
-    { name: "altitude_meters",          type: "NUMERIC(8,2)" },
-    { name: "image_url",                type: "TEXT" },
-    { name: "image_urls",               type: "TEXT[] DEFAULT '{}'::TEXT[]" },
-    { name: "hero_image",               type: "TEXT" },
-    { name: "thumbnail_url",            type: "TEXT" },
-    { name: "video_url",                type: "TEXT" },
-    { name: "virtual_tour_url",         type: "TEXT" },
-    { name: "duration_days",            type: "INTEGER" },
-    { name: "duration_nights",          type: "INTEGER" },
-    { name: "duration_display",         type: "VARCHAR(100)" },
-    { name: "min_group_size",           type: "INTEGER DEFAULT 1" },
-    { name: "max_group_size",           type: "INTEGER" },
-    { name: "min_age",                  type: "INTEGER" },
-    { name: "fitness_level",            type: "VARCHAR(50)" },
-    { name: "entrance_fee",             type: "TEXT" },
-    { name: "operating_hours",          type: "TEXT" },
-    { name: "rating",                   type: "NUMERIC(3,2) DEFAULT 0" },
-    { name: "review_count",             type: "INTEGER DEFAULT 0" },
-    { name: "view_count",               type: "INTEGER DEFAULT 0" },
-    { name: "booking_count",            type: "INTEGER DEFAULT 0" },
-    { name: "wishlist_count",           type: "INTEGER DEFAULT 0" },
-    { name: "share_count",              type: "INTEGER DEFAULT 0" },
-    { name: "is_sold_out",              type: "BOOLEAN DEFAULT false" },
-    { name: "status",                   type: "VARCHAR(30) DEFAULT 'draft'" },
-    { name: "is_active",                type: "BOOLEAN DEFAULT true" },
-    { name: "is_featured",              type: "BOOLEAN DEFAULT false" },
-    { name: "is_popular",               type: "BOOLEAN DEFAULT false" },
-    { name: "is_new",                   type: "BOOLEAN DEFAULT false" },
-    { name: "is_eco_friendly",          type: "BOOLEAN DEFAULT false" },
-    { name: "is_family_friendly",       type: "BOOLEAN DEFAULT false" },
-    { name: "meta_title",               type: "VARCHAR(500)" },
-    { name: "meta_description",         type: "TEXT" },
-    { name: "published_at",             type: "TIMESTAMP" },
-    { name: "featured_at",              type: "TIMESTAMP" },
-    { name: "created_by",               type: "INTEGER" },
-    { name: "updated_at",               type: "TIMESTAMP DEFAULT NOW()" },
-  ];
-  for (const col of destCols) {
-    await query(
-      `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`
-    ).catch(() => {});
-  }
-
-  /* ── destination_images ────────────────────────────────────── */
-  await query(`
+  // ── destination_images ────────────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_images (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL,
@@ -184,51 +36,51 @@ exports.ensureDestinationSchema = async () => {
       thumbnail_url  TEXT,
       caption        VARCHAR(500),
       alt_text       VARCHAR(500),
-      is_primary     BOOLEAN DEFAULT false,
-      is_active      BOOLEAN DEFAULT true,
-      sort_order     INTEGER DEFAULT 0,
+      is_primary     BOOLEAN   DEFAULT false,
+      is_active      BOOLEAN   DEFAULT true,
+      sort_order     INTEGER   DEFAULT 0,
       uploaded_by    INTEGER,
       created_at     TIMESTAMP DEFAULT NOW()
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_itineraries ───────────────────────────────── */
-  await query(`
+  // ── destination_itineraries ───────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_itineraries (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL,
       day_number     INTEGER NOT NULL,
       title          VARCHAR(500) NOT NULL,
       description    TEXT,
-      activities     TEXT[]   DEFAULT '{}'::TEXT[],
-      highlights     TEXT[]   DEFAULT '{}'::TEXT[],
-      meals          TEXT[]   DEFAULT '{}'::TEXT[],
+      activities     TEXT[]    DEFAULT '{}'::TEXT[],
+      highlights     TEXT[]    DEFAULT '{}'::TEXT[],
+      meals          TEXT[]    DEFAULT '{}'::TEXT[],
       accommodation  VARCHAR(500),
       distance_km    NUMERIC(8,2),
       image_url      TEXT,
-      sort_order     INTEGER DEFAULT 0,
-      is_active      BOOLEAN DEFAULT true,
+      sort_order     INTEGER   DEFAULT 0,
+      is_active      BOOLEAN   DEFAULT true,
       created_at     TIMESTAMP DEFAULT NOW()
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_faqs ──────────────────────────────────────── */
-  await query(`
+  // ── destination_faqs ──────────────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_faqs (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL,
       question       TEXT    NOT NULL,
       answer         TEXT    NOT NULL,
       category       VARCHAR(100),
-      helpful_count  INTEGER DEFAULT 0,
-      sort_order     INTEGER DEFAULT 0,
-      is_active      BOOLEAN DEFAULT true,
+      helpful_count  INTEGER   DEFAULT 0,
+      sort_order     INTEGER   DEFAULT 0,
+      is_active      BOOLEAN   DEFAULT true,
       created_at     TIMESTAMP DEFAULT NOW()
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_reviews ───────────────────────────────────── */
-  await query(`
+  // ── destination_reviews ───────────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_reviews (
       id               SERIAL PRIMARY KEY,
       destination_id   INTEGER NOT NULL,
@@ -238,20 +90,21 @@ exports.ensureDestinationSchema = async () => {
       reviewer_avatar  TEXT,
       title            VARCHAR(500),
       content          TEXT NOT NULL,
-      overall_rating   NUMERIC(3,2) NOT NULL CHECK (overall_rating BETWEEN 1 AND 5),
+      overall_rating   NUMERIC(3,2) NOT NULL
+                         CHECK (overall_rating BETWEEN 1 AND 5),
       trip_date        DATE,
       trip_type        VARCHAR(100),
-      images           TEXT[]   DEFAULT '{}'::TEXT[],
-      helpful_count    INTEGER  DEFAULT 0,
-      status           VARCHAR(30) DEFAULT 'pending',
-      is_verified      BOOLEAN  DEFAULT false,
-      is_featured      BOOLEAN  DEFAULT false,
+      images           TEXT[]    DEFAULT '{}'::TEXT[],
+      helpful_count    INTEGER   DEFAULT 0,
+      status           VARCHAR(30)  DEFAULT 'pending',
+      is_verified      BOOLEAN   DEFAULT false,
+      is_featured      BOOLEAN   DEFAULT false,
       created_at       TIMESTAMP DEFAULT NOW()
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_tags ──────────────────────────────────────── */
-  await query(`
+  // ── destination_tags ──────────────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_tags (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL,
@@ -261,69 +114,61 @@ exports.ensureDestinationSchema = async () => {
       created_at     TIMESTAMP DEFAULT NOW(),
       UNIQUE(destination_id, tag_slug)
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_practical_info ────────────────────────────── */
-  await query(`
+  // ── destination_practical_info ────────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_practical_info (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL UNIQUE,
-      -- Getting There
-      nearest_airport         TEXT,
-      distance_from_airport   TEXT,
-      drive_time_from_capital TEXT,
-      road_conditions         TEXT,
-      transport_options       TEXT[]  DEFAULT '{}'::TEXT[],
-      border_crossings        TEXT,
-      -- Health & Safety
-      vaccinations_required   TEXT[]  DEFAULT '{}'::TEXT[],
-      vaccinations_recommended TEXT[] DEFAULT '{}'::TEXT[],
-      malaria_risk            VARCHAR(50),
-      water_safety            TEXT,
-      medical_facilities      TEXT,
-      emergency_contacts      JSONB   DEFAULT '{}'::JSONB,
-      safety_rating           VARCHAR(30),
-      safety_notes            TEXT,
-      -- Permits & Regulations
-      permits_required        TEXT[]  DEFAULT '{}'::TEXT[],
-      permit_cost             TEXT,
-      booking_lead_time       TEXT,
-      visitor_limits          TEXT,
-      regulations             TEXT,
-      -- Climate Detail
-      avg_temp_low_c          NUMERIC(4,1),
-      avg_temp_high_c         NUMERIC(4,1),
-      rainfall_mm_annual      NUMERIC(8,2),
-      humidity_percent        INTEGER,
-      uv_index_peak           INTEGER,
-      best_months             TEXT[]  DEFAULT '{}'::TEXT[],
-      avoid_months            TEXT[]  DEFAULT '{}'::TEXT[],
-      climate_notes           TEXT,
-      -- Packing
-      packing_essentials      TEXT[]  DEFAULT '{}'::TEXT[],
-      clothing_tips           TEXT,
-      gear_recommendations    TEXT[]  DEFAULT '{}'::TEXT[],
-      -- Budget
-      budget_range_usd        TEXT,
-      entrance_fee_usd        TEXT,
-      guide_cost_usd          TEXT,
-      meal_cost_range         TEXT,
-      -- Connectivity
-      cell_coverage           TEXT,
-      wifi_available          BOOLEAN DEFAULT false,
-      electricity_voltage     VARCHAR(20),
-      plug_types              TEXT[]  DEFAULT '{}'::TEXT[],
-      -- Other
-      currency_tips           TEXT,
-      tipping_culture         TEXT,
-      local_etiquette         TEXT[]  DEFAULT '{}'::TEXT[],
-      photography_rules       TEXT,
-      updated_at              TIMESTAMP DEFAULT NOW()
+      nearest_airport          TEXT,
+      distance_from_airport    TEXT,
+      drive_time_from_capital  TEXT,
+      road_conditions          TEXT,
+      transport_options        TEXT[]  DEFAULT '{}'::TEXT[],
+      border_crossings         TEXT,
+      vaccinations_required    TEXT[]  DEFAULT '{}'::TEXT[],
+      vaccinations_recommended TEXT[]  DEFAULT '{}'::TEXT[],
+      malaria_risk             VARCHAR(50),
+      water_safety             TEXT,
+      medical_facilities       TEXT,
+      emergency_contacts       JSONB   DEFAULT '{}'::JSONB,
+      safety_rating            VARCHAR(30),
+      safety_notes             TEXT,
+      permits_required         TEXT[]  DEFAULT '{}'::TEXT[],
+      permit_cost              TEXT,
+      booking_lead_time        TEXT,
+      visitor_limits           TEXT,
+      regulations              TEXT,
+      avg_temp_low_c           NUMERIC(4,1),
+      avg_temp_high_c          NUMERIC(4,1),
+      rainfall_mm_annual       NUMERIC(8,2),
+      humidity_percent         INTEGER,
+      uv_index_peak            INTEGER,
+      best_months              TEXT[]  DEFAULT '{}'::TEXT[],
+      avoid_months             TEXT[]  DEFAULT '{}'::TEXT[],
+      climate_notes            TEXT,
+      packing_essentials       TEXT[]  DEFAULT '{}'::TEXT[],
+      clothing_tips            TEXT,
+      gear_recommendations     TEXT[]  DEFAULT '{}'::TEXT[],
+      budget_range_usd         TEXT,
+      entrance_fee_usd         TEXT,
+      guide_cost_usd           TEXT,
+      meal_cost_range          TEXT,
+      cell_coverage            TEXT,
+      wifi_available           BOOLEAN DEFAULT false,
+      electricity_voltage      VARCHAR(20),
+      plug_types               TEXT[]  DEFAULT '{}'::TEXT[],
+      currency_tips            TEXT,
+      tipping_culture          TEXT,
+      local_etiquette          TEXT[]  DEFAULT '{}'::TEXT[],
+      photography_rules        TEXT,
+      updated_at               TIMESTAMP DEFAULT NOW()
     )
-  `).catch(() => {});
+  `);
 
-  /* ── destination_tips (LINK TABLE: tips ←→ destinations) ───── */
-  await query(`
+  // ── destination_tips (link table) ─────────────────────────
+  await run(`
     CREATE TABLE IF NOT EXISTS destination_tips (
       id             SERIAL PRIMARY KEY,
       destination_id INTEGER NOT NULL,
@@ -333,37 +178,33 @@ exports.ensureDestinationSchema = async () => {
       created_at     TIMESTAMP DEFAULT NOW(),
       UNIQUE(destination_id, tip_id)
     )
-  `).catch(() => {});
+  `);
 
-  /* ── Add destination_id to tips table if missing ───────────── */
-  await query(
-    `ALTER TABLE tips ADD COLUMN IF NOT EXISTS destination_id INTEGER`
-  ).catch(() => {});
+  // ── Add destination_id to tips if missing ─────────────────
+  await run(`ALTER TABLE tips ADD COLUMN IF NOT EXISTS destination_id INTEGER`);
 
-  /* ── Indexes ───────────────────────────────────────────────── */
+  // ── Indexes ───────────────────────────────────────────────
   const indexes = [
-    `CREATE INDEX IF NOT EXISTS idx_dest_country_id   ON destinations(country_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_slug          ON destinations(slug)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_country_id    ON destinations(country_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_status        ON destinations(status)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_is_active     ON destinations(is_active)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_is_featured   ON destinations(is_featured)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_category      ON destinations(category)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_latlon        ON destinations(latitude, longitude) WHERE latitude IS NOT NULL`,
     `CREATE INDEX IF NOT EXISTS idx_dest_rating        ON destinations(rating DESC NULLS LAST)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_images_destid ON destination_images(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_itin_destid   ON destination_itineraries(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_faqs_destid   ON destination_faqs(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_rev_destid    ON destination_reviews(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_rev_status    ON destination_reviews(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_rev_status    ON destination_reviews(destination_id, status)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_tags_destid   ON destination_tags(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_practical_id  ON destination_practical_info(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_tips_destid   ON destination_tips(destination_id)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_tips_tipid    ON destination_tips(tip_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_tips_dest_id       ON tips(destination_id) WHERE destination_id IS NOT NULL`,
   ];
-  for (const sql of indexes) {
-    await query(sql).catch(() => {});
-  }
+  for (const idx of indexes) await run(idx);
+
+  console.log("[Schema] ✅ Destination schema bootstrap complete");
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -412,8 +253,13 @@ const formatDuration = (days, nights) => {
   return null;
 };
 
-/* ── Country resolver ────────────────────────────────────────── */
+// Wraps a task so one failing table never kills the whole getOne response
+const safeTask = (label, fn) =>
+  fn().catch((err) => {
+    console.warn(`[destinations.getOne] ${label} failed (non-fatal):`, err.message?.slice(0, 100));
+  });
 
+/* ── Country resolver ─────────────────────────────────────── */
 const resolveCountry = async (idOrSlug) => {
   if (!idOrSlug) return null;
   const str   = String(idOrSlug).trim();
@@ -444,7 +290,7 @@ const syncCountryDestinationCount = async (countryId) => {
 
 const createUniqueSlug = async (name, excludeId = null) => {
   const base = slugify(name);
-  let slug = base;
+  let slug    = base;
   let counter = 1;
   while (true) {
     const existing = await query(
@@ -463,37 +309,32 @@ const createUniqueSlug = async (name, excludeId = null) => {
    ═══════════════════════════════════════════════════════════════ */
 
 const serialize = (row, options = {}) => {
-  const images   = normalizeArray(row.image_urls);
+  const images    = normalizeArray(row.image_urls);
   const mainImage = images[0] || row.image_url || null;
 
   return {
-    // Identifiers
     id:   row.id,
     slug: row.slug,
 
-    // Basic Info
     name:             row.name,
     tagline:          row.tagline,
     shortDescription: row.short_description,
     description:      row.description,
     overview:         row.overview,
 
-    // Extended Content
-    highlights:       row.highlights     || [],
-    activities:       row.activities     || [],
-    wildlife:         row.wildlife       || [],
-    bestTimeToVisit:  row.best_time_to_visit,
-    gettingThere:     row.getting_there,
-    whatToExpect:     row.what_to_expect,
-    localTips:        row.local_tips,
-    safetyInfo:       row.safety_info,
+    highlights:      row.highlights      || [],
+    activities:      row.activities      || [],
+    wildlife:        row.wildlife        || [],
+    bestTimeToVisit: row.best_time_to_visit,
+    gettingThere:    row.getting_there,
+    whatToExpect:    row.what_to_expect,
+    localTips:       row.local_tips,
+    safetyInfo:      row.safety_info,
 
-    // Classification
-    category:         row.category,
-    difficulty:       row.difficulty,
-    destinationType:  row.destination_type,
+    category:        row.category,
+    difficulty:      row.difficulty,
+    destinationType: row.destination_type,
 
-    // Country (STRONG RELATIONSHIP)
     country: {
       id:        row.country_id,
       slug:      row.country_slug,
@@ -507,7 +348,6 @@ const serialize = (row, options = {}) => {
     countrySlug: row.country_slug,
     countryName: row.country_name,
 
-    // Location
     region:                  row.region,
     nearestCity:             row.nearest_city,
     nearestAirport:          row.nearest_airport,
@@ -521,15 +361,13 @@ const serialize = (row, options = {}) => {
     longitude:      toNumber(row.longitude),
     altitudeMeters: toNumber(row.altitude_meters),
 
-    // Media
     images,
     imageUrl:       mainImage,
-    heroImage:      row.hero_image  || mainImage,
-    thumbnailUrl:   row.thumbnail_url || mainImage,
+    heroImage:      row.hero_image     || mainImage,
+    thumbnailUrl:   row.thumbnail_url  || mainImage,
     videoUrl:       row.video_url,
     virtualTourUrl: row.virtual_tour_url,
 
-    // Duration & Group
     duration:       row.duration_display || formatDuration(row.duration_days, row.duration_nights),
     durationDays:   toNumber(row.duration_days),
     durationNights: toNumber(row.duration_nights),
@@ -538,19 +376,16 @@ const serialize = (row, options = {}) => {
     minAge:         toNumber(row.min_age),
     fitnessLevel:   row.fitness_level,
 
-    // Ratings & Stats
     rating:        toNumber(row.rating, 0),
     reviewCount:   toNumber(row.review_count, 0),
     viewCount:     toNumber(row.view_count, 0),
     bookingCount:  toNumber(row.booking_count, 0),
     wishlistCount: toNumber(row.wishlist_count, 0),
 
-    // Availability
     entranceFee:    row.entrance_fee,
     operatingHours: row.operating_hours,
     isSoldOut:      toBoolean(row.is_sold_out),
 
-    // Flags
     status:           row.status,
     isActive:         toBoolean(row.is_active),
     isFeatured:       toBoolean(row.is_featured),
@@ -559,27 +394,24 @@ const serialize = (row, options = {}) => {
     isEcoFriendly:    toBoolean(row.is_eco_friendly),
     isFamilyFriendly: toBoolean(row.is_family_friendly),
 
-    // SEO
     metaTitle:       row.meta_title,
     metaDescription: row.meta_description,
 
-    // Timestamps
     createdAt:   row.created_at,
     updatedAt:   row.updated_at,
     publishedAt: row.published_at,
 
-    // Include relations if pre-fetched
-    ...(options.includeRelations && {
-      gallery:        row.gallery     || [],
-      itinerary:      row.itinerary   || [],
-      faqs:           row.faqs        || [],
-      reviews:        row.reviews     || [],
-      tags:           row.tags        || [],
-      related:        row.related     || [],
-      tips:           row.tips        || [],
-      practicalInfo:  row.practicalInfo || null,
-      howToGetThere:  row.howToGetThere || null,
-    }),
+    // Relations — populated by getOne when include=all
+    gallery:        [],
+    itinerary:      [],
+    faqs:           [],
+    reviews:        [],
+    reviewAggregate:null,
+    tips:           [],
+    tags:           [],
+    related:        [],
+    practicalInfo:  null,
+    howToGetThere:  null,
   };
 };
 
@@ -603,10 +435,9 @@ const serializeReview = (row) => ({
 const serializePracticalInfo = (row) => {
   if (!row) return null;
   return {
-    id:             row.id,
-    destinationId:  row.destination_id,
+    id:            row.id,
+    destinationId: row.destination_id,
 
-    // Getting There
     gettingThere: {
       nearestAirport:       row.nearest_airport,
       distanceFromAirport:  row.distance_from_airport,
@@ -616,7 +447,6 @@ const serializePracticalInfo = (row) => {
       borderCrossings:      row.border_crossings,
     },
 
-    // Health & Safety
     healthAndSafety: {
       vaccinationsRequired:    row.vaccinations_required    || [],
       vaccinationsRecommended: row.vaccinations_recommended || [],
@@ -628,35 +458,31 @@ const serializePracticalInfo = (row) => {
       safetyNotes:             row.safety_notes,
     },
 
-    // Permits
     permitsAndRegulations: {
-      permitsRequired:  row.permits_required  || [],
-      permitCost:       row.permit_cost,
-      bookingLeadTime:  row.booking_lead_time,
-      visitorLimits:    row.visitor_limits,
-      regulations:      row.regulations,
+      permitsRequired: row.permits_required  || [],
+      permitCost:      row.permit_cost,
+      bookingLeadTime: row.booking_lead_time,
+      visitorLimits:   row.visitor_limits,
+      regulations:     row.regulations,
     },
 
-    // Climate
     climate: {
-      avgTempLowC:       toNumber(row.avg_temp_low_c),
-      avgTempHighC:      toNumber(row.avg_temp_high_c),
-      rainfallMmAnnual:  toNumber(row.rainfall_mm_annual),
-      humidityPercent:   toNumber(row.humidity_percent),
-      uvIndexPeak:       toNumber(row.uv_index_peak),
-      bestMonths:        row.best_months    || [],
-      avoidMonths:       row.avoid_months   || [],
-      climateNotes:      row.climate_notes,
+      avgTempLowC:      toNumber(row.avg_temp_low_c),
+      avgTempHighC:     toNumber(row.avg_temp_high_c),
+      rainfallMmAnnual: toNumber(row.rainfall_mm_annual),
+      humidityPercent:  toNumber(row.humidity_percent),
+      uvIndexPeak:      toNumber(row.uv_index_peak),
+      bestMonths:       row.best_months  || [],
+      avoidMonths:      row.avoid_months || [],
+      climateNotes:     row.climate_notes,
     },
 
-    // Packing
     packing: {
-      essentials:       row.packing_essentials   || [],
-      clothingTips:     row.clothing_tips,
-      gearRecommendations: row.gear_recommendations || [],
+      essentials:          row.packing_essentials    || [],
+      clothingTips:        row.clothing_tips,
+      gearRecommendations: row.gear_recommendations  || [],
     },
 
-    // Budget
     budget: {
       rangeUsd:       row.budget_range_usd,
       entranceFeeUsd: row.entrance_fee_usd,
@@ -664,15 +490,13 @@ const serializePracticalInfo = (row) => {
       mealCostRange:  row.meal_cost_range,
     },
 
-    // Connectivity
     connectivity: {
-      cellCoverage:      row.cell_coverage,
-      wifiAvailable:     toBoolean(row.wifi_available),
-      electricityVoltage:row.electricity_voltage,
-      plugTypes:         row.plug_types || [],
+      cellCoverage:       row.cell_coverage,
+      wifiAvailable:      toBoolean(row.wifi_available),
+      electricityVoltage: row.electricity_voltage,
+      plugTypes:          row.plug_types || [],
     },
 
-    // Culture
     culture: {
       currencyTips:    row.currency_tips,
       tippingCulture:  row.tipping_culture,
@@ -685,21 +509,20 @@ const serializePracticalInfo = (row) => {
 };
 
 const serializeTipLink = (row) => ({
-  id:          row.id,
-  tipId:       row.tip_id,
-  slug:        row.slug,
-  headline:    row.slug,
-  summary:     row.summary,
-  body:        row.body,
-  category:    row.category,
-  tripPhase:   row.trip_phase,
-  icon:        row.icon,
-  imageUrl:    row.image_url,
-  tags:        row.tags      || [],
-  checklist:   row.checklist || [],
-  isFeatured:  toBoolean(row.is_featured),
-  sortOrder:   toNumber(row.sort_order, 0),
-  isLinked:    true,
+  id:         row.id,
+  tipId:      row.tip_id,
+  slug:       row.slug,
+  headline:   row.slug,
+  summary:    row.summary,
+  body:       row.body,
+  category:   row.category,
+  tripPhase:  row.trip_phase,
+  icon:       row.icon,
+  imageUrl:   row.image_url,
+  tags:       row.tags      || [],
+  checklist:  row.checklist || [],
+  isFeatured: toBoolean(row.is_featured),
+  sortOrder:  toNumber(row.sort_order, 0),
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -724,7 +547,6 @@ const buildFilters = async (filters) => {
   const params     = [];
   let idx = 1;
 
-  // Status
   if (filters.status) {
     conditions.push(`d.status = $${idx++}`);
     params.push(filters.status);
@@ -732,7 +554,6 @@ const buildFilters = async (filters) => {
     conditions.push(`d.status = 'published'`);
   }
 
-  // Country (STRONG)
   if (filters.country || filters.country_id || filters.countrySlug) {
     const country = await resolveCountry(
       filters.country || filters.country_id || filters.countrySlug
@@ -745,43 +566,37 @@ const buildFilters = async (filters) => {
     }
   }
 
-  // Continent (via country join)
   if (filters.continent) {
     conditions.push(`c.continent ILIKE $${idx++}`);
     params.push(filters.continent);
   }
 
-  // Category / Difficulty
   if (filters.category) {
     conditions.push(`d.category = $${idx++}`);
     params.push(filters.category);
   }
+
   if (filters.difficulty) {
     conditions.push(`d.difficulty = $${idx++}`);
     params.push(filters.difficulty);
   }
 
-  // Rating
   if (filters.minRating) {
     conditions.push(`d.rating >= $${idx++}`);
     params.push(parseFloat(filters.minRating));
   }
 
-  // Duration
   if (filters.minDuration) {
     conditions.push(`d.duration_days >= $${idx++}`);
     params.push(parseInt(filters.minDuration));
   }
+
   if (filters.maxDuration) {
     conditions.push(`d.duration_days <= $${idx++}`);
     params.push(parseInt(filters.maxDuration));
   }
 
-  // Boolean flags
-  const boolFlags = [
-    "featured", "popular", "new",
-    "eco_friendly", "family_friendly",
-  ];
+  const boolFlags = ["featured", "popular", "new", "eco_friendly", "family_friendly"];
   boolFlags.forEach((flag) => {
     const key = flag.replace("_", "");
     const val = filters[key] !== undefined ? filters[key] : filters[flag];
@@ -791,20 +606,18 @@ const buildFilters = async (filters) => {
     }
   });
 
-  // Search / q
   if (filters.search || filters.q) {
     const term = filters.search || filters.q;
     conditions.push(`(
-      d.name             ILIKE $${idx} OR
-      d.description      ILIKE $${idx} OR
+      d.name              ILIKE $${idx} OR
+      d.description       ILIKE $${idx} OR
       d.short_description ILIKE $${idx} OR
-      c.name             ILIKE $${idx}
+      c.name              ILIKE $${idx}
     )`);
     params.push(`%${term}%`);
     idx++;
   }
 
-  // Tag filter
   if (filters.tag) {
     conditions.push(`EXISTS (
       SELECT 1 FROM destination_tags dt
@@ -813,7 +626,6 @@ const buildFilters = async (filters) => {
     params.push(filters.tag.toLowerCase());
   }
 
-  // Bounding box (map)
   if (filters.bounds) {
     try {
       const [swLat, swLng, neLat, neLng] = filters.bounds.split(",").map(Number);
@@ -826,7 +638,6 @@ const buildFilters = async (filters) => {
     } catch (_) {}
   }
 
-  // Exclude IDs
   if (filters.exclude) {
     const ids = normalizeArray(filters.exclude).map((id) => parseInt(id));
     if (ids.length) {
@@ -840,17 +651,17 @@ const buildFilters = async (filters) => {
 
 const buildSort = (sort) => {
   const map = {
-    name:       "d.name ASC",
-    "-name":    "d.name DESC",
-    rating:     "d.rating DESC NULLS LAST",
-    newest:     "d.published_at DESC NULLS LAST, d.created_at DESC",
-    oldest:     "d.created_at ASC",
-    popular:    "d.booking_count DESC, d.view_count DESC",
-    featured:   "d.is_featured DESC, d.is_popular DESC, d.rating DESC NULLS LAST",
-    views:      "d.view_count DESC",
-    duration:   "d.duration_days ASC NULLS LAST",
-    "-duration":"d.duration_days DESC NULLS LAST",
-    random:     "RANDOM()",
+    name:        "d.name ASC",
+    "-name":     "d.name DESC",
+    rating:      "d.rating DESC NULLS LAST",
+    newest:      "d.published_at DESC NULLS LAST, d.created_at DESC",
+    oldest:      "d.created_at ASC",
+    popular:     "d.booking_count DESC, d.view_count DESC",
+    featured:    "d.is_featured DESC, d.is_popular DESC, d.rating DESC NULLS LAST",
+    views:       "d.view_count DESC",
+    duration:    "d.duration_days ASC NULLS LAST",
+    "-duration": "d.duration_days DESC NULLS LAST",
+    random:      "RANDOM()",
   };
   return map[sort] || map.featured;
 };
@@ -874,19 +685,17 @@ exports.getAll = async (req, res, next) => {
     const total      = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
-    const qParams = [...params, pagination.limit, pagination.offset];
-    const result  = await query(
+    const result = await query(
       `${BASE_SELECT} ${where}
        ORDER BY ${orderBy}
        LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
-      qParams
+      [...params, pagination.limit, pagination.offset]
     );
 
     res.json({
       success: true,
       data:    result.rows.map((r) => serialize(r)),
       pagination,
-      meta:    { sort, filters: Object.keys(filters).length ? filters : undefined },
     });
   } catch (err) {
     next(err);
@@ -896,8 +705,7 @@ exports.getAll = async (req, res, next) => {
 exports.getFeatured = async (req, res, next) => {
   try {
     const { limit = 8, country, continent } = req.query;
-
-    let where = "WHERE d.is_featured = true AND d.is_active = true AND d.status = 'published'";
+    let where  = "WHERE d.is_featured = true AND d.is_active = true AND d.status = 'published'";
     const params = [];
     let idx = 1;
 
@@ -969,7 +777,7 @@ exports.getNew = async (req, res, next) => {
 
 exports.getByCountry = async (req, res, next) => {
   try {
-    const { countrySlug }                  = req.params;
+    const { countrySlug }                                       = req.params;
     const { page = 1, limit = 12, sort = "featured", category } = req.query;
 
     const country = await resolveCountry(countrySlug);
@@ -998,8 +806,8 @@ exports.getByCountry = async (req, res, next) => {
     );
 
     res.json({
-      success:    true,
-      data:       result.rows.map((r) => serialize(r)),
+      success: true,
+      data:    result.rows.map((r) => serialize(r)),
       pagination,
       country: {
         id:               country.id,
@@ -1028,11 +836,10 @@ exports.getCategories = async (req, res, next) => {
 
     const result = await query(
       `SELECT d.category,
-              COUNT(*)                                    AS count,
-              AVG(d.rating) FILTER (WHERE d.rating > 0)  AS avg_rating
+              COUNT(*)                                   AS count,
+              AVG(d.rating) FILTER (WHERE d.rating > 0) AS avg_rating
        FROM destinations d ${where}
-       GROUP BY d.category
-       ORDER BY count DESC`,
+       GROUP BY d.category ORDER BY count DESC`,
       params
     );
 
@@ -1059,11 +866,10 @@ exports.getDifficulties = async (req, res, next) => {
       WHERE is_active = true AND status = 'published' AND difficulty IS NOT NULL
       GROUP BY difficulty
       ORDER BY CASE difficulty
-        WHEN 'easy'       THEN 1 WHEN 'moderate'    THEN 2
+        WHEN 'easy'        THEN 1 WHEN 'moderate'   THEN 2
         WHEN 'challenging' THEN 3 WHEN 'difficult'  THEN 4
-        WHEN 'expert'     THEN 5 END
+        WHEN 'expert'      THEN 5 END
     `);
-
     res.json({
       success: true,
       data: result.rows.map((r) => ({
@@ -1080,7 +886,6 @@ exports.getDifficulties = async (req, res, next) => {
 exports.getMapData = async (req, res, next) => {
   try {
     const { country, category, bounds, limit = 500 } = req.query;
-
     let where  = `WHERE d.is_active = true AND d.status = 'published'
                    AND d.latitude IS NOT NULL AND d.longitude IS NOT NULL`;
     const params = [];
@@ -1132,11 +937,7 @@ exports.getMapData = async (req, res, next) => {
         reviewCount:      toNumber(r.review_count),
         isFeatured:       toBoolean(r.is_featured),
         isPopular:        toBoolean(r.is_popular),
-        country: {
-          name: r.country_name,
-          slug: r.country_slug,
-          flag: r.country_flag,
-        },
+        country: { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
       })),
       count: result.rows.length,
     });
@@ -1163,13 +964,12 @@ exports.search = async (req, res, next) => {
     const total      = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
-    const qParams = [...params, pagination.limit, pagination.offset, `${q}%`];
-    const result  = await query(
+    const result = await query(
       `${BASE_SELECT} ${where}
        ORDER BY CASE WHEN d.name ILIKE $${nextIdx + 2} THEN 0 ELSE 1 END,
                 d.rating DESC NULLS LAST
        LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
-      qParams
+      [...params, pagination.limit, pagination.offset, `${q}%`]
     );
 
     res.json({ success: true, data: result.rows.map((r) => serialize(r)), pagination, query: q });
@@ -1227,7 +1027,7 @@ exports.getTags = async (req, res, next) => {
        ORDER BY count DESC
        LIMIT $1`,
       [parseInt(limit)]
-    );
+    ).catch(() => ({ rows: [] }));   // safe if table missing
 
     res.json({
       success: true,
@@ -1247,14 +1047,14 @@ exports.getStats = async (req, res, next) => {
   try {
     const stats = await query(`
       SELECT
-        COUNT(*)                                                  AS total,
-        COUNT(*) FILTER (WHERE status = 'published')              AS published,
-        COUNT(*) FILTER (WHERE is_featured)                       AS featured,
-        COUNT(*) FILTER (WHERE is_popular)                        AS popular,
-        COUNT(DISTINCT country_id)                                AS countries,
-        AVG(rating) FILTER (WHERE rating > 0)                     AS avg_rating,
-        SUM(view_count)                                           AS total_views,
-        SUM(review_count)                                         AS total_reviews
+        COUNT(*)                                              AS total,
+        COUNT(*) FILTER (WHERE status = 'published')         AS published,
+        COUNT(*) FILTER (WHERE is_featured)                  AS featured,
+        COUNT(*) FILTER (WHERE is_popular)                   AS popular,
+        COUNT(DISTINCT country_id)                           AS countries,
+        AVG(rating) FILTER (WHERE rating > 0)                AS avg_rating,
+        SUM(view_count)                                      AS total_views,
+        SUM(review_count)                                    AS total_reviews
       FROM destinations WHERE is_active = true
     `);
 
@@ -1300,7 +1100,7 @@ exports.getStats = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   SINGLE DESTINATION — Full Detail with All Sections
+   SINGLE DESTINATION — getOne with fault-tolerant parallel tasks
    ═══════════════════════════════════════════════════════════════ */
 
 exports.getOne = async (req, res, next) => {
@@ -1313,8 +1113,7 @@ exports.getOne = async (req, res, next) => {
     const val   = isNum ? parseInt(idOrSlug) : idOrSlug.toLowerCase();
 
     const result = await query(
-      `${BASE_SELECT} WHERE ${col} = $1 AND d.is_active = true`,
-      [val]
+      `${BASE_SELECT} WHERE ${col} = $1 AND d.is_active = true`, [val]
     );
 
     if (result.rows.length === 0) {
@@ -1324,136 +1123,153 @@ exports.getOne = async (req, res, next) => {
     const row    = result.rows[0];
     const destId = row.id;
 
-    // Async view increment
+    // Async view increment — non-blocking
     query(
       "UPDATE destinations SET view_count = view_count + 1 WHERE id = $1", [destId]
     ).catch(() => {});
 
-    const dest    = serialize(row);
-    const includes = include
-      ? include.split(",").map((s) => s.trim().toLowerCase())
-      : [];
-    const all = includes.includes("all");
+    const dest     = serialize(row);
+    const includes = include ? include.split(",").map((s) => s.trim().toLowerCase()) : [];
+    const all      = includes.includes("all");
 
-    /* ── Parallel data fetching ───────────────────────────────── */
     const tasks = [];
 
-    // ── 1. Destination Gallery ─────────────────────────────────
+    // ── 1. Gallery ────────────────────────────────────────────
     if (all || includes.includes("gallery") || includes.includes("images")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("gallery", async () => {
+        const r = await query(
           `SELECT * FROM destination_images
            WHERE destination_id = $1 AND is_active = true
            ORDER BY is_primary DESC, sort_order ASC`,
           [destId]
-        ).then((r) => {
-          dest.gallery = r.rows.map((img) => ({
-            id:           img.id,
-            imageUrl:     img.image_url,
-            thumbnailUrl: img.thumbnail_url,
-            caption:      img.caption,
-            altText:      img.alt_text,
-            isPrimary:    toBoolean(img.is_primary),
-            sortOrder:    img.sort_order,
-          }));
-        })
-      );
+        );
+        dest.gallery = r.rows.map((img) => ({
+          id:           img.id,
+          imageUrl:     img.image_url,
+          thumbnailUrl: img.thumbnail_url,
+          caption:      img.caption,
+          altText:      img.alt_text,
+          isPrimary:    toBoolean(img.is_primary),
+          sortOrder:    img.sort_order,
+        }));
+      }));
     }
 
-    // ── 2. Itinerary ───────────────────────────────────────────
+    // ── 2. Itinerary ──────────────────────────────────────────
     if (all || includes.includes("itinerary")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("itinerary", async () => {
+        const r = await query(
           `SELECT * FROM destination_itineraries
            WHERE destination_id = $1 AND is_active = true
            ORDER BY day_number ASC`,
           [destId]
-        ).then((r) => {
-          dest.itinerary = r.rows.map((it) => ({
-            id:            it.id,
-            dayNumber:     it.day_number,
-            title:         it.title,
-            description:   it.description,
-            activities:    it.activities    || [],
-            highlights:    it.highlights    || [],
-            meals:         it.meals         || [],
-            accommodation: it.accommodation,
-            distanceKm:    toNumber(it.distance_km),
-            imageUrl:      it.image_url,
-          }));
-        })
-      );
+        );
+        dest.itinerary = r.rows.map((it) => ({
+          id:            it.id,
+          dayNumber:     it.day_number,
+          title:         it.title,
+          description:   it.description,
+          activities:    it.activities || [],
+          highlights:    it.highlights || [],
+          meals:         it.meals      || [],
+          accommodation: it.accommodation,
+          distanceKm:    toNumber(it.distance_km),
+          imageUrl:      it.image_url,
+        }));
+      }));
     }
 
-    // ── 3. FAQs ────────────────────────────────────────────────
+    // ── 3. FAQs ───────────────────────────────────────────────
     if (all || includes.includes("faqs")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("faqs", async () => {
+        const r = await query(
           `SELECT * FROM destination_faqs
            WHERE destination_id = $1 AND is_active = true
            ORDER BY sort_order ASC`,
           [destId]
-        ).then((r) => {
-          dest.faqs = r.rows.map((f) => ({
-            id:           f.id,
-            question:     f.question,
-            answer:       f.answer,
-            category:     f.category,
-            helpfulCount: toNumber(f.helpful_count, 0),
-          }));
-        })
-      );
+        );
+        dest.faqs = r.rows.map((f) => ({
+          id:           f.id,
+          question:     f.question,
+          answer:       f.answer,
+          category:     f.category,
+          helpfulCount: toNumber(f.helpful_count, 0),
+        }));
+      }));
     }
 
-    // ── 4. Traveler Reviews ────────────────────────────────────
+    // ── 4. Reviews + Aggregate ────────────────────────────────
     if (all || includes.includes("reviews")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("reviews", async () => {
+        const r = await query(
           `SELECT * FROM destination_reviews
            WHERE destination_id = $1 AND status = 'approved'
            ORDER BY is_featured DESC, created_at DESC
            LIMIT 10`,
           [destId]
-        ).then((r) => {
-          dest.reviews = r.rows.map(serializeReview);
-        })
-      );
-    }
+        );
+        dest.reviews = r.rows.map(serializeReview);
 
-    // ── 5. Tags ────────────────────────────────────────────────
-    if (all || includes.includes("tags")) {
-      tasks.push(
-        query(
-          `SELECT * FROM destination_tags
-           WHERE destination_id = $1
-           ORDER BY tag_name ASC`,
+        const agg = await query(
+          `SELECT
+             AVG(overall_rating)                                   AS avg_rating,
+             COUNT(*)                                              AS total_reviews,
+             COUNT(*) FILTER (WHERE overall_rating >= 4.5)        AS five_star,
+             COUNT(*) FILTER (WHERE overall_rating >= 3.5
+                                AND overall_rating  < 4.5)        AS four_star,
+             COUNT(*) FILTER (WHERE overall_rating >= 2.5
+                                AND overall_rating  < 3.5)        AS three_star,
+             COUNT(*) FILTER (WHERE overall_rating >= 1.5
+                                AND overall_rating  < 2.5)        AS two_star,
+             COUNT(*) FILTER (WHERE overall_rating  < 1.5)        AS one_star
+           FROM destination_reviews
+           WHERE destination_id = $1 AND status = 'approved'`,
           [destId]
-        ).then((r) => {
-          dest.tags = r.rows.map((t) => ({
-            name:     t.tag_name,
-            slug:     t.tag_slug,
-            category: t.tag_category,
-          }));
-        })
-      );
+        );
+        const a = agg.rows[0] || {};
+        dest.aggregate = {
+          avgRating:    toNumber(a.avg_rating, 0),
+          totalReviews: parseInt(a.total_reviews) || 0,
+          distribution: {
+            fiveStar:  parseInt(a.five_star)  || 0,
+            fourStar:  parseInt(a.four_star)  || 0,
+            threeStar: parseInt(a.three_star) || 0,
+            twoStar:   parseInt(a.two_star)   || 0,
+            oneStar:   parseInt(a.one_star)   || 0,
+          },
+        };
+      }));
     }
 
-    // ── 6. Practical Information & Tips (separate table) ───────
+    // ── 5. Tags ───────────────────────────────────────────────
+    if (all || includes.includes("tags")) {
+      tasks.push(safeTask("tags", async () => {
+        const r = await query(
+          `SELECT * FROM destination_tags
+           WHERE destination_id = $1 ORDER BY tag_name ASC`,
+          [destId]
+        );
+        dest.tags = r.rows.map((t) => ({
+          name: t.tag_name, slug: t.tag_slug, category: t.tag_category,
+        }));
+      }));
+    }
+
+    // ── 6. Practical Info ─────────────────────────────────────
     if (all || includes.includes("practical") || includes.includes("practical_info")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("practical_info", async () => {
+        const r = await query(
           `SELECT * FROM destination_practical_info WHERE destination_id = $1`,
           [destId]
-        ).then((r) => {
-          dest.practicalInfo = serializePracticalInfo(r.rows[0] || null);
-        })
-      );
+        );
+        dest.practicalInfo = serializePracticalInfo(r.rows[0] || null);
+      }));
     }
 
-    // ── 7. How to Get There (enriched from practical_info + dest) ──
+    // ── 7. How To Get There ───────────────────────────────────
     if (all || includes.includes("how_to_get_there") || includes.includes("getting_there")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("how_to_get_there", async () => {
+        const r = await query(
           `SELECT
              dpi.nearest_airport,
              dpi.distance_from_airport,
@@ -1461,89 +1277,92 @@ exports.getOne = async (req, res, next) => {
              dpi.road_conditions,
              dpi.transport_options,
              dpi.border_crossings,
-             d.nearest_airport   AS dest_nearest_airport,
-             d.nearest_city      AS dest_nearest_city,
+             d.nearest_airport          AS dest_nearest_airport,
+             d.nearest_city             AS dest_nearest_city,
              d.distance_from_airport_km,
-             d.getting_there     AS dest_getting_there,
-             d.latitude, d.longitude,
+             d.getting_there            AS dest_getting_there,
+             d.latitude,
+             d.longitude,
              d.address,
-             c.capital           AS country_capital,
-             c.name              AS country_name,
+             c.capital                  AS country_capital,
+             c.name                     AS country_name,
              c.calling_code
            FROM destinations d
            INNER JOIN countries c ON d.country_id = c.id
            LEFT JOIN destination_practical_info dpi ON dpi.destination_id = d.id
            WHERE d.id = $1`,
           [destId]
-        ).then((r) => {
-          const row2 = r.rows[0] || {};
-          dest.howToGetThere = {
-            nearestAirport:       row2.nearest_airport       || row2.dest_nearest_airport,
-            nearestCity:          row2.dest_nearest_city,
-            distanceFromAirport:  row2.distance_from_airport || (row2.distance_from_airport_km ? `${row2.distance_from_airport_km} km` : null),
-            driveTimeFromCapital: row2.drive_time_from_capital,
-            countryCapital:       row2.country_capital,
-            roadConditions:       row2.road_conditions,
-            transportOptions:     row2.transport_options || [],
-            borderCrossings:      row2.border_crossings,
-            generalInfo:          row2.dest_getting_there,
-            mapPosition: {
-              lat: toNumber(row2.latitude),
-              lng: toNumber(row2.longitude),
-            },
-            address:      row2.address,
-            countryName:  row2.country_name,
-            callingCode:  row2.calling_code,
-          };
-        })
-      );
+        );
+        const r2 = r.rows[0] || {};
+        dest.howToGetThere = {
+          nearestAirport:       r2.nearest_airport       || r2.dest_nearest_airport || null,
+          nearestCity:          r2.dest_nearest_city      || null,
+          distanceFromAirport:  r2.distance_from_airport  ||
+                                (r2.distance_from_airport_km
+                                  ? `${r2.distance_from_airport_km} km`
+                                  : null),
+          driveTimeFromCapital: r2.drive_time_from_capital || null,
+          countryCapital:       r2.country_capital         || null,
+          roadConditions:       r2.road_conditions         || null,
+          transportOptions:     r2.transport_options       || [],
+          borderCrossings:      r2.border_crossings        || null,
+          generalInfo:          r2.dest_getting_there      || null,
+          mapPosition: {
+            lat: toNumber(r2.latitude),
+            lng: toNumber(r2.longitude),
+          },
+          address:     r2.address      || null,
+          countryName: r2.country_name || null,
+          callingCode: r2.calling_code || null,
+        };
+      }));
     }
 
-    // ── 8. Linked Tips (via destination_tips join table) ───────
+    // ── 8. Linked Tips ────────────────────────────────────────
     if (all || includes.includes("tips")) {
-      tasks.push(
-        query(
-          `SELECT dt_link.id, dt_link.tip_id, dt_link.sort_order, dt_link.is_featured,
-                  t.slug, t.summary, t.body, t.category, t.trip_phase,
-                  t.icon, t.image_url, t.tags, t.checklist, t.is_active
+      tasks.push(safeTask("tips", async () => {
+        const r = await query(
+          `SELECT
+             dt_link.id, dt_link.tip_id, dt_link.sort_order, dt_link.is_featured,
+             t.slug, t.summary, t.body, t.category, t.trip_phase,
+             t.icon, t.image_url, t.tags, t.checklist, t.is_active
            FROM destination_tips dt_link
            INNER JOIN tips t ON t.id = dt_link.tip_id AND t.is_active = true
            WHERE dt_link.destination_id = $1
-           ORDER BY dt_link.is_featured DESC, dt_link.sort_order ASC, t.priority_level ASC`,
+           ORDER BY dt_link.is_featured DESC, dt_link.sort_order ASC`,
           [destId]
-        ).then((r) => {
-          dest.tips = r.rows.map(serializeTipLink);
-        })
-      );
+        );
+        dest.tips = r.rows.map(serializeTipLink);
+      }));
     }
 
-    // ── 9. Related Destinations (same country or category) ─────
+    // ── 9. Related Destinations ───────────────────────────────
     if (all || includes.includes("related")) {
-      tasks.push(
-        query(
+      tasks.push(safeTask("related", async () => {
+        const r = await query(
           `${BASE_SELECT}
            WHERE d.id != $1 AND d.is_active = true AND d.status = 'published'
              AND (d.country_id = $2 OR d.category = $3)
            ORDER BY
              CASE WHEN d.country_id = $2 AND d.category = $3 THEN 0
-                  WHEN d.category = $3                        THEN 1
+                  WHEN d.category   = $3                      THEN 1
                   WHEN d.country_id = $2                      THEN 2
                   ELSE 3 END,
              d.rating DESC NULLS LAST
            LIMIT 6`,
           [destId, row.country_id, row.category]
-        ).then((r) => {
-          dest.related = r.rows.map((rr) => serialize(rr));
-        })
-      );
+        );
+        dest.related = r.rows.map((rr) => serialize(rr));
+      }));
     }
 
+    // ── Run all tasks in parallel ─────────────────────────────
     await Promise.all(tasks);
 
-    // Fallback gallery from images array
+    // Fallback gallery from images array when no DB gallery rows
     if (!dest.gallery?.length && dest.images?.length) {
       dest.gallery = dest.images.map((url, i) => ({
-        id:        `fallback-${i}`,
+        id:        `img-${i}`,
         imageUrl:  url,
         isPrimary: i === 0,
       }));
@@ -1565,10 +1384,9 @@ exports.getRelated = async (req, res, next) => {
     const val   = isNum ? parseInt(idOrSlug) : idOrSlug.toLowerCase();
 
     const source = await query(
-      `SELECT id, country_id, category FROM destinations WHERE ${col} = $1`,
-      [val]
+      `SELECT id, country_id, category FROM destinations WHERE ${col} = $1`, [val]
     );
-    if (source.rows.length === 0) {
+    if (!source.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
@@ -1579,7 +1397,7 @@ exports.getRelated = async (req, res, next) => {
          AND (d.country_id = $2 OR d.category = $3)
        ORDER BY
          CASE WHEN d.country_id = $2 AND d.category = $3 THEN 0
-              WHEN d.category = $3                        THEN 1
+              WHEN d.category   = $3                      THEN 1
               WHEN d.country_id = $2                      THEN 2
               ELSE 3 END,
          d.rating DESC NULLS LAST
@@ -1602,7 +1420,7 @@ exports.getPracticalInfo = async (req, res, next) => {
     const { id } = req.params;
     const result = await query(
       `SELECT * FROM destination_practical_info WHERE destination_id = $1`, [id]
-    );
+    ).catch(() => ({ rows: [] }));
     res.json({ success: true, data: serializePracticalInfo(result.rows[0] || null) });
   } catch (err) {
     next(err);
@@ -1614,11 +1432,10 @@ exports.upsertPracticalInfo = async (req, res, next) => {
     const { id } = req.params;
     const b = req.body;
 
-    // Verify destination exists
     const dest = await query(
       "SELECT id FROM destinations WHERE id = $1 AND is_active = true", [id]
     );
-    if (dest.rows.length === 0) {
+    if (!dest.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
@@ -1690,25 +1507,25 @@ exports.upsertPracticalInfo = async (req, res, next) => {
       RETURNING *`,
       [
         id,
-        b.nearest_airport        || null,
-        b.distance_from_airport  || null,
-        b.drive_time_from_capital|| null,
-        b.road_conditions        || null,
+        b.nearest_airport         || null,
+        b.distance_from_airport   || null,
+        b.drive_time_from_capital || null,
+        b.road_conditions         || null,
         normalizeArray(b.transport_options),
-        b.border_crossings       || null,
+        b.border_crossings        || null,
         normalizeArray(b.vaccinations_required),
         normalizeArray(b.vaccinations_recommended),
-        b.malaria_risk           || null,
-        b.water_safety           || null,
-        b.medical_facilities     || null,
-        b.emergency_contacts     ? JSON.stringify(b.emergency_contacts) : "{}",
-        b.safety_rating          || null,
-        b.safety_notes           || null,
+        b.malaria_risk            || null,
+        b.water_safety            || null,
+        b.medical_facilities      || null,
+        b.emergency_contacts ? JSON.stringify(b.emergency_contacts) : "{}",
+        b.safety_rating           || null,
+        b.safety_notes            || null,
         normalizeArray(b.permits_required),
-        b.permit_cost            || null,
-        b.booking_lead_time      || null,
-        b.visitor_limits         || null,
-        b.regulations            || null,
+        b.permit_cost             || null,
+        b.booking_lead_time       || null,
+        b.visitor_limits          || null,
+        b.regulations             || null,
         toNumber(b.avg_temp_low_c),
         toNumber(b.avg_temp_high_c),
         toNumber(b.rainfall_mm_annual),
@@ -1716,30 +1533,26 @@ exports.upsertPracticalInfo = async (req, res, next) => {
         toNumber(b.uv_index_peak),
         normalizeArray(b.best_months),
         normalizeArray(b.avoid_months),
-        b.climate_notes          || null,
+        b.climate_notes           || null,
         normalizeArray(b.packing_essentials),
-        b.clothing_tips          || null,
+        b.clothing_tips           || null,
         normalizeArray(b.gear_recommendations),
-        b.budget_range_usd       || null,
-        b.entrance_fee_usd       || null,
-        b.guide_cost_usd         || null,
-        b.meal_cost_range        || null,
-        b.cell_coverage          || null,
+        b.budget_range_usd        || null,
+        b.entrance_fee_usd        || null,
+        b.guide_cost_usd          || null,
+        b.meal_cost_range         || null,
+        b.cell_coverage           || null,
         toBoolean(b.wifi_available),
-        b.electricity_voltage    || null,
+        b.electricity_voltage     || null,
         normalizeArray(b.plug_types),
-        b.currency_tips          || null,
-        b.tipping_culture        || null,
+        b.currency_tips           || null,
+        b.tipping_culture         || null,
         normalizeArray(b.local_etiquette),
-        b.photography_rules      || null,
+        b.photography_rules       || null,
       ]
     );
 
-    res.json({
-      success: true,
-      message: "Practical info saved",
-      data:    serializePracticalInfo(result.rows[0]),
-    });
+    res.json({ success: true, message: "Practical info saved", data: serializePracticalInfo(result.rows[0]) });
   } catch (err) {
     next(err);
   }
@@ -1753,15 +1566,17 @@ exports.getDestinationTipsLinked = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await query(
-      `SELECT dt_link.id, dt_link.tip_id, dt_link.sort_order, dt_link.is_featured,
-              t.slug, t.summary, t.body, t.category, t.trip_phase,
-              t.icon, t.image_url, t.tags, t.checklist, t.is_active
+      `SELECT
+         dt_link.id, dt_link.tip_id, dt_link.sort_order, dt_link.is_featured,
+         t.slug, t.summary, t.body, t.category, t.trip_phase,
+         t.icon, t.image_url, t.tags, t.checklist, t.is_active
        FROM destination_tips dt_link
        INNER JOIN tips t ON t.id = dt_link.tip_id AND t.is_active = true
        WHERE dt_link.destination_id = $1
        ORDER BY dt_link.is_featured DESC, dt_link.sort_order ASC`,
       [id]
-    );
+    ).catch(() => ({ rows: [] }));
+
     res.json({ success: true, data: result.rows.map(serializeTipLink), count: result.rows.length });
   } catch (err) {
     next(err);
@@ -1770,18 +1585,17 @@ exports.getDestinationTipsLinked = async (req, res, next) => {
 
 exports.linkTip = async (req, res, next) => {
   try {
-    const { id }                    = req.params;
+    const { id }                              = req.params;
     const { tip_id, sort_order = 0, is_featured = false } = req.body;
 
     if (!tip_id) {
       return res.status(400).json({ success: false, error: "tip_id is required" });
     }
 
-    // Verify tip exists
     const tipCheck = await query(
       "SELECT id FROM tips WHERE id = $1 AND is_active = true", [tip_id]
     );
-    if (tipCheck.rows.length === 0) {
+    if (!tipCheck.rows.length) {
       return res.status(404).json({ success: false, error: "Tip not found or inactive" });
     }
 
@@ -1809,7 +1623,7 @@ exports.unlinkTip = async (req, res, next) => {
        WHERE destination_id = $1 AND tip_id = $2 RETURNING id`,
       [id, tipId]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Tip link not found" });
     }
     res.json({ success: true, message: "Tip unlinked from destination" });
@@ -1835,9 +1649,9 @@ exports.incrementView = async (req, res, next) => {
 
 exports.incrementWishlist = async (req, res, next) => {
   try {
-    const { id }          = req.params;
+    const { id }             = req.params;
     const { action = "add" } = req.body;
-    const inc             = action === "remove" ? -1 : 1;
+    const inc                = action === "remove" ? -1 : 1;
 
     const result = await query(
       `UPDATE destinations
@@ -1845,7 +1659,7 @@ exports.incrementWishlist = async (req, res, next) => {
        WHERE id = $1 RETURNING wishlist_count`,
       [id, inc]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
     res.json({ success: true, wishlistCount: parseInt(result.rows[0].wishlist_count) });
@@ -1857,8 +1671,9 @@ exports.incrementWishlist = async (req, res, next) => {
 exports.incrementShare = async (req, res, next) => {
   try {
     await query(
-      "UPDATE destinations SET share_count = share_count + 1 WHERE id = $1", [req.params.id]
-    );
+      "UPDATE destinations SET share_count = COALESCE(share_count,0) + 1 WHERE id = $1",
+      [req.params.id]
+    ).catch(() => {});
     res.json({ success: true, message: "Share recorded" });
   } catch (err) {
     next(err);
@@ -1871,21 +1686,22 @@ exports.incrementShare = async (req, res, next) => {
 
 exports.getReviews = async (req, res, next) => {
   try {
-    const { id }                          = req.params;
+    const { id }                              = req.params;
     const { page = 1, limit = 10, sort = "-created" } = req.query;
 
     const countRes = await query(
       `SELECT COUNT(*) FROM destination_reviews
        WHERE destination_id = $1 AND status = 'approved'`, [id]
-    );
+    ).catch(() => ({ rows: [{ count: "0" }] }));
+
     const total      = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
     const sortMap = {
-      created:   "created_at ASC",
-      "-created":"created_at DESC",
-      rating:    "overall_rating DESC",
-      helpful:   "helpful_count DESC",
+      "created":  "created_at ASC",
+      "-created": "created_at DESC",
+      "rating":   "overall_rating DESC",
+      "helpful":  "helpful_count DESC",
     };
 
     const result = await query(
@@ -1894,31 +1710,33 @@ exports.getReviews = async (req, res, next) => {
        ORDER BY is_featured DESC, ${sortMap[sort] || sortMap["-created"]}
        LIMIT $2 OFFSET $3`,
       [id, pagination.limit, pagination.offset]
-    );
+    ).catch(() => ({ rows: [] }));
 
-    // Aggregate rating info
     const aggRes = await query(
       `SELECT
-         AVG(overall_rating)  AS avg_rating,
-         COUNT(*)             AS total_reviews,
-         COUNT(*) FILTER (WHERE overall_rating >= 4.5) AS five_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 3.5 AND overall_rating < 4.5) AS four_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 2.5 AND overall_rating < 3.5) AS three_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 1.5 AND overall_rating < 2.5) AS two_star,
-         COUNT(*) FILTER (WHERE overall_rating < 1.5)  AS one_star
+         AVG(overall_rating)                                   AS avg_rating,
+         COUNT(*)                                              AS total_reviews,
+         COUNT(*) FILTER (WHERE overall_rating >= 4.5)        AS five_star,
+         COUNT(*) FILTER (WHERE overall_rating >= 3.5
+                            AND overall_rating  < 4.5)        AS four_star,
+         COUNT(*) FILTER (WHERE overall_rating >= 2.5
+                            AND overall_rating  < 3.5)        AS three_star,
+         COUNT(*) FILTER (WHERE overall_rating >= 1.5
+                            AND overall_rating  < 2.5)        AS two_star,
+         COUNT(*) FILTER (WHERE overall_rating  < 1.5)        AS one_star
        FROM destination_reviews
        WHERE destination_id = $1 AND status = 'approved'`,
       [id]
-    );
+    ).catch(() => ({ rows: [{}] }));
 
     const agg = aggRes.rows[0] || {};
 
     res.json({
-      success:    true,
-      data:       result.rows.map(serializeReview),
+      success: true,
+      data:    result.rows.map(serializeReview),
       pagination,
       aggregate: {
-        avgRating:    toNumber(agg.avg_rating),
+        avgRating:    toNumber(agg.avg_rating, 0),
         totalReviews: parseInt(agg.total_reviews) || 0,
         distribution: {
           fiveStar:  parseInt(agg.five_star)  || 0,
@@ -1937,10 +1755,7 @@ exports.getReviews = async (req, res, next) => {
 exports.addReview = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const {
-      reviewer_name, reviewer_country, title,
-      content, overall_rating, trip_date, trip_type,
-    } = req.body;
+    const { reviewer_name, reviewer_country, title, content, overall_rating, trip_date, trip_type } = req.body;
 
     if (!content || !overall_rating) {
       return res.status(400).json({ success: false, error: "Content and rating are required" });
@@ -1954,7 +1769,7 @@ exports.addReview = async (req, res, next) => {
     const dest = await query(
       "SELECT id FROM destinations WHERE id = $1 AND is_active = true", [id]
     );
-    if (dest.rows.length === 0) {
+    if (!dest.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
@@ -1970,14 +1785,14 @@ exports.addReview = async (req, res, next) => {
        RETURNING *`,
       [
         id,
-        req.user?.id || null,
-        reviewer_name || "Anonymous",
-        reviewer_country || null,
-        title || null,
+        req.user?.id      || null,
+        reviewer_name     || "Anonymous",
+        reviewer_country  || null,
+        title             || null,
         content,
         rating,
-        trip_date || null,
-        trip_type || null,
+        trip_date         || null,
+        trip_type         || null,
         images,
       ]
     );
@@ -2001,7 +1816,7 @@ exports.markReviewHelpful = async (req, res, next) => {
        WHERE id = $1 RETURNING helpful_count`,
       [reviewId]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Review not found" });
     }
     res.json({ success: true, helpfulCount: parseInt(result.rows[0].helpful_count) });
@@ -2011,7 +1826,7 @@ exports.markReviewHelpful = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   IMAGES MANAGEMENT
+   IMAGES
    ═══════════════════════════════════════════════════════════════ */
 
 exports.getImages = async (req, res, next) => {
@@ -2022,7 +1837,8 @@ exports.getImages = async (req, res, next) => {
        WHERE destination_id = $1 AND is_active = true
        ORDER BY is_primary DESC, sort_order ASC`,
       [id]
-    );
+    ).catch(() => ({ rows: [] }));
+
     res.json({
       success: true,
       data: result.rows.map((r) => ({
@@ -2044,13 +1860,10 @@ exports.addImages = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const dest = await query(
-      "SELECT id FROM destinations WHERE id = $1", [id]
-    );
-    if (dest.rows.length === 0) {
+    const dest = await query("SELECT id FROM destinations WHERE id = $1", [id]);
+    if (!dest.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
-
     if (!req.files?.length && !req.body.image_urls) {
       return res.status(400).json({ success: false, error: "No images provided" });
     }
@@ -2058,11 +1871,11 @@ exports.addImages = async (req, res, next) => {
     const maxOrder = await query(
       `SELECT COALESCE(MAX(sort_order), 0) AS max
        FROM destination_images WHERE destination_id = $1`, [id]
-    );
-    let order = maxOrder.rows[0].max;
+    ).catch(() => ({ rows: [{ max: 0 }] }));
 
-    const images = [];
-    const urls   = [];
+    let order     = maxOrder.rows[0].max;
+    const images  = [];
+    const urls    = [];
 
     if (req.files?.length) {
       for (const file of req.files) {
@@ -2093,7 +1906,6 @@ exports.addImages = async (req, res, next) => {
       }
     }
 
-    // Sync destination.image_urls array
     await query(
       `UPDATE destinations
        SET image_urls = COALESCE(image_urls, '{}'::TEXT[]) || $2::TEXT[],
@@ -2103,11 +1915,7 @@ exports.addImages = async (req, res, next) => {
       [id, urls, urls[0]]
     );
 
-    res.status(201).json({
-      success: true,
-      message: `${images.length} image(s) added`,
-      data:    images,
-    });
+    res.status(201).json({ success: true, message: `${images.length} image(s) added`, data: images });
   } catch (err) {
     next(err);
   }
@@ -2115,8 +1923,8 @@ exports.addImages = async (req, res, next) => {
 
 exports.updateImage = async (req, res, next) => {
   try {
-    const { id, imageId }                              = req.params;
-    const { caption, alt_text, is_primary, sort_order } = req.body;
+    const { id, imageId }                                    = req.params;
+    const { caption, alt_text, is_primary, sort_order }     = req.body;
 
     if (toBoolean(is_primary)) {
       await query(
@@ -2145,7 +1953,7 @@ exports.updateImage = async (req, res, next) => {
        RETURNING *`,
       vals
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Image not found" });
     }
 
@@ -2165,12 +1973,13 @@ exports.updateImage = async (req, res, next) => {
 exports.removeImage = async (req, res, next) => {
   try {
     const { id, imageId } = req.params;
+
     const result = await query(
       `DELETE FROM destination_images
        WHERE id = $1 AND destination_id = $2 RETURNING *`,
       [imageId, id]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Image not found" });
     }
 
@@ -2191,7 +2000,7 @@ exports.removeImage = async (req, res, next) => {
            ORDER BY sort_order ASC LIMIT 1
          ) RETURNING image_url`,
         [id]
-      );
+      ).catch(() => ({ rows: [] }));
       await query(
         "UPDATE destinations SET image_url = $2 WHERE id = $1",
         [id, newPrimary.rows[0]?.image_url || null]
@@ -2240,118 +2049,6 @@ exports.reorderImages = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   ITINERARY
-   ═══════════════════════════════════════════════════════════════ */
-
-exports.getItinerary = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await query(
-      `SELECT * FROM destination_itineraries
-       WHERE destination_id = $1 AND is_active = true
-       ORDER BY day_number ASC`,
-      [id]
-    );
-    res.json({
-      success: true,
-      data: result.rows.map((r) => ({
-        id:            r.id,
-        dayNumber:     r.day_number,
-        title:         r.title,
-        description:   r.description,
-        activities:    r.activities    || [],
-        highlights:    r.highlights    || [],
-        meals:         r.meals         || [],
-        accommodation: r.accommodation,
-        distanceKm:    toNumber(r.distance_km),
-        imageUrl:      r.image_url,
-      })),
-    });
-  } catch (err) {
-    next(err);
-  }
-};
-
-exports.addItineraryDay = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const {
-      day_number, title, description, activities, highlights,
-      meals, accommodation, distance_km, image_url,
-    } = req.body;
-
-    if (!day_number || !title) {
-      return res.status(400).json({ success: false, error: "day_number and title are required" });
-    }
-
-    const result = await query(
-      `INSERT INTO destination_itineraries
-       (destination_id, day_number, title, description, activities, highlights,
-        meals, accommodation, distance_km, image_url, sort_order)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$2)
-       RETURNING *`,
-      [
-        id, toNumber(day_number), title, description || null,
-        normalizeArray(activities), normalizeArray(highlights), normalizeArray(meals),
-        accommodation || null, toNumber(distance_km), image_url || null,
-      ]
-    );
-    res.status(201).json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    next(err);
-  }
-};
-
-exports.updateItineraryDay = async (req, res, next) => {
-  try {
-    const { id, dayId } = req.params;
-    const fields = { ...req.body };
-
-    ["activities", "highlights", "meals"].forEach((f) => {
-      if (fields[f]) fields[f] = normalizeArray(fields[f]);
-    });
-
-    const keys = Object.keys(fields);
-    if (!keys.length) {
-      return res.status(400).json({ success: false, error: "No fields to update" });
-    }
-
-    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const vals = [...keys.map((k) => fields[k]), dayId, id];
-
-    const result = await query(
-      `UPDATE destination_itineraries SET ${sets}
-       WHERE id = $${vals.length - 1} AND destination_id = $${vals.length}
-       RETURNING *`,
-      vals
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: "Itinerary day not found" });
-    }
-    res.json({ success: true, data: result.rows[0] });
-  } catch (err) {
-    next(err);
-  }
-};
-
-exports.removeItineraryDay = async (req, res, next) => {
-  try {
-    const { id, dayId } = req.params;
-    const result = await query(
-      `DELETE FROM destination_itineraries
-       WHERE id = $1 AND destination_id = $2 RETURNING id`,
-      [dayId, id]
-    );
-    if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: "Itinerary day not found" });
-    }
-    res.json({ success: true, message: "Itinerary day deleted" });
-  } catch (err) {
-    next(err);
-  }
-};
-
-/* ═══════════════════════════════════════════════════════════════
    FAQs
    ═══════════════════════════════════════════════════════════════ */
 
@@ -2363,7 +2060,8 @@ exports.getFaqs = async (req, res, next) => {
        WHERE destination_id = $1 AND is_active = true
        ORDER BY sort_order ASC`,
       [id]
-    );
+    ).catch(() => ({ rows: [] }));
+
     res.json({
       success: true,
       data: result.rows.map((r) => ({
@@ -2381,7 +2079,7 @@ exports.getFaqs = async (req, res, next) => {
 
 exports.addFaq = async (req, res, next) => {
   try {
-    const { id }                             = req.params;
+    const { id }                               = req.params;
     const { question, answer, category, sort_order } = req.body;
 
     if (!question || !answer) {
@@ -2389,7 +2087,8 @@ exports.addFaq = async (req, res, next) => {
     }
 
     const result = await query(
-      `INSERT INTO destination_faqs (destination_id, question, answer, category, sort_order)
+      `INSERT INTO destination_faqs
+       (destination_id, question, answer, category, sort_order)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
       [id, question, answer, category || null, toNumber(sort_order, 0)]
     );
@@ -2403,8 +2102,7 @@ exports.updateFaq = async (req, res, next) => {
   try {
     const { id, faqId } = req.params;
     const fields = { ...req.body };
-
-    const keys = Object.keys(fields);
+    const keys   = Object.keys(fields);
     if (!keys.length) {
       return res.status(400).json({ success: false, error: "No fields to update" });
     }
@@ -2418,7 +2116,7 @@ exports.updateFaq = async (req, res, next) => {
        RETURNING *`,
       vals
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "FAQ not found" });
     }
     res.json({ success: true, data: result.rows[0] });
@@ -2435,7 +2133,7 @@ exports.removeFaq = async (req, res, next) => {
        WHERE id = $1 AND destination_id = $2 RETURNING id`,
       [faqId, id]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "FAQ not found" });
     }
     res.json({ success: true, message: "FAQ deleted" });
@@ -2455,7 +2153,8 @@ exports.getDestinationTags = async (req, res, next) => {
       `SELECT * FROM destination_tags
        WHERE destination_id = $1 ORDER BY tag_name ASC`,
       [id]
-    );
+    ).catch(() => ({ rows: [] }));
+
     res.json({
       success: true,
       data: result.rows.map((r) => ({
@@ -2469,8 +2168,8 @@ exports.getDestinationTags = async (req, res, next) => {
 
 exports.addDestinationTag = async (req, res, next) => {
   try {
-    const { id }                      = req.params;
-    const { tag_name, tag_category }  = req.body;
+    const { id }                     = req.params;
+    const { tag_name, tag_category } = req.body;
 
     if (!tag_name?.trim()) {
       return res.status(400).json({ success: false, error: "tag_name is required" });
@@ -2485,7 +2184,7 @@ exports.addDestinationTag = async (req, res, next) => {
       [id, tag_name.trim(), tag_slug, tag_category || null]
     );
 
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(409).json({ success: false, error: "Tag already exists" });
     }
     res.status(201).json({ success: true, data: result.rows[0] });
@@ -2502,7 +2201,7 @@ exports.removeDestinationTag = async (req, res, next) => {
        WHERE id = $1 AND destination_id = $2 RETURNING id`,
       [tagId, id]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Tag not found" });
     }
     res.json({ success: true, message: "Tag removed" });
@@ -2539,8 +2238,8 @@ exports.create = async (req, res, next) => {
     if (!imageUrls.length && data.image_url) imageUrls = [data.image_url];
     const mainImg = imageUrls[0] || null;
 
-    const status      = data.status || "draft";
-    const publishedAt = status === "published" ? new Date() : null;
+    const status      = data.status    || "draft";
+    const publishedAt = status         === "published" ? new Date() : null;
     const featuredAt  = toBoolean(data.is_featured) ? new Date() : null;
 
     const result = await query(
@@ -2567,55 +2266,55 @@ exports.create = async (req, res, next) => {
         country.id,
         data.name.trim(),
         slug,
-        data.tagline || null,
-        data.short_description || null,
-        data.description || null,
-        data.overview || null,
-        data.what_to_expect || null,
+        data.tagline            || null,
+        data.short_description  || null,
+        data.description        || null,
+        data.overview           || null,
+        data.what_to_expect     || null,
         data.best_time_to_visit || country.best_time_to_visit || null,
-        data.getting_there || null,
-        data.local_tips || null,
-        data.safety_info || null,
-        data.category || "safari",
-        data.difficulty || "moderate",
-        data.destination_type || null,
+        data.getting_there      || null,
+        data.local_tips         || null,
+        data.safety_info        || null,
+        data.category           || "safari",
+        data.difficulty         || "moderate",
+        data.destination_type   || null,
         toNumber(data.latitude),
         toNumber(data.longitude),
         toNumber(data.altitude_meters),
-        data.address || null,
-        data.region  || country.region || null,
-        data.nearest_city  || country.capital || null,
-        data.nearest_airport || null,
+        data.address            || null,
+        data.region             || country.region  || null,
+        data.nearest_city       || country.capital || null,
+        data.nearest_airport    || null,
         toNumber(data.distance_from_airport_km),
         mainImg,
         imageUrls,
-        data.hero_image    || mainImg,
-        data.thumbnail_url || mainImg,
-        data.video_url     || null,
-        data.virtual_tour_url || null,
+        data.hero_image         || mainImg,
+        data.thumbnail_url      || mainImg,
+        data.video_url          || null,
+        data.virtual_tour_url   || null,
         toNumber(data.duration_days),
         toNumber(data.duration_nights),
         formatDuration(toNumber(data.duration_days), toNumber(data.duration_nights)),
         toNumber(data.min_group_size, 1),
         toNumber(data.max_group_size),
         toNumber(data.min_age),
-        data.fitness_level || null,
+        data.fitness_level      || null,
         normalizeArray(data.highlights),
         normalizeArray(data.activities),
         normalizeArray(data.wildlife),
-        data.entrance_fee   || null,
-        data.operating_hours || null,
+        data.entrance_fee       || null,
+        data.operating_hours    || null,
         status,
         toBoolean(data.is_featured),
         toBoolean(data.is_popular),
         toBoolean(data.is_new),
         toBoolean(data.is_eco_friendly),
         toBoolean(data.is_family_friendly),
-        data.meta_title       || data.name.trim(),
-        data.meta_description || data.short_description || null,
+        data.meta_title         || data.name.trim(),
+        data.meta_description   || data.short_description || null,
         publishedAt,
         featuredAt,
-        req.user?.id || null,
+        req.user?.id            || null,
       ]
     );
 
@@ -2641,14 +2340,14 @@ exports.update = async (req, res, next) => {
     const data   = req.body;
 
     const existing = await query("SELECT * FROM destinations WHERE id = $1", [id]);
-    if (existing.rows.length === 0) {
+    if (!existing.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
     const current = existing.rows[0];
     const fields  = { ...data };
 
-    // Never expose pricing fields
+    // Never allow pricing through update
     delete fields.price;
     delete fields.prices;
 
@@ -2665,8 +2364,8 @@ exports.update = async (req, res, next) => {
     }
 
     if (req.file) {
-      const url         = getUploadedFileUrl(req.file);
-      fields.image_url  = url;
+      const url          = getUploadedFileUrl(req.file);
+      fields.image_url   = url;
       const existingUrls = normalizeArray(fields.image_urls || current.image_urls);
       fields.image_urls  = [url, ...existingUrls.filter((u) => u !== url)];
     } else if (fields.image_urls) {
@@ -2680,7 +2379,7 @@ exports.update = async (req, res, next) => {
 
     if (fields.duration_days || fields.duration_nights) {
       fields.duration_display = formatDuration(
-        toNumber(fields.duration_days  ?? current.duration_days),
+        toNumber(fields.duration_days   ?? current.duration_days),
         toNumber(fields.duration_nights ?? current.duration_nights)
       );
     }
@@ -2688,6 +2387,7 @@ exports.update = async (req, res, next) => {
     if (fields.status === "published" && current.status !== "published") {
       fields.published_at = new Date();
     }
+
     if (fields.is_featured === true && !current.is_featured) {
       fields.featured_at = new Date();
     } else if (fields.is_featured === false) {
@@ -2735,7 +2435,7 @@ exports.remove = async (req, res, next) => {
     const existing = await query(
       "SELECT id, name, slug, country_id FROM destinations WHERE id = $1", [id]
     );
-    if (existing.rows.length === 0) {
+    if (!existing.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
 
@@ -2772,15 +2472,11 @@ exports.restore = async (req, res, next) => {
        WHERE id = $1 RETURNING *`,
       [id]
     );
-    if (result.rows.length === 0) {
+    if (!result.rows.length) {
       return res.status(404).json({ success: false, error: "Destination not found" });
     }
     await syncCountryDestinationCount(result.rows[0].country_id);
-    res.json({
-      success: true,
-      message: "Destination restored",
-      data:    serialize(result.rows[0]),
-    });
+    res.json({ success: true, message: "Destination restored", data: serialize(result.rows[0]) });
   } catch (err) {
     next(err);
   }
@@ -2798,8 +2494,8 @@ exports.bulkUpdate = async (req, res, next) => {
     }
 
     const allowed = [
-      "status","is_active","is_featured","is_popular","is_new",
-      "is_eco_friendly","is_family_friendly","category","difficulty",
+      "status", "is_active", "is_featured", "is_popular", "is_new",
+      "is_eco_friendly", "is_family_friendly", "category", "difficulty",
     ];
     const fields = {};
     allowed.forEach((f) => {
@@ -2810,9 +2506,9 @@ exports.bulkUpdate = async (req, res, next) => {
       return res.status(400).json({ success: false, error: "No valid fields" });
     }
 
-    if (fields.is_featured === true)    fields.featured_at  = new Date();
-    if (fields.is_featured === false)   fields.featured_at  = null;
-    if (fields.status === "published")  fields.published_at = new Date();
+    if (fields.is_featured === true)   fields.featured_at  = new Date();
+    if (fields.is_featured === false)  fields.featured_at  = null;
+    if (fields.status === "published") fields.published_at = new Date();
     fields.updated_at = new Date();
 
     const keys         = Object.keys(fields);
