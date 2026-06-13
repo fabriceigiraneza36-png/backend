@@ -367,6 +367,8 @@ const serialize = (row, options = {}) => {
     safetyInfo: row.safety_info,
 
     category: row.category,
+    classification: row.category || row.destination_type || "Adventure",
+    adventureCategory: row.category || row.destination_type || "Adventure",
     difficulty: row.difficulty,
     destinationType: row.destination_type,
 
