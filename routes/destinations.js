@@ -21,6 +21,16 @@ router.get("/new", ctrl.getNew);
 router.get("/search", ctrl.search);
 router.get("/suggestions", ctrl.getSuggestions);
 
+// Practical Info (read public, write admin)
+router.get("/:id/practical-info",  ctrl.getPracticalInfo);
+router.put("/:id/practical-info",  protect, adminOnly, ctrl.upsertPracticalInfo);
+router.post("/:id/practical-info", protect, adminOnly, ctrl.upsertPracticalInfo);
+
+// Tips linking (admin only — reads are included in getOne?include=tips)
+router.get("/:id/tips",            ctrl.getDestinationTipsLinked);
+router.post("/:id/tips",           protect, adminOnly, ctrl.linkTip);
+router.delete("/:id/tips/:tipId",  protect, adminOnly, ctrl.unlinkTip);
+
 // Metadata
 router.get("/categories", ctrl.getCategories);
 router.get("/difficulties", ctrl.getDifficulties);

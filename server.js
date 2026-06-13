@@ -19,16 +19,16 @@ require("dotenv").config({
   path: require("path").resolve(process.cwd(), ".env"),
 });
 
-const path        = require("path");
-const http        = require("http");
-const express     = require("express");
-const cors        = require("cors");
-const helmet      = require("helmet");
-const morgan      = require("morgan");
+const path = require("path");
+const http = require("http");
+const express = require("express");
+const cors = require("cors");
+const helmet = require("helmet");
+const morgan = require("morgan");
 const compression = require("compression");
-const jwt         = require("jsonwebtoken");
+const jwt = require("jsonwebtoken");
 const { v4: uuidv4 } = require("uuid");
-const { Server }  = require("socket.io");
+const { Server } = require("socket.io");
 
 const {
   query,
@@ -41,8 +41,8 @@ const {
   ensureBookingsSchema,
 } = require("./config/db");
 
-const logger    = require("./utils/logger");
-const shutdown  = require("./utils/shutdown");
+const logger = require("./utils/logger");
+const shutdown = require("./utils/shutdown");
 const socketBus = require("./utils/socketBus");
 
 const { verifyEmailConnection } = require("./utils/emailService");
@@ -50,45 +50,45 @@ const { verifyTransporter: verifyAuthEmail } = require("./utils/email");
 
 // ── Middleware ─────────────────────────────────────────────────────────────────
 const { errorHandler, notFoundHandler } = require("./middleware/errorHandler");
-const { cacheMiddleware }               = require("./middleware/cache");
+const { cacheMiddleware } = require("./middleware/cache");
 
 // ── Routes ─────────────────────────────────────────────────────────────────────
-const usersRouter               = require("./routes/users");
-const reviewsRouter             = require("./routes/reviews");
-const bookingsRouter            = require("./routes/bookings");
-const countriesRouter           = require("./routes/countries");
-const destinationsRouter        = require("./routes/destinations");
-const postsRouter               = require("./routes/posts");
-const contactRouter             = require("./routes/contact");
-const galleryRouter             = require("./routes/gallery");
-const teamRouter                = require("./routes/team");
-const faqsRouter                = require("./routes/faqs");
-const servicesRouter            = require("./routes/services");
-const tipsRouter                = require("./routes/tips");
-const virtualToursRouter        = require("./routes/virtualTours");
-const subscribersRouter         = require("./routes/subscribers");
-const settingsRouter            = require("./routes/settings");
-const messageRouter             = require("./routes/message");
-const pagesRouter               = require("./routes/pages");
-const chatRouter                = require("./routes/chat");
-const uploadsRouter             = require("./routes/uploads");
-const mediaUploadsRouter        = require("./routes/mediaUploads");
-const adminAuthRouter           = require("./routes/adminAuth");
-const testimonialsRouter        = require("./routes/testimonials");
-const countryLikesRouter        = require("./routes/countryLikes");
-const countryCommentsRouter     = require("./routes/countryComments");
-const countryRatingsRouter      = require("./routes/countryRatings");
-const destinationLikesRouter    = require("./routes/destinationLikes");
+const usersRouter = require("./routes/users");
+const reviewsRouter = require("./routes/reviews");
+const bookingsRouter = require("./routes/bookings");
+const countriesRouter = require("./routes/countries");
+const destinationsRouter = require("./routes/destinations");
+const postsRouter = require("./routes/posts");
+const contactRouter = require("./routes/contact");
+const galleryRouter = require("./routes/gallery");
+const teamRouter = require("./routes/team");
+const faqsRouter = require("./routes/faqs");
+const servicesRouter = require("./routes/services");
+const tipsRouter = require("./routes/tips");
+const virtualToursRouter = require("./routes/virtualTours");
+const subscribersRouter = require("./routes/subscribers");
+const settingsRouter = require("./routes/settings");
+const messageRouter = require("./routes/message");
+const pagesRouter = require("./routes/pages");
+const chatRouter = require("./routes/chat");
+const uploadsRouter = require("./routes/uploads");
+const mediaUploadsRouter = require("./routes/mediaUploads");
+const adminAuthRouter = require("./routes/adminAuth");
+const testimonialsRouter = require("./routes/testimonials");
+const countryLikesRouter = require("./routes/countryLikes");
+const countryCommentsRouter = require("./routes/countryComments");
+const countryRatingsRouter = require("./routes/countryRatings");
+const destinationLikesRouter = require("./routes/destinationLikes");
 const destinationCommentsRouter = require("./routes/destinationComments");
-const destinationRatingsRouter  = require("./routes/destinationRatings");
+const destinationRatingsRouter = require("./routes/destinationRatings");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const PORT     = parseInt(process.env.PORT || "3000", 10);
+const PORT = parseInt(process.env.PORT || "3000", 10);
 const NODE_ENV = process.env.NODE_ENV || "development";
-const IS_PROD  = NODE_ENV === "production";
+const IS_PROD = NODE_ENV === "production";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALLOWED ORIGINS
@@ -135,10 +135,10 @@ app.set("trust proxy", 1);
 // Disable CSP & COEP — they conflict with Google GSI + OAuth popup
 app.use(
   helmet({
-    contentSecurityPolicy:    false,
+    contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false,
     // Disable helmet's COOP — we set it manually below
-    crossOriginOpenerPolicy:  false,
+    crossOriginOpenerPolicy: false,
     crossOriginResourcePolicy: { policy: "cross-origin" },
   }),
 );
@@ -154,7 +154,7 @@ app.use(
 //      "Cross-Origin-Opener-Policy policy would block the window.closed call"
 //
 app.use((_req, res, next) => {
-  res.setHeader("Cross-Origin-Opener-Policy",   "same-origin-allow-popups");
+  res.setHeader("Cross-Origin-Opener-Policy", "same-origin-allow-popups");
   res.setHeader("Cross-Origin-Embedder-Policy", "unsafe-none");
   res.setHeader("Cross-Origin-Resource-Policy", "cross-origin");
   // Allow Google FedCM / identity API
@@ -172,7 +172,7 @@ const corsOptions = {
     return callback(null, false);
   },
   credentials: true,
-  methods:     ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"],
   allowedHeaders: [
     "Content-Type",
     "Authorization",
@@ -182,9 +182,9 @@ const corsOptions = {
     "X-CSRF-Token",
     "Cache-Control",
   ],
-  exposedHeaders:      ["X-Total-Count", "X-Page", "X-Per-Page"],
+  exposedHeaders: ["X-Total-Count", "X-Page", "X-Per-Page"],
   optionsSuccessStatus: 200,
-  maxAge:               86400,
+  maxAge: 86400,
 };
 
 app.use(cors(corsOptions));
@@ -193,7 +193,7 @@ app.use(cors(corsOptions));
 app.options("*", (req, res) => {
   const origin = req.headers.origin;
   if (isOriginAllowed(origin)) {
-    res.setHeader("Access-Control-Allow-Origin",      origin || "*");
+    res.setHeader("Access-Control-Allow-Origin", origin || "*");
     res.setHeader("Access-Control-Allow-Credentials", "true");
   }
   res.setHeader(
@@ -219,7 +219,7 @@ if (IS_PROD) {
   app.use(
     morgan("combined", {
       stream: { write: (msg) => logger.http(msg.trim()) },
-      skip:   (req) => req.url === "/health" || req.url === "/api/health",
+      skip: (req) => req.url === "/health" || req.url === "/api/health",
     }),
   );
 } else {
@@ -238,15 +238,15 @@ app.use((req, _res, next) => {
 
 app.get("/health", (_req, res) =>
   res.json({
-    success:     true,
-    status:      "healthy",
-    service:     "Altuvera Travel API",
-    version:     "6.2",
+    success: true,
+    status: "healthy",
+    service: "Altuvera Travel API",
+    version: "6.2",
     environment: NODE_ENV,
-    uptime:      Math.floor(process.uptime()),
-    timestamp:   new Date().toISOString(),
+    uptime: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
     memory: {
-      used:  `${Math.round(process.memoryUsage().heapUsed  / 1024 / 1024)}MB`,
+      used: `${Math.round(process.memoryUsage().heapUsed / 1024 / 1024)}MB`,
       total: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB`,
     },
     network: { dnsOrder: "ipv4first" },
@@ -259,21 +259,21 @@ app.get("/health", (_req, res) =>
 
 app.get("/api/health", (_req, res) =>
   res.json({
-    success:   true,
-    status:    "healthy",
+    success: true,
+    status: "healthy",
     timestamp: new Date().toISOString(),
   }),
 );
 
 app.get("/api", (_req, res) =>
   res.json({
-    success:  true,
-    name:     "Altuvera Travel API",
-    version:  "6.2",
-    tagline:  "True Adventures In High Places & Deep Culture",
-    docs:     "/api/docs",
-    health:   "/health",
-    routes:   "/api/routes",
+    success: true,
+    name: "Altuvera Travel API",
+    version: "6.2",
+    tagline: "True Adventures In High Places & Deep Culture",
+    docs: "/api/docs",
+    health: "/health",
+    routes: "/api/routes",
   }),
 );
 
@@ -295,29 +295,31 @@ app.get("/api/debug/email-test", async (req, res) => {
                <p>Your email configuration is correctly set up.</p>
                <p><strong>Sent at:</strong> ${new Date().toISOString()}</p>
                <p><strong>Provider:</strong> ${
-                 process.env.SENDGRID_API_KEY ? "SendGrid (HTTPS)" : "SMTP (IPv4)"
+                 process.env.SENDGRID_API_KEY
+                   ? "SendGrid (HTTPS)"
+                   : "SMTP (IPv4)"
                }</p>
                <p><strong>From:</strong> ${process.env.SMTP_FROM || process.env.SMTP_USER}</p>
              </div>`,
     });
 
     res.json({
-      success:    true,
-      delivered:  result.delivered,
-      messageId:  result.messageId || null,
-      sentTo:     to,
-      provider:   process.env.SENDGRID_API_KEY ? "sendgrid" : "smtp",
-      smtpHost:   process.env.SMTP_HOST,
-      smtpUser:   process.env.SMTP_USER ? "configured" : "not set",
+      success: true,
+      delivered: result.delivered,
+      messageId: result.messageId || null,
+      sentTo: to,
+      provider: process.env.SENDGRID_API_KEY ? "sendgrid" : "smtp",
+      smtpHost: process.env.SMTP_HOST,
+      smtpUser: process.env.SMTP_USER ? "configured" : "not set",
     });
   } catch (err) {
     logger.error("[Debug] Email test failed:", err);
     res.status(500).json({
-      success:   false,
+      success: false,
       delivered: false,
-      error:     err.message,
-      sentTo:    to,
-      provider:  process.env.SENDGRID_API_KEY ? "sendgrid" : "smtp",
+      error: err.message,
+      sentTo: to,
+      provider: process.env.SENDGRID_API_KEY ? "sendgrid" : "smtp",
       hint:
         err.code === "ECONNECTION" || err.code === "ETIMEDOUT"
           ? "Outbound SMTP blocked — switch to SendGrid or another HTTPS email API"
@@ -365,14 +367,14 @@ app.get("/api/debug/dns", async (_req, res) => {
   res.json({
     smtp_ipv4:
       ipv4.status === "fulfilled"
-        ? { available: true,  addresses: ipv4.value }
+        ? { available: true, addresses: ipv4.value }
         : { available: false, error: ipv4.reason.message },
     smtp_ipv6:
       ipv6.status === "fulfilled"
-        ? { available: true,  addresses: ipv6.value }
+        ? { available: true, addresses: ipv6.value }
         : { available: false, error: ipv6.reason.message },
     node_version: process.version,
-    dns_order:    "ipv4first (forced)",
+    dns_order: "ipv4first (forced)",
   });
 });
 
@@ -382,7 +384,7 @@ app.get("/api/debug/headers", (_req, res) => {
     success: true,
     message: "Check response headers in DevTools Network tab",
     expected: {
-      "Cross-Origin-Opener-Policy":   "same-origin-allow-popups",
+      "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
       "Cross-Origin-Embedder-Policy": "unsafe-none",
     },
     note: "These headers are required for Google OAuth popup to work",
@@ -409,8 +411,10 @@ const collectRoutes = (stack, prefix = "") => {
   const routes = [];
   for (const layer of stack) {
     if (layer.route?.path) {
-      const full    = cleanPath(prefix + layer.route.path) || "/";
-      const methods = Object.keys(layer.route.methods).map((m) => m.toUpperCase());
+      const full = cleanPath(prefix + layer.route.path) || "/";
+      const methods = Object.keys(layer.route.methods).map((m) =>
+        m.toUpperCase(),
+      );
       for (const method of methods) routes.push({ method, path: full });
     } else if (layer.name === "router" && layer.handle?.stack) {
       const nested = cleanPath(layer.regexp?.source || "");
@@ -437,46 +441,46 @@ app.get("/api/routes", (req, res) => {
 app.use("/api/admin/auth", adminAuthRouter);
 
 // Core resources
-app.use("/api/users",        usersRouter);
-app.use("/api/bookings",     bookingsRouter);
-app.use("/api/reviews",      reviewsRouter);
-app.use("/api/countries",    countriesRouter);
+app.use("/api/users", usersRouter);
+app.use("/api/bookings", bookingsRouter);
+app.use("/api/reviews", reviewsRouter);
+app.use("/api/countries", countriesRouter);
 app.use("/api/destinations", destinationsRouter);
-app.use("/api/posts",        postsRouter);
-app.use("/api/contact",      contactRouter);
-app.use("/api/gallery",      galleryRouter);
-app.use("/api/team",         teamRouter);
-app.use("/api/faqs",         faqsRouter);
-app.use("/api/services",     servicesRouter);
-app.use("/api/tips",         tipsRouter);
-app.use("/api/subscribers",  subscribersRouter);
-app.use("/api/settings",     settingsRouter);
-app.use("/api/pages",        pagesRouter);
+app.use("/api/posts", postsRouter);
+app.use("/api/contact", contactRouter);
+app.use("/api/gallery", galleryRouter);
+app.use("/api/team", teamRouter);
+app.use("/api/faqs", faqsRouter);
+app.use("/api/services", servicesRouter);
+app.use("/api/tips", tipsRouter);
+app.use("/api/subscribers", subscribersRouter);
+app.use("/api/settings", settingsRouter);
+app.use("/api/pages", pagesRouter);
 app.use("/api/testimonials", testimonialsRouter);
 
 // Messaging — primary + legacy path
 app.use("/api/messages", messageRouter);
-app.use("/api/message",  messageRouter);
+app.use("/api/message", messageRouter);
 
 // Chat (legacy chat_sessions system)
 app.use("/api/chat", chatRouter);
 
 // Media
 app.use("/api/uploads", uploadsRouter);
-app.use("/api/media",   mediaUploadsRouter);
+app.use("/api/media", mediaUploadsRouter);
 
 // Virtual tours
 app.use("/api/virtual-tours", virtualToursRouter);
 
 // Social — countries
-app.use("/api/country-likes",    countryLikesRouter);
+app.use("/api/country-likes", countryLikesRouter);
 app.use("/api/country-comments", countryCommentsRouter);
-app.use("/api/country-ratings",  countryRatingsRouter);
+app.use("/api/country-ratings", countryRatingsRouter);
 
 // Social — destinations
-app.use("/api/destination-likes",    destinationLikesRouter);
+app.use("/api/destination-likes", destinationLikesRouter);
 app.use("/api/destination-comments", destinationCommentsRouter);
-app.use("/api/destination-ratings",  destinationRatingsRouter);
+app.use("/api/destination-ratings", destinationRatingsRouter);
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HTTP SERVER + SOCKET.IO
@@ -486,13 +490,13 @@ const httpServer = http.createServer(app);
 
 const io = new Server(httpServer, {
   cors: {
-    origin:      (origin, cb) => cb(null, isOriginAllowed(origin)),
-    methods:     ["GET", "POST"],
+    origin: (origin, cb) => cb(null, isOriginAllowed(origin)),
+    methods: ["GET", "POST"],
     credentials: true,
   },
-  pingTimeout:  60000,
+  pingTimeout: 60000,
   pingInterval: 25000,
-  transports:   ["websocket", "polling"],
+  transports: ["websocket", "polling"],
 });
 
 socketBus.setIO(io);
@@ -515,7 +519,13 @@ const verifySocketToken = (token) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const getOrCreateConversation = async ({
-  sessionId, userId, guestName, guestEmail, channel, source, ipAddress,
+  sessionId,
+  userId,
+  guestName,
+  guestEmail,
+  channel,
+  source,
+  ipAddress,
 }) => {
   const sid = String(sessionId || "").trim();
   if (!sid) throw new Error("sessionId required");
@@ -554,20 +564,26 @@ const getOrCreateConversation = async ({
      RETURNING *`,
     [
       sid,
-      userId     || null,
-      guestName  || null,
+      userId || null,
+      guestName || null,
       guestEmail || null,
-      channel    || "live_chat",
-      source     || "website",
-      ipAddress  || null,
+      channel || "live_chat",
+      source || "website",
+      ipAddress || null,
     ],
   );
   return inserted.rows[0];
 };
 
 const saveConversationMessage = async ({
-  conversationId, senderType, senderId, senderName,
-  senderEmail, senderAvatar, body, metadata,
+  conversationId,
+  senderType,
+  senderId,
+  senderName,
+  senderEmail,
+  senderAvatar,
+  body,
+  metadata,
 }) => {
   if (!body?.trim()) throw new Error("Message body required");
 
@@ -580,15 +596,15 @@ const saveConversationMessage = async ({
     [
       conversationId,
       senderType,
-      senderId      || null,
-      senderName    || null,
-      senderEmail   || null,
-      senderAvatar  || null,
+      senderId || null,
+      senderName || null,
+      senderEmail || null,
+      senderAvatar || null,
       body.trim(),
       JSON.stringify(metadata || {}),
     ],
   );
-  const msg    = res.rows[0];
+  const msg = res.rows[0];
   const isUser = senderType !== "admin";
 
   await query(
@@ -629,19 +645,19 @@ const countUnreadAdmin = async (conversationId) => {
 };
 
 const serializeConvMessage = (row) => ({
-  id:             row.id,
+  id: row.id,
   conversationId: row.conversation_id,
-  senderType:     row.sender_type,
-  senderId:       row.sender_id,
-  senderName:     row.sender_name,
-  senderEmail:    row.sender_email,
-  senderAvatar:   row.sender_avatar,
-  body:           row.body,
-  msgType:        row.msg_type || "text",
-  isRead:         row.is_read,
-  replyToId:      row.reply_to_id,
-  metadata:       row.metadata || {},
-  createdAt:      row.created_at,
+  senderType: row.sender_type,
+  senderId: row.sender_id,
+  senderName: row.sender_name,
+  senderEmail: row.sender_email,
+  senderAvatar: row.sender_avatar,
+  body: row.body,
+  msgType: row.msg_type || "text",
+  isRead: row.is_read,
+  replyToId: row.reply_to_id,
+  metadata: row.metadata || {},
+  createdAt: row.created_at,
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -649,7 +665,11 @@ const serializeConvMessage = (row) => ({
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const getOrCreateChatSession = async ({
-  sessionId, userId, email, fullName, source,
+  sessionId,
+  userId,
+  email,
+  fullName,
+  source,
 }) => {
   const sid = String(sessionId || "").trim();
   if (!sid) throw new Error("sessionId is required");
@@ -666,14 +686,25 @@ const getOrCreateChatSession = async ({
        last_active = NOW(),
        updated_at  = NOW()
      RETURNING *`,
-    [sid, userId || null, email || null, fullName || null, source || "frontend"],
+    [
+      sid,
+      userId || null,
+      email || null,
+      fullName || null,
+      source || "frontend",
+    ],
   );
   return rows[0];
 };
 
 const saveChatMessage = async ({
-  sessionId, senderType, senderId, senderName,
-  senderEmail, body, metadata,
+  sessionId,
+  senderType,
+  senderId,
+  senderName,
+  senderEmail,
+  body,
+  metadata,
 }) => {
   const { rows } = await query(
     `INSERT INTO chat_messages
@@ -684,8 +715,8 @@ const saveChatMessage = async ({
     [
       sessionId,
       senderType,
-      senderId    || null,
-      senderName  || null,
+      senderId || null,
+      senderName || null,
       senderEmail || null,
       body,
       JSON.stringify(metadata || {}),
@@ -721,16 +752,16 @@ const countChatUnread = async (sessionId) => {
 };
 
 const serializeChatMsg = (row) => ({
-  id:          row.id,
-  sessionId:   row.session_id,
-  senderType:  row.sender_type,
-  senderId:    row.sender_id,
-  senderName:  row.sender_name,
+  id: row.id,
+  sessionId: row.session_id,
+  senderType: row.sender_type,
+  senderId: row.sender_id,
+  senderName: row.sender_name,
   senderEmail: row.sender_email,
-  body:        row.body,
-  metadata:    row.metadata || {},
-  isRead:      row.is_read,
-  createdAt:   row.created_at,
+  body: row.body,
+  metadata: row.metadata || {},
+  isRead: row.is_read,
+  createdAt: row.created_at,
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -744,10 +775,10 @@ io.use((socket, next) => {
       ?.replace?.(/^Bearer\s+/i, "")
       ?.trim();
 
-  const decoded            = verifySocketToken(token);
-  socket.data.user         = decoded || null;
-  socket.data.isAdmin      = decoded?.type === "admin";
-  socket.data.userId       = decoded?.id   || null;
+  const decoded = verifySocketToken(token);
+  socket.data.user = decoded || null;
+  socket.data.isAdmin = decoded?.type === "admin";
+  socket.data.userId = decoded?.id || null;
 
   if (socket.data.isAdmin) {
     socket.join("admins");
@@ -761,7 +792,9 @@ io.use((socket, next) => {
 setInterval(async () => {
   try {
     await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`);
-  } catch { /* silent */ }
+  } catch {
+    /* silent */
+  }
 }, 15_000);
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -779,40 +812,46 @@ io.on("connection", (socket) => {
 
   socket.on("msg:register", async (payload = {}, cb) => {
     try {
-      const sid   = String(payload.sessionId || `guest-${socket.id}`).trim();
-      const name  = String(payload.name || payload.guestName || socket.data.user?.full_name || "").trim();
-      const email = String(payload.email || payload.guestEmail || socket.data.user?.email || "").trim();
+      const sid = String(payload.sessionId || `guest-${socket.id}`).trim();
+      const name = String(
+        payload.name || payload.guestName || socket.data.user?.full_name || "",
+      ).trim();
+      const email = String(
+        payload.email || payload.guestEmail || socket.data.user?.email || "",
+      ).trim();
 
       const conv = await getOrCreateConversation({
-        sessionId:  sid,
-        userId:     socket.data.userId || null,
-        guestName:  name  || null,
+        sessionId: sid,
+        userId: socket.data.userId || null,
+        guestName: name || null,
         guestEmail: email || null,
-        channel:    payload.channel || "live_chat",
-        source:     socket.data.userId ? "frontend-auth" : "frontend-guest",
-        ipAddress:  socket.handshake.address,
+        channel: payload.channel || "live_chat",
+        source: socket.data.userId ? "frontend-auth" : "frontend-guest",
+        ipAddress: socket.handshake.address,
       });
 
-      socket.data.sessionId      = conv.session_id;
+      socket.data.sessionId = conv.session_id;
       socket.data.conversationId = conv.id;
       socket.join(`session:${conv.session_id}`);
       socket.join(`conv:${conv.id}`);
 
-      const messages    = await fetchConversationMessages(conv.id);
+      const messages = await fetchConversationMessages(conv.id);
       const sessionData = {
         conversationId: conv.id,
-        sessionId:      conv.session_id,
-        userId:         conv.user_id,
-        guestName:      conv.guest_name,
-        guestEmail:     conv.guest_email,
-        status:         conv.status,
-        messages:       messages.map(serializeConvMessage),
+        sessionId: conv.session_id,
+        userId: conv.user_id,
+        guestName: conv.guest_name,
+        guestEmail: conv.guest_email,
+        status: conv.status,
+        messages: messages.map(serializeConvMessage),
       };
 
       socket.emit("msg:session", sessionData);
       if (typeof cb === "function") cb({ success: true, ...sessionData });
 
-      logger.info(`[Socket] msg:register — conv ${conv.id} | session ${conv.session_id}`);
+      logger.info(
+        `[Socket] msg:register — conv ${conv.id} | session ${conv.session_id}`,
+      );
     } catch (err) {
       logger.error("[Socket] msg:register error:", err.message);
       if (typeof cb === "function") cb({ success: false, error: err.message });
@@ -821,56 +860,61 @@ io.on("connection", (socket) => {
 
   socket.on("msg:send", async (payload = {}, cb) => {
     try {
-      if (socket.data.isAdmin) throw new Error("Admins must use msg:admin-send");
+      if (socket.data.isAdmin)
+        throw new Error("Admins must use msg:admin-send");
 
       const body = String(payload.body || payload.message || "").trim();
       if (!body) throw new Error("Message body is required");
 
       let convId = socket.data.conversationId;
-      let sid    = socket.data.sessionId;
+      let sid = socket.data.sessionId;
 
       if (!convId) {
-        sid          = String(payload.sessionId || `guest-${socket.id}`).trim();
-        const name   = String(payload.name  || socket.data.user?.full_name || "").trim();
-        const email  = String(payload.email || socket.data.user?.email     || "").trim();
-        const conv   = await getOrCreateConversation({
-          sessionId:  sid,
-          userId:     socket.data.userId || null,
-          guestName:  name  || null,
+        sid = String(payload.sessionId || `guest-${socket.id}`).trim();
+        const name = String(
+          payload.name || socket.data.user?.full_name || "",
+        ).trim();
+        const email = String(
+          payload.email || socket.data.user?.email || "",
+        ).trim();
+        const conv = await getOrCreateConversation({
+          sessionId: sid,
+          userId: socket.data.userId || null,
+          guestName: name || null,
           guestEmail: email || null,
-          source:     "frontend-guest",
-          ipAddress:  socket.handshake.address,
+          source: "frontend-guest",
+          ipAddress: socket.handshake.address,
         });
         convId = conv.id;
-        sid    = conv.session_id;
+        sid = conv.session_id;
         socket.data.conversationId = convId;
-        socket.data.sessionId      = sid;
+        socket.data.sessionId = sid;
         socket.join(`conv:${convId}`);
         socket.join(`session:${sid}`);
       }
 
       const msg = await saveConversationMessage({
         conversationId: convId,
-        senderType:     "user",
-        senderId:       socket.data.userId,
-        senderName:     payload.name  || socket.data.user?.full_name || "Guest",
-        senderEmail:    payload.email || socket.data.user?.email     || null,
-        senderAvatar:   socket.data.user?.avatar_url || null,
+        senderType: "user",
+        senderId: socket.data.userId,
+        senderName: payload.name || socket.data.user?.full_name || "Guest",
+        senderEmail: payload.email || socket.data.user?.email || null,
+        senderAvatar: socket.data.user?.avatar_url || null,
         body,
-        metadata:       payload.metadata || { source: "socket" },
+        metadata: payload.metadata || { source: "socket" },
       });
 
-      const serialized   = serializeConvMessage(msg);
-      const unreadAdmin  = await countUnreadAdmin(convId);
+      const serialized = serializeConvMessage(msg);
+      const unreadAdmin = await countUnreadAdmin(convId);
 
       io.to(`conv:${convId}`).emit("msg:message", serialized);
       io.to("admins").emit("msg:new-from-user", {
         conversationId: convId,
-        sessionId:      sid,
-        message:        serialized,
-        senderName:     msg.sender_name  || "Guest",
-        senderEmail:    msg.sender_email || "",
-        unreadCount:    unreadAdmin,
+        sessionId: sid,
+        message: serialized,
+        senderName: msg.sender_name || "Guest",
+        senderEmail: msg.sender_email || "",
+        unreadCount: unreadAdmin,
       });
 
       if (typeof cb === "function") cb({ success: true, message: serialized });
@@ -895,15 +939,18 @@ io.on("connection", (socket) => {
           WHERE conversation_id = $1 AND sender_type != 'admin' AND is_read = false`,
         [convId],
       );
-      await query(
-        `UPDATE conversations SET unread_admin = 0 WHERE id = $1`,
-        [convId],
-      );
+      await query(`UPDATE conversations SET unread_admin = 0 WHERE id = $1`, [
+        convId,
+      ]);
 
       const messages = await fetchConversationMessages(convId);
-      io.to(`conv:${convId}`).emit("msg:read", { conversationId: convId, readBy: "admin" });
+      io.to(`conv:${convId}`).emit("msg:read", {
+        conversationId: convId,
+        readBy: "admin",
+      });
 
-      if (typeof cb === "function") cb({ success: true, messages: messages.map(serializeConvMessage) });
+      if (typeof cb === "function")
+        cb({ success: true, messages: messages.map(serializeConvMessage) });
     } catch (err) {
       logger.error("[Socket] msg:admin-join error:", err.message);
       if (typeof cb === "function") cb({ success: false, error: err.message });
@@ -912,26 +959,30 @@ io.on("connection", (socket) => {
 
   socket.on("msg:admin-send", async (payload = {}, cb) => {
     try {
-      if (!socket.data.isAdmin) throw new Error("Admin authentication required");
+      if (!socket.data.isAdmin)
+        throw new Error("Admin authentication required");
 
-      const body   = String(payload.body || "").trim();
+      const body = String(payload.body || "").trim();
       const convId = parseInt(payload.conversationId);
-      if (!body)   throw new Error("Message body required");
+      if (!body) throw new Error("Message body required");
       if (!convId) throw new Error("conversationId required");
 
-      const convRes = await query(`SELECT * FROM conversations WHERE id = $1`, [convId]);
+      const convRes = await query(`SELECT * FROM conversations WHERE id = $1`, [
+        convId,
+      ]);
       if (!convRes.rows[0]) throw new Error("Conversation not found");
       const conv = convRes.rows[0];
 
       const msg = await saveConversationMessage({
         conversationId: convId,
-        senderType:     "admin",
-        senderId:       socket.data.user?.id,
-        senderName:     socket.data.user?.full_name || socket.data.user?.name || "Support",
-        senderEmail:    socket.data.user?.email || null,
-        senderAvatar:   null,
+        senderType: "admin",
+        senderId: socket.data.user?.id,
+        senderName:
+          socket.data.user?.full_name || socket.data.user?.name || "Support",
+        senderEmail: socket.data.user?.email || null,
+        senderAvatar: null,
         body,
-        metadata:       { source: "admin-socket" },
+        metadata: { source: "admin-socket" },
       });
 
       const serialized = serializeConvMessage(msg);
@@ -939,7 +990,12 @@ io.on("connection", (socket) => {
       if (conv.session_id) {
         io.to(`session:${conv.session_id}`).emit("msg:message", serialized);
       }
-      socket.to("admins").emit("msg:admin-sent", { conversationId: convId, message: serialized });
+      socket
+        .to("admins")
+        .emit("msg:admin-sent", {
+          conversationId: convId,
+          message: serialized,
+        });
 
       if (typeof cb === "function") cb({ success: true, message: serialized });
     } catch (err) {
@@ -949,8 +1005,8 @@ io.on("connection", (socket) => {
   });
 
   socket.on("msg:typing", async (payload = {}) => {
-    const convId     = payload.conversationId || socket.data.conversationId;
-    const isTyping   = !!payload.isTyping;
+    const convId = payload.conversationId || socket.data.conversationId;
+    const isTyping = !!payload.isTyping;
     const senderType = socket.data.isAdmin ? "admin" : "user";
     if (!convId) return;
 
@@ -962,16 +1018,21 @@ io.on("connection", (socket) => {
            VALUES ($1,$2,$3,$4,$5, NOW() + INTERVAL '10 seconds')
            ON CONFLICT DO NOTHING`,
           [
-            convId, senderType,
+            convId,
+            senderType,
             socket.data.userId || null,
             payload.senderName || socket.data.user?.full_name || "Guest",
             socket.id,
           ],
         );
       } else {
-        await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [socket.id]);
+        await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [
+          socket.id,
+        ]);
       }
-    } catch { /* non-fatal */ }
+    } catch {
+      /* non-fatal */
+    }
 
     socket.to(`conv:${convId}`).emit("msg:typing", {
       conversationId: parseInt(convId),
@@ -995,8 +1056,14 @@ io.on("connection", (socket) => {
       const params = [];
       let p = 1;
 
-      if (status)   { fields.push(`status   = $${p++}`); params.push(status);   }
-      if (priority) { fields.push(`priority = $${p++}`); params.push(priority); }
+      if (status) {
+        fields.push(`status   = $${p++}`);
+        params.push(status);
+      }
+      if (priority) {
+        fields.push(`priority = $${p++}`);
+        params.push(priority);
+      }
       if (status === "closed") fields.push("closed_at = NOW()");
       fields.push("updated_at = NOW()");
       params.push(conversationId);
@@ -1008,7 +1075,7 @@ io.on("connection", (socket) => {
 
       const updated = {
         conversationId,
-        status:   result.rows[0]?.status,
+        status: result.rows[0]?.status,
         priority: result.rows[0]?.priority,
       };
 
@@ -1038,7 +1105,8 @@ io.on("connection", (socket) => {
           LIMIT 50`,
       );
 
-      if (typeof cb === "function") cb({ success: true, conversations: result.rows });
+      if (typeof cb === "function")
+        cb({ success: true, conversations: result.rows });
     } catch (err) {
       if (typeof cb === "function") cb({ success: false, error: err.message });
     }
@@ -1050,17 +1118,26 @@ io.on("connection", (socket) => {
 
   socket.on("chat:register", async (payload = {}, cb) => {
     try {
-      const reqSid  = String(payload.sessionId || socket.data.sessionId || "").trim();
-      const sid     = reqSid || `guest-${uuidv4()}`;
-      const name    = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name || "").trim();
-      const email   = String(payload.email || socket.data.user?.email    || "").trim();
+      const reqSid = String(
+        payload.sessionId || socket.data.sessionId || "",
+      ).trim();
+      const sid = reqSid || `guest-${uuidv4()}`;
+      const name = String(
+        payload.name ||
+          socket.data.user?.fullName ||
+          socket.data.user?.name ||
+          "",
+      ).trim();
+      const email = String(
+        payload.email || socket.data.user?.email || "",
+      ).trim();
 
       const session = await getOrCreateChatSession({
         sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? "frontend-auth" : "frontend-guest",
+        userId: socket.data.user?.id,
+        email: email || null,
+        fullName: name || null,
+        source: socket.data.user ? "frontend-auth" : "frontend-guest",
       });
 
       socket.data.sessionId = session.session_id;
@@ -1070,18 +1147,19 @@ io.on("connection", (socket) => {
 
       socket.emit("chat:session", {
         sessionId: session.session_id,
-        userId:    session.user_id,
-        email:     session.email,
-        fullName:  session.full_name,
-        source:    session.source,
-        messages:  history.map(serializeChatMsg),
+        userId: session.user_id,
+        email: session.email,
+        fullName: session.full_name,
+        source: session.source,
+        messages: history.map(serializeChatMsg),
       });
 
-      if (typeof cb === "function") cb({
-        success:   true,
-        sessionId: session.session_id,
-        messages:  history.map(serializeChatMsg),
-      });
+      if (typeof cb === "function")
+        cb({
+          success: true,
+          sessionId: session.session_id,
+          messages: history.map(serializeChatMsg),
+        });
     } catch (err) {
       logger.error("[Socket] chat:register error:", err.message);
       if (typeof cb === "function") cb({ success: false, error: err.message });
@@ -1090,47 +1168,55 @@ io.on("connection", (socket) => {
 
   socket.on("chat:message", async (payload = {}, cb) => {
     try {
-      if (socket.data.isAdmin) throw new Error("Admins must use admin:send-message");
+      if (socket.data.isAdmin)
+        throw new Error("Admins must use admin:send-message");
 
-      const sid  = String(payload.sessionId || socket.data.sessionId || "").trim();
+      const sid = String(
+        payload.sessionId || socket.data.sessionId || "",
+      ).trim();
       const body = String(payload.body || "").trim();
-      if (!sid)  throw new Error("sessionId is required");
+      if (!sid) throw new Error("sessionId is required");
       if (!body) throw new Error("Message body is required");
 
-      const name  = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name || "Guest");
-      const email = String(payload.email || socket.data.user?.email    || "");
+      const name = String(
+        payload.name ||
+          socket.data.user?.fullName ||
+          socket.data.user?.name ||
+          "Guest",
+      );
+      const email = String(payload.email || socket.data.user?.email || "");
 
       const session = await getOrCreateChatSession({
         sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? "frontend-auth" : "frontend-guest",
+        userId: socket.data.user?.id,
+        email: email || null,
+        fullName: name || null,
+        source: socket.data.user ? "frontend-auth" : "frontend-guest",
       });
 
       socket.data.sessionId = session.session_id;
       socket.join(`chat:${session.session_id}`);
 
-      const row     = await saveChatMessage({
-        sessionId:   session.session_id,
-        senderType:  "user",
-        senderId:    socket.data.user?.id,
-        senderName:  name,
+      const row = await saveChatMessage({
+        sessionId: session.session_id,
+        senderType: "user",
+        senderId: socket.data.user?.id,
+        senderName: name,
         senderEmail: email,
         body,
-        metadata:    payload.metadata || { source: "frontend-chat" },
+        metadata: payload.metadata || { source: "frontend-chat" },
       });
 
       const message = serializeChatMsg(row);
-      const unread  = await countChatUnread(session.session_id);
+      const unread = await countChatUnread(session.session_id);
 
       io.to(`chat:${session.session_id}`).emit("chat:message", message);
       io.to("admins").emit("new-chat-message", {
-        sessionId:  session.session_id,
-        userId:     session.user_id,
-        email:      session.email,
-        fullName:   session.full_name,
-        body:       message.body,
+        sessionId: session.session_id,
+        userId: session.user_id,
+        email: session.email,
+        fullName: session.full_name,
+        body: message.body,
         senderName: message.senderName,
         unreadCount: unread,
       });
@@ -1144,26 +1230,30 @@ io.on("connection", (socket) => {
 
   socket.on("admin:send-message", async (payload = {}, cb) => {
     try {
-      if (!socket.data.isAdmin) throw new Error("Admin authentication required");
+      if (!socket.data.isAdmin)
+        throw new Error("Admin authentication required");
 
-      const sid  = String(payload.sessionId || "").trim();
-      const body = String(payload.body      || "").trim();
-      if (!sid)  throw new Error("sessionId is required");
+      const sid = String(payload.sessionId || "").trim();
+      const body = String(payload.body || "").trim();
+      if (!sid) throw new Error("sessionId is required");
       if (!body) throw new Error("Message body is required");
 
-      const row     = await saveChatMessage({
-        sessionId:   sid,
-        senderType:  "admin",
-        senderId:    socket.data.user?.id,
-        senderName:  socket.data.user?.full_name || socket.data.user?.name || "Admin",
+      const row = await saveChatMessage({
+        sessionId: sid,
+        senderType: "admin",
+        senderId: socket.data.user?.id,
+        senderName:
+          socket.data.user?.full_name || socket.data.user?.name || "Admin",
         senderEmail: socket.data.user?.email || null,
         body,
-        metadata:    { source: "admin-panel" },
+        metadata: { source: "admin-panel" },
       });
 
       const message = serializeChatMsg(row);
       io.to(`chat:${sid}`).emit("chat:message", message);
-      socket.to("admins").emit("admin:message-sent", { sessionId: sid, message });
+      socket
+        .to("admins")
+        .emit("admin:message-sent", { sessionId: sid, message });
 
       if (typeof cb === "function") cb({ success: true, message });
     } catch (err) {
@@ -1188,7 +1278,8 @@ io.on("connection", (socket) => {
       );
 
       const messages = await fetchSessionMessages(sid);
-      if (typeof cb === "function") cb({ success: true, messages: messages.map(serializeChatMsg) });
+      if (typeof cb === "function")
+        cb({ success: true, messages: messages.map(serializeChatMsg) });
     } catch (err) {
       logger.error("[Socket] admin:join-session error:", err.message);
       if (typeof cb === "function") cb({ success: false, error: err.message });
@@ -1199,9 +1290,9 @@ io.on("connection", (socket) => {
     const sid = String(payload.sessionId || socket.data.sessionId || "").trim();
     if (!sid) return;
     socket.to(`chat:${sid}`).emit("chat:typing", {
-      sessionId:  sid,
+      sessionId: sid,
       senderType: socket.data.isAdmin ? "admin" : "user",
-      isTyping:   !!payload.isTyping,
+      isTyping: !!payload.isTyping,
     });
   });
 
@@ -1209,8 +1300,12 @@ io.on("connection", (socket) => {
   socket.on("disconnect", async (reason) => {
     logger.info(`[Socket] Disconnected: ${socket.id} | reason=${reason}`);
     try {
-      await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [socket.id]);
-    } catch { /* silent */ }
+      await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [
+        socket.id,
+      ]);
+    } catch {
+      /* silent */
+    }
   });
 });
 
@@ -1230,6 +1325,12 @@ async function initializeServer() {
     logger.info("🔄 Connecting to database…");
     await query("SELECT NOW()");
     logger.info("✅ Database connected");
+
+    const {
+      ensureDestinationSchema,
+    } = require("./controllers/destinationsController");
+    await ensureDestinationSchema();
+    logger.info("✅ Destinations schema ready");
 
     await ensureSubscribersSchema();
     logger.info("✅ Subscribers schema ready");
@@ -1317,12 +1418,24 @@ async function initializeServer() {
       `);
 
       // Indexes
-      await query(`CREATE INDEX IF NOT EXISTS idx_conversations_session  ON conversations(session_id)`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_conversations_status   ON conversations(status)`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_conversations_updated  ON conversations(updated_at DESC)`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_messages_conversation  ON messages(conversation_id)`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`);
-      await query(`CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`);
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_conversations_session  ON conversations(session_id)`,
+      );
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_conversations_status   ON conversations(status)`,
+      );
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_conversations_updated  ON conversations(updated_at DESC)`,
+      );
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_messages_conversation  ON messages(conversation_id)`,
+      );
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`,
+      );
+      await query(
+        `CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`,
+      );
 
       logger.info("✅ Messaging schema ready");
     } catch (msgErr) {
@@ -1338,7 +1451,9 @@ async function initializeServer() {
       logger.info(divider);
       logger.info(`  Env        : ${NODE_ENV}`);
       logger.info(`  Port       : ${PORT}`);
-      logger.info(`  Backend    : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`);
+      logger.info(
+        `  Backend    : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`,
+      );
       logger.info(`  Frontend   : ${process.env.FRONTEND_URL || "—"}`);
       logger.info(`  CORS       : ${ALLOWED_ORIGINS.join(", ")}`);
       logger.info(`  DNS        : ipv4first ✅`);
@@ -1361,11 +1476,17 @@ async function initializeServer() {
   }
 
   // Email verification (non-fatal)
-  try { await verifyEmailConnection(); }
-  catch (e) { logger.warn("Email service check failed (non-fatal):", e.message); }
+  try {
+    await verifyEmailConnection();
+  } catch (e) {
+    logger.warn("Email service check failed (non-fatal):", e.message);
+  }
 
-  try { await verifyAuthEmail(); }
-  catch (e) { logger.warn("Auth email SMTP check failed (non-fatal):", e.message); }
+  try {
+    await verifyAuthEmail();
+  } catch (e) {
+    logger.warn("Auth email SMTP check failed (non-fatal):", e.message);
+  }
 }
 
 initializeServer();
