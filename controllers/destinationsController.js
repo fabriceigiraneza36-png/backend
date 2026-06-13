@@ -1412,8 +1412,92 @@ exports.getRelated = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-   PRACTICAL INFO CRUD
-   ═══════════════════════════════════════════════════════════════ */
+    ITINERARY CRUD
+    ═══════════════════════════════════════════════════════════════ */
+
+exports.addItineraryDay = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { day_number, title, description, activities, highlights, meals,
+            accommodation, distance_km, image_url } = req.body;
+
+    if (!day_number || !title) {
+      return res.status(400).json({ success: false, error: "day_number and title are required" });
+    }
+
+    const max = await query(
+      `SELECT COALESCE(MAX(day_number), 0) AS max FROM destination_itineraries WHERE destination_id = $1`,
+      [id]
+    ).catch(() => ({ rows: [{ max: 0 }] }));
+
+    const dayNum = parseInt(day_number) || max.rows[0].max + 1;
+
+    const result = await query(
+      `INSERT INTO destination_itineraries (
+        destination_id, day_number, title, description, activities, highlights, meals,
+        accommodation, distance_km, image_url
+      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [id, dayNum, title, description || null, normalizeArray(activities), normalizeArray(highlights),
+       normalizeArray(meals), accommodation || null, toNumber(distance_km), image_url || null]
+    );
+
+    res.status(201).json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.updateItineraryDay = async (req, res, next) => {
+  try {
+    const { id, dayId } = req.params;
+    const fields = { ...req.body };
+    const keys = Object.keys(fields);
+    if (!keys.length) {
+      return res.status(400).json({ success: false, error: "No fields to update" });
+    }
+
+    ["activities", "highlights", "meals"].forEach((f) => {
+      if (fields[f]) fields[f] = normalizeArray(fields[f]);
+    });
+
+    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const vals = [...keys.map((k) => fields[k]), dayId, id];
+
+    const result = await query(
+      `UPDATE destination_itineraries SET ${sets}
+       WHERE id = $${vals.length - 1} AND destination_id = $${vals.length}
+       RETURNING *`,
+      vals
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, error: "Itinerary day not found" });
+    }
+    res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.removeItineraryDay = async (req, res, next) => {
+  try {
+    const { id, dayId } = req.params;
+    const result = await query(
+      `DELETE FROM destination_itineraries
+       WHERE id = $1 AND destination_id = $2 RETURNING id`,
+      [dayId, id]
+    );
+    if (!result.rows.length) {
+      return res.status(404).json({ success: false, error: "Itinerary day not found" });
+    }
+    res.json({ success: true, message: "Itinerary day deleted" });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/* ═══════════════════════════════════════════════════════════════
+    PRACTICAL INFO CRUD
+    ═══════════════════════════════════════════════════════════════ */
 
 exports.getPracticalInfo = async (req, res, next) => {
   try {
@@ -2477,6 +2561,36 @@ exports.restore = async (req, res, next) => {
     }
     await syncCountryDestinationCount(result.rows[0].country_id);
     res.json({ success: true, message: "Destination restored", data: serialize(result.rows[0]) });
+  } catch (err) {
+    next(err);
+  }
+};
+
+exports.getItinerary = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `SELECT * FROM destination_itineraries
+       WHERE destination_id = $1 AND is_active = true
+       ORDER BY day_number ASC`,
+      [id]
+    ).catch(() => ({ rows: [] }));
+
+    res.json({
+      success: true,
+      data: result.rows.map((it) => ({
+        id:            it.id,
+        dayNumber:     it.day_number,
+        title:         it.title,
+        description:   it.description,
+        activities:    it.activities || [],
+        highlights:    it.highlights || [],
+        meals:         it.meals      || [],
+        accommodation: it.accommodation,
+        distanceKm:    toNumber(it.distance_km),
+        imageUrl:      it.image_url,
+      })),
+    });
   } catch (err) {
     next(err);
   }
