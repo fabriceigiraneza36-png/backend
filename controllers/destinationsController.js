@@ -3,9 +3,11 @@
 // Destinations Controller — Full Production Implementation
 // ✅ All related tables wrapped in safeTask (fault-tolerant)
 // ✅ ensureDestinationSchema() bootstraps all tables on startup
-// ✅ No pricing / payment anywhere
 // ✅ Strong country relationship
+// ✅ Optimized queries with proper error handling
 // ============================================================
+
+"use strict";
 
 const { query } = require("../config/db");
 const { slugify, paginate } = require("../utils/helpers");
@@ -13,25 +15,27 @@ const { getUploadedFileUrl } = require("../utils/uploadHelpers");
 
 /* ═══════════════════════════════════════════════════════════════
    SCHEMA BOOTSTRAP
-   Safe to call on every server start — all IF NOT EXISTS
    ═══════════════════════════════════════════════════════════════ */
 
 exports.ensureDestinationSchema = async () => {
-  const run = (sql) => query(sql).catch((e) =>
-    console.warn("[Schema] Non-fatal:", e.message.slice(0, 120))
-  );
+  const run = (sql) =>
+    query(sql).catch((e) =>
+      console.warn("[Schema] Non-fatal:", e.message.slice(0, 120))
+    );
 
-  // ── Core destination columns (safe additions) ──────────────
-  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at    TIMESTAMP`);
-  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by     INTEGER`);
-  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS share_count    INTEGER DEFAULT 0`);
+  // ── Core destination columns ──────────────────────────────
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at     TIMESTAMP`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by      INTEGER`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS share_count     INTEGER DEFAULT 0`);
   await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_display VARCHAR(100)`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_active       BOOLEAN DEFAULT true`);
+  await run(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS status          VARCHAR(30) DEFAULT 'draft'`);
 
   // ── destination_images ────────────────────────────────────
   await run(`
     CREATE TABLE IF NOT EXISTS destination_images (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL,
+      destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       image_url      TEXT    NOT NULL,
       thumbnail_url  TEXT,
       caption        VARCHAR(500),
@@ -48,7 +52,7 @@ exports.ensureDestinationSchema = async () => {
   await run(`
     CREATE TABLE IF NOT EXISTS destination_itineraries (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL,
+      destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       day_number     INTEGER NOT NULL,
       title          VARCHAR(500) NOT NULL,
       description    TEXT,
@@ -68,7 +72,7 @@ exports.ensureDestinationSchema = async () => {
   await run(`
     CREATE TABLE IF NOT EXISTS destination_faqs (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL,
+      destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       question       TEXT    NOT NULL,
       answer         TEXT    NOT NULL,
       category       VARCHAR(100),
@@ -83,7 +87,7 @@ exports.ensureDestinationSchema = async () => {
   await run(`
     CREATE TABLE IF NOT EXISTS destination_reviews (
       id               SERIAL PRIMARY KEY,
-      destination_id   INTEGER NOT NULL,
+      destination_id   INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       user_id          INTEGER,
       reviewer_name    VARCHAR(255) DEFAULT 'Anonymous',
       reviewer_country VARCHAR(100),
@@ -99,15 +103,21 @@ exports.ensureDestinationSchema = async () => {
       status           VARCHAR(30)  DEFAULT 'pending',
       is_verified      BOOLEAN   DEFAULT false,
       is_featured      BOOLEAN   DEFAULT false,
-      created_at       TIMESTAMP DEFAULT NOW()
+      is_active        BOOLEAN   DEFAULT true,
+      created_at       TIMESTAMP DEFAULT NOW(),
+      updated_at       TIMESTAMP DEFAULT NOW()
     )
   `);
+
+  // Add is_active to destination_reviews if missing (for existing DBs)
+  await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`);
+  await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`);
 
   // ── destination_tags ──────────────────────────────────────
   await run(`
     CREATE TABLE IF NOT EXISTS destination_tags (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL,
+      destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       tag_name       VARCHAR(255) NOT NULL,
       tag_slug       VARCHAR(255) NOT NULL,
       tag_category   VARCHAR(100),
@@ -120,7 +130,7 @@ exports.ensureDestinationSchema = async () => {
   await run(`
     CREATE TABLE IF NOT EXISTS destination_practical_info (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL UNIQUE,
+      destination_id INTEGER NOT NULL UNIQUE REFERENCES destinations(id) ON DELETE CASCADE,
       nearest_airport          TEXT,
       distance_from_airport    TEXT,
       drive_time_from_capital  TEXT,
@@ -171,7 +181,7 @@ exports.ensureDestinationSchema = async () => {
   await run(`
     CREATE TABLE IF NOT EXISTS destination_tips (
       id             SERIAL PRIMARY KEY,
-      destination_id INTEGER NOT NULL,
+      destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       tip_id         INTEGER NOT NULL,
       sort_order     INTEGER DEFAULT 0,
       is_featured    BOOLEAN DEFAULT false,
@@ -185,23 +195,32 @@ exports.ensureDestinationSchema = async () => {
 
   // ── Indexes ───────────────────────────────────────────────
   const indexes = [
-    `CREATE INDEX IF NOT EXISTS idx_dest_slug          ON destinations(slug)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_country_id    ON destinations(country_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_status        ON destinations(status)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_is_active     ON destinations(is_active)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_is_featured   ON destinations(is_featured)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_category      ON destinations(category)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_rating        ON destinations(rating DESC NULLS LAST)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_images_destid ON destination_images(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_itin_destid   ON destination_itineraries(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_faqs_destid   ON destination_faqs(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_rev_destid    ON destination_reviews(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_rev_status    ON destination_reviews(destination_id, status)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_tags_destid   ON destination_tags(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_practical_id  ON destination_practical_info(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_tips_destid   ON destination_tips(destination_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_dest_tips_tipid    ON destination_tips(tip_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_slug           ON destinations(slug)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_country_id     ON destinations(country_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_status         ON destinations(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_is_active      ON destinations(is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_is_featured    ON destinations(is_featured)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_category       ON destinations(category)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_rating         ON destinations(rating DESC NULLS LAST)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_active_status  ON destinations(is_active, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_images_destid  ON destination_images(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_images_active  ON destination_images(destination_id, is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_itin_destid    ON destination_itineraries(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_itin_active    ON destination_itineraries(destination_id, is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_faqs_destid    ON destination_faqs(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_faqs_active    ON destination_faqs(destination_id, is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_rev_destid     ON destination_reviews(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_rev_status     ON destination_reviews(destination_id, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_rev_active     ON destination_reviews(destination_id, is_active, status)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_tags_destid    ON destination_tags(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_practical_id   ON destination_practical_info(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_tips_destid    ON destination_tips(destination_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_tips_tipid     ON destination_tips(tip_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_countries_active    ON countries(is_active)`,
+    `CREATE INDEX IF NOT EXISTS idx_countries_slug      ON countries(slug)`,
+    `CREATE INDEX IF NOT EXISTS idx_countries_featured  ON countries(is_featured) WHERE is_featured = true`,
   ];
+
   for (const idx of indexes) await run(idx);
 
   console.log("[Schema] ✅ Destination schema bootstrap complete");
@@ -231,8 +250,11 @@ const normalizeArray = (value) => {
     const trimmed = value.trim();
     if (!trimmed) return [];
     if (trimmed.startsWith("[")) {
-      try { return JSON.parse(trimmed).filter(Boolean); }
-      catch { return []; }
+      try {
+        return JSON.parse(trimmed).filter(Boolean);
+      } catch {
+        return [];
+      }
     }
     return trimmed.split(",").map((v) => v.trim()).filter(Boolean);
   }
@@ -242,27 +264,38 @@ const normalizeArray = (value) => {
 const parseJson = (value, defaultValue = {}) => {
   if (!value) return defaultValue;
   if (typeof value === "object") return value;
-  try { return JSON.parse(value); }
-  catch { return defaultValue; }
+  try {
+    return JSON.parse(value);
+  } catch {
+    return defaultValue;
+  }
 };
 
 const formatDuration = (days, nights) => {
   if (days && nights) return `${days} Days / ${nights} Nights`;
-  if (days)   return `${days} Day${days > 1 ? "s" : ""}`;
+  if (days) return `${days} Day${days > 1 ? "s" : ""}`;
   if (nights) return `${nights} Night${nights > 1 ? "s" : ""}`;
   return null;
 };
 
-// Wraps a task so one failing table never kills the whole getOne response
+/**
+ * Wraps a task so one failing sub-query never kills the whole getOne response.
+ * Logs the error for debugging but returns undefined gracefully.
+ */
 const safeTask = (label, fn) =>
   fn().catch((err) => {
-    console.warn(`[destinations.getOne] ${label} failed (non-fatal):`, err.message?.slice(0, 100));
+    console.error(
+      `[destinations.getOne] "${label}" failed (non-fatal):`,
+      err.message?.slice(0, 200),
+      err.stack?.split("\n")[1]?.trim()
+    );
+    return undefined;
   });
 
 /* ── Country resolver ─────────────────────────────────────── */
 const resolveCountry = async (idOrSlug) => {
   if (!idOrSlug) return null;
-  const str   = String(idOrSlug).trim();
+  const str = String(idOrSlug).trim();
   const isNum = /^\d+$/.test(str);
   const result = await query(
     `SELECT id, slug, name, flag, flag_url, continent, region, sub_region,
@@ -285,12 +318,14 @@ const syncCountryDestinationCount = async (countryId) => {
      ), updated_at = NOW()
      WHERE id = $1`,
     [countryId]
-  ).catch(() => {});
+  ).catch((err) =>
+    console.warn("[syncCountryDestinationCount] failed:", err.message)
+  );
 };
 
 const createUniqueSlug = async (name, excludeId = null) => {
   const base = slugify(name);
-  let slug    = base;
+  let slug = base;
   let counter = 1;
   while (true) {
     const existing = await query(
@@ -309,220 +344,242 @@ const createUniqueSlug = async (name, excludeId = null) => {
    ═══════════════════════════════════════════════════════════════ */
 
 const serialize = (row, options = {}) => {
-  const images    = normalizeArray(row.image_urls);
+  const images = normalizeArray(row.image_urls);
   const mainImage = images[0] || row.image_url || null;
 
   return {
-    id:   row.id,
+    id: row.id,
     slug: row.slug,
 
-    name:             row.name,
-    tagline:          row.tagline,
+    name: row.name,
+    tagline: row.tagline,
     shortDescription: row.short_description,
-    description:      row.description,
-    overview:         row.overview,
+    description: row.description,
+    overview: row.overview,
 
-    highlights:      row.highlights      || [],
-    activities:      row.activities      || [],
-    wildlife:        row.wildlife        || [],
+    highlights: normalizeArray(row.highlights),
+    activities: normalizeArray(row.activities),
+    wildlife: normalizeArray(row.wildlife),
     bestTimeToVisit: row.best_time_to_visit,
-    gettingThere:    row.getting_there,
-    whatToExpect:    row.what_to_expect,
-    localTips:       row.local_tips,
-    safetyInfo:      row.safety_info,
+    gettingThere: row.getting_there,
+    whatToExpect: row.what_to_expect,
+    localTips: row.local_tips,
+    safetyInfo: row.safety_info,
 
-    category:        row.category,
-    difficulty:      row.difficulty,
+    category: row.category,
+    difficulty: row.difficulty,
     destinationType: row.destination_type,
 
     country: {
-      id:        row.country_id,
-      slug:      row.country_slug,
-      name:      row.country_name,
-      flag:      row.country_flag,
-      flagUrl:   row.country_flag_url,
-      continent: row.country_continent,
-      region:    row.country_region,
+      id: row.country_id,
+      slug: row.country_slug || null,
+      name: row.country_name || null,
+      flag: row.country_flag || null,
+      flagUrl: row.country_flag_url || null,
+      continent: row.country_continent || null,
+      region: row.country_region || null,
     },
-    countryId:   row.country_id,
-    countrySlug: row.country_slug,
-    countryName: row.country_name,
+    countryId: row.country_id,
+    countrySlug: row.country_slug || null,
+    countryName: row.country_name || null,
 
-    region:                  row.region,
-    nearestCity:             row.nearest_city,
-    nearestAirport:          row.nearest_airport,
-    distanceFromAirportKm:   toNumber(row.distance_from_airport_km),
-    address:                 row.address,
+    region: row.region,
+    nearestCity: row.nearest_city,
+    nearestAirport: row.nearest_airport,
+    distanceFromAirportKm: toNumber(row.distance_from_airport_km),
+    address: row.address,
     mapPosition: {
       lat: toNumber(row.latitude),
       lng: toNumber(row.longitude),
     },
-    latitude:       toNumber(row.latitude),
-    longitude:      toNumber(row.longitude),
+    latitude: toNumber(row.latitude),
+    longitude: toNumber(row.longitude),
     altitudeMeters: toNumber(row.altitude_meters),
 
     images,
-    imageUrl:       mainImage,
-    heroImage:      row.hero_image     || mainImage,
-    thumbnailUrl:   row.thumbnail_url  || mainImage,
-    videoUrl:       row.video_url,
+    imageUrl: mainImage,
+    heroImage: row.hero_image || mainImage,
+    thumbnailUrl: row.thumbnail_url || mainImage,
+    coverImageUrl: row.cover_image_url || mainImage,
+    videoUrl: row.video_url,
     virtualTourUrl: row.virtual_tour_url,
 
-    duration:       row.duration_display || formatDuration(row.duration_days, row.duration_nights),
-    durationDays:   toNumber(row.duration_days),
+    duration:
+      row.duration_display ||
+      formatDuration(row.duration_days, row.duration_nights),
+    durationDays: toNumber(row.duration_days),
     durationNights: toNumber(row.duration_nights),
-    minGroupSize:   toNumber(row.min_group_size, 1),
-    maxGroupSize:   toNumber(row.max_group_size),
-    minAge:         toNumber(row.min_age),
-    fitnessLevel:   row.fitness_level,
+    minGroupSize: toNumber(row.min_group_size, 1),
+    maxGroupSize: toNumber(row.max_group_size),
+    minAge: toNumber(row.min_age),
+    fitnessLevel: row.fitness_level,
 
-    rating:        toNumber(row.rating, 0),
-    reviewCount:   toNumber(row.review_count, 0),
-    viewCount:     toNumber(row.view_count, 0),
-    bookingCount:  toNumber(row.booking_count, 0),
+    rating: toNumber(row.rating, 0),
+    reviewCount: toNumber(row.review_count, 0),
+    viewCount: toNumber(row.view_count, 0),
+    bookingCount: toNumber(row.booking_count, 0),
     wishlistCount: toNumber(row.wishlist_count, 0),
+    shareCount: toNumber(row.share_count, 0),
 
-    entranceFee:    row.entrance_fee,
+    entranceFee: row.entrance_fee,
     operatingHours: row.operating_hours,
-    isSoldOut:      toBoolean(row.is_sold_out),
+    isSoldOut: toBoolean(row.is_sold_out),
 
-    status:           row.status,
-    isActive:         toBoolean(row.is_active),
-    isFeatured:       toBoolean(row.is_featured),
-    isPopular:        toBoolean(row.is_popular),
-    isNew:            toBoolean(row.is_new),
-    isEcoFriendly:    toBoolean(row.is_eco_friendly),
+    status: row.status,
+    isActive: toBoolean(row.is_active),
+    isFeatured: toBoolean(row.is_featured),
+    isPopular: toBoolean(row.is_popular),
+    isNew: toBoolean(row.is_new),
+    isEcoFriendly: toBoolean(row.is_eco_friendly),
     isFamilyFriendly: toBoolean(row.is_family_friendly),
 
-    metaTitle:       row.meta_title,
+    metaTitle: row.meta_title,
     metaDescription: row.meta_description,
 
-    createdAt:   row.created_at,
-    updatedAt:   row.updated_at,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
     publishedAt: row.published_at,
+    featuredAt: row.featured_at,
 
     // Relations — populated by getOne when include=all
-    gallery:        [],
-    itinerary:      [],
-    faqs:           [],
-    reviews:        [],
-    reviewAggregate:null,
-    tips:           [],
-    tags:           [],
-    related:        [],
-    practicalInfo:  null,
-    howToGetThere:  null,
+    gallery: [],
+    itinerary: [],
+    faqs: [],
+    reviews: [],
+    reviewAggregate: null,
+    aggregate: null,
+    tips: [],
+    tags: [],
+    related: [],
+    practicalInfo: null,
+    howToGetThere: null,
   };
 };
 
-const serializeReview = (row) => ({
-  id:             row.id,
-  reviewerName:   row.reviewer_name,
-  reviewerCountry:row.reviewer_country,
-  reviewerAvatar: row.reviewer_avatar,
-  title:          row.title,
-  content:        row.content,
-  rating:         toNumber(row.overall_rating),
-  tripDate:       row.trip_date,
-  tripType:       row.trip_type,
-  images:         row.images || [],
-  isVerified:     toBoolean(row.is_verified),
-  isFeatured:     toBoolean(row.is_featured),
-  helpfulCount:   toNumber(row.helpful_count, 0),
-  createdAt:      row.created_at,
+const serializeImage = (img) => ({
+  id: img.id,
+  imageUrl: img.image_url,
+  thumbnailUrl: img.thumbnail_url,
+  caption: img.caption,
+  altText: img.alt_text,
+  isPrimary: toBoolean(img.is_primary),
+  sortOrder: toNumber(img.sort_order, 0),
 });
+
+const serializeReview = (row) => ({
+  id: row.id,
+  reviewerName: row.reviewer_name,
+  reviewerCountry: row.reviewer_country,
+  reviewerAvatar: row.reviewer_avatar,
+  title: row.title,
+  content: row.content,
+  rating: toNumber(row.overall_rating),
+  tripDate: row.trip_date,
+  tripType: row.trip_type,
+  images: normalizeArray(row.images),
+  isVerified: toBoolean(row.is_verified),
+  isFeatured: toBoolean(row.is_featured),
+  helpfulCount: toNumber(row.helpful_count, 0),
+  createdAt: row.created_at,
+});
+
+const serializeAggregate = (agg) => {
+  const a = agg || {};
+  return {
+    avgRating: toNumber(a.avg_rating, 0),
+    totalReviews: parseInt(a.total_reviews) || 0,
+    distribution: {
+      fiveStar: parseInt(a.five_star) || 0,
+      fourStar: parseInt(a.four_star) || 0,
+      threeStar: parseInt(a.three_star) || 0,
+      twoStar: parseInt(a.two_star) || 0,
+      oneStar: parseInt(a.one_star) || 0,
+    },
+  };
+};
 
 const serializePracticalInfo = (row) => {
   if (!row) return null;
   return {
-    id:            row.id,
+    id: row.id,
     destinationId: row.destination_id,
-
     gettingThere: {
-      nearestAirport:       row.nearest_airport,
-      distanceFromAirport:  row.distance_from_airport,
+      nearestAirport: row.nearest_airport,
+      distanceFromAirport: row.distance_from_airport,
       driveTimeFromCapital: row.drive_time_from_capital,
-      roadConditions:       row.road_conditions,
-      transportOptions:     row.transport_options     || [],
-      borderCrossings:      row.border_crossings,
+      roadConditions: row.road_conditions,
+      transportOptions: normalizeArray(row.transport_options),
+      borderCrossings: row.border_crossings,
     },
-
     healthAndSafety: {
-      vaccinationsRequired:    row.vaccinations_required    || [],
-      vaccinationsRecommended: row.vaccinations_recommended || [],
-      malariaRisk:             row.malaria_risk,
-      waterSafety:             row.water_safety,
-      medicalFacilities:       row.medical_facilities,
-      emergencyContacts:       parseJson(row.emergency_contacts, {}),
-      safetyRating:            row.safety_rating,
-      safetyNotes:             row.safety_notes,
+      vaccinationsRequired: normalizeArray(row.vaccinations_required),
+      vaccinationsRecommended: normalizeArray(row.vaccinations_recommended),
+      malariaRisk: row.malaria_risk,
+      waterSafety: row.water_safety,
+      medicalFacilities: row.medical_facilities,
+      emergencyContacts: parseJson(row.emergency_contacts, {}),
+      safetyRating: row.safety_rating,
+      safetyNotes: row.safety_notes,
     },
-
     permitsAndRegulations: {
-      permitsRequired: row.permits_required  || [],
-      permitCost:      row.permit_cost,
+      permitsRequired: normalizeArray(row.permits_required),
+      permitCost: row.permit_cost,
       bookingLeadTime: row.booking_lead_time,
-      visitorLimits:   row.visitor_limits,
-      regulations:     row.regulations,
+      visitorLimits: row.visitor_limits,
+      regulations: row.regulations,
     },
-
     climate: {
-      avgTempLowC:      toNumber(row.avg_temp_low_c),
-      avgTempHighC:     toNumber(row.avg_temp_high_c),
+      avgTempLowC: toNumber(row.avg_temp_low_c),
+      avgTempHighC: toNumber(row.avg_temp_high_c),
       rainfallMmAnnual: toNumber(row.rainfall_mm_annual),
-      humidityPercent:  toNumber(row.humidity_percent),
-      uvIndexPeak:      toNumber(row.uv_index_peak),
-      bestMonths:       row.best_months  || [],
-      avoidMonths:      row.avoid_months || [],
-      climateNotes:     row.climate_notes,
+      humidityPercent: toNumber(row.humidity_percent),
+      uvIndexPeak: toNumber(row.uv_index_peak),
+      bestMonths: normalizeArray(row.best_months),
+      avoidMonths: normalizeArray(row.avoid_months),
+      climateNotes: row.climate_notes,
     },
-
     packing: {
-      essentials:          row.packing_essentials    || [],
-      clothingTips:        row.clothing_tips,
-      gearRecommendations: row.gear_recommendations  || [],
+      essentials: normalizeArray(row.packing_essentials),
+      clothingTips: row.clothing_tips,
+      gearRecommendations: normalizeArray(row.gear_recommendations),
     },
-
     budget: {
-      rangeUsd:       row.budget_range_usd,
+      rangeUsd: row.budget_range_usd,
       entranceFeeUsd: row.entrance_fee_usd,
-      guideCostUsd:   row.guide_cost_usd,
-      mealCostRange:  row.meal_cost_range,
+      guideCostUsd: row.guide_cost_usd,
+      mealCostRange: row.meal_cost_range,
     },
-
     connectivity: {
-      cellCoverage:       row.cell_coverage,
-      wifiAvailable:      toBoolean(row.wifi_available),
+      cellCoverage: row.cell_coverage,
+      wifiAvailable: toBoolean(row.wifi_available),
       electricityVoltage: row.electricity_voltage,
-      plugTypes:          row.plug_types || [],
+      plugTypes: normalizeArray(row.plug_types),
     },
-
     culture: {
-      currencyTips:    row.currency_tips,
-      tippingCulture:  row.tipping_culture,
-      localEtiquette:  row.local_etiquette  || [],
-      photographyRules:row.photography_rules,
+      currencyTips: row.currency_tips,
+      tippingCulture: row.tipping_culture,
+      localEtiquette: normalizeArray(row.local_etiquette),
+      photographyRules: row.photography_rules,
     },
-
     updatedAt: row.updated_at,
   };
 };
 
 const serializeTipLink = (row) => ({
-  id:         row.id,
-  tipId:      row.tip_id,
-  slug:       row.slug,
-  headline:   row.slug,
-  summary:    row.summary,
-  body:       row.body,
-  category:   row.category,
-  tripPhase:  row.trip_phase,
-  icon:       row.icon,
-  imageUrl:   row.image_url,
-  tags:       row.tags      || [],
-  checklist:  row.checklist || [],
+  id: row.id,
+  tipId: row.tip_id,
+  slug: row.slug,
+  headline: row.headline || row.slug,
+  summary: row.summary,
+  body: row.body,
+  category: row.category,
+  tripPhase: row.trip_phase,
+  icon: row.icon,
+  imageUrl: row.image_url,
+  tags: normalizeArray(row.tags),
+  checklist: normalizeArray(row.checklist),
   isFeatured: toBoolean(row.is_featured),
-  sortOrder:  toNumber(row.sort_order, 0),
+  sortOrder: toNumber(row.sort_order, 0),
 });
 
 /* ═══════════════════════════════════════════════════════════════
@@ -542,9 +599,25 @@ const BASE_SELECT = `
   INNER JOIN countries c ON d.country_id = c.id AND c.is_active = true
 `;
 
+const REVIEW_AGGREGATE_SQL = `
+  SELECT
+    AVG(overall_rating)                                    AS avg_rating,
+    COUNT(*)                                               AS total_reviews,
+    COUNT(*) FILTER (WHERE overall_rating >= 4.5)         AS five_star,
+    COUNT(*) FILTER (WHERE overall_rating >= 3.5
+                       AND overall_rating  < 4.5)         AS four_star,
+    COUNT(*) FILTER (WHERE overall_rating >= 2.5
+                       AND overall_rating  < 3.5)         AS three_star,
+    COUNT(*) FILTER (WHERE overall_rating >= 1.5
+                       AND overall_rating  < 2.5)         AS two_star,
+    COUNT(*) FILTER (WHERE overall_rating  < 1.5)         AS one_star
+  FROM destination_reviews
+  WHERE destination_id = $1 AND status = 'approved'
+`;
+
 const buildFilters = async (filters) => {
   const conditions = ["d.is_active = true"];
-  const params     = [];
+  const params = [];
   let idx = 1;
 
   if (filters.status) {
@@ -581,6 +654,11 @@ const buildFilters = async (filters) => {
     params.push(filters.difficulty);
   }
 
+  if (filters.destination_type) {
+    conditions.push(`d.destination_type = $${idx++}`);
+    params.push(filters.destination_type);
+  }
+
   if (filters.minRating) {
     conditions.push(`d.rating >= $${idx++}`);
     params.push(parseFloat(filters.minRating));
@@ -596,10 +674,17 @@ const buildFilters = async (filters) => {
     params.push(parseInt(filters.maxDuration));
   }
 
-  const boolFlags = ["featured", "popular", "new", "eco_friendly", "family_friendly"];
+  const boolFlags = [
+    "featured",
+    "popular",
+    "new",
+    "eco_friendly",
+    "family_friendly",
+  ];
   boolFlags.forEach((flag) => {
-    const key = flag.replace("_", "");
-    const val = filters[key] !== undefined ? filters[key] : filters[flag];
+    const camelKey = flag.replace(/_([a-z])/g, (_, l) => l.toUpperCase());
+    const val =
+      filters[camelKey] !== undefined ? filters[camelKey] : filters[flag];
     if (val !== undefined) {
       conditions.push(`d.is_${flag} = $${idx++}`);
       params.push(toBoolean(val));
@@ -628,7 +713,9 @@ const buildFilters = async (filters) => {
 
   if (filters.bounds) {
     try {
-      const [swLat, swLng, neLat, neLng] = filters.bounds.split(",").map(Number);
+      const [swLat, swLng, neLat, neLng] = filters.bounds
+        .split(",")
+        .map(Number);
       if ([swLat, swLng, neLat, neLng].every(Number.isFinite)) {
         conditions.push(`d.latitude  BETWEEN $${idx} AND $${idx + 1}`);
         conditions.push(`d.longitude BETWEEN $${idx + 2} AND $${idx + 3}`);
@@ -639,7 +726,9 @@ const buildFilters = async (filters) => {
   }
 
   if (filters.exclude) {
-    const ids = normalizeArray(filters.exclude).map((id) => parseInt(id));
+    const ids = normalizeArray(filters.exclude)
+      .map((id) => parseInt(id))
+      .filter(Number.isFinite);
     if (ids.length) {
       conditions.push(`d.id != ALL($${idx++})`);
       params.push(ids);
@@ -651,17 +740,18 @@ const buildFilters = async (filters) => {
 
 const buildSort = (sort) => {
   const map = {
-    name:        "d.name ASC",
-    "-name":     "d.name DESC",
-    rating:      "d.rating DESC NULLS LAST",
-    newest:      "d.published_at DESC NULLS LAST, d.created_at DESC",
-    oldest:      "d.created_at ASC",
-    popular:     "d.booking_count DESC, d.view_count DESC",
-    featured:    "d.is_featured DESC, d.is_popular DESC, d.rating DESC NULLS LAST",
-    views:       "d.view_count DESC",
-    duration:    "d.duration_days ASC NULLS LAST",
+    name: "d.name ASC",
+    "-name": "d.name DESC",
+    rating: "d.rating DESC NULLS LAST",
+    newest: "d.published_at DESC NULLS LAST, d.created_at DESC",
+    oldest: "d.created_at ASC",
+    popular: "d.booking_count DESC, d.view_count DESC",
+    featured:
+      "d.is_featured DESC, d.is_popular DESC, d.rating DESC NULLS LAST",
+    views: "d.view_count DESC",
+    duration: "d.duration_days ASC NULLS LAST",
     "-duration": "d.duration_days DESC NULLS LAST",
-    random:      "RANDOM()",
+    random: "RANDOM()",
   };
   return map[sort] || map.featured;
 };
@@ -682,7 +772,7 @@ exports.getAll = async (req, res, next) => {
        ${where}`,
       params
     );
-    const total      = parseInt(countRes.rows[0].count);
+    const total = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
     const result = await query(
@@ -694,7 +784,7 @@ exports.getAll = async (req, res, next) => {
 
     res.json({
       success: true,
-      data:    result.rows.map((r) => serialize(r)),
+      data: result.rows.map((r) => serialize(r)),
       pagination,
     });
   } catch (err) {
@@ -705,13 +795,17 @@ exports.getAll = async (req, res, next) => {
 exports.getFeatured = async (req, res, next) => {
   try {
     const { limit = 8, country, continent } = req.query;
-    let where  = "WHERE d.is_featured = true AND d.is_active = true AND d.status = 'published'";
+    let where =
+      "WHERE d.is_featured = true AND d.is_active = true AND d.status = 'published'";
     const params = [];
     let idx = 1;
 
     if (country) {
       const c = await resolveCountry(country);
-      if (c) { where += ` AND d.country_id = $${idx++}`; params.push(c.id); }
+      if (c) {
+        where += ` AND d.country_id = $${idx++}`;
+        params.push(c.id);
+      }
     }
     if (continent) {
       where += ` AND c.continent ILIKE $${idx++}`;
@@ -726,7 +820,11 @@ exports.getFeatured = async (req, res, next) => {
       params
     );
 
-    res.json({ success: true, data: result.rows.map((r) => serialize(r)), count: result.rows.length });
+    res.json({
+      success: true,
+      data: result.rows.map((r) => serialize(r)),
+      count: result.rows.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -735,13 +833,16 @@ exports.getFeatured = async (req, res, next) => {
 exports.getPopular = async (req, res, next) => {
   try {
     const { limit = 8, country } = req.query;
-    let where  = "WHERE d.is_active = true AND d.status = 'published'";
+    let where = "WHERE d.is_active = true AND d.status = 'published'";
     const params = [];
     let idx = 1;
 
     if (country) {
       const c = await resolveCountry(country);
-      if (c) { where += ` AND d.country_id = $${idx++}`; params.push(c.id); }
+      if (c) {
+        where += ` AND d.country_id = $${idx++}`;
+        params.push(c.id);
+      }
     }
     params.push(parseInt(limit));
 
@@ -752,7 +853,11 @@ exports.getPopular = async (req, res, next) => {
       params
     );
 
-    res.json({ success: true, data: result.rows.map((r) => serialize(r)), count: result.rows.length });
+    res.json({
+      success: true,
+      data: result.rows.map((r) => serialize(r)),
+      count: result.rows.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -761,15 +866,20 @@ exports.getPopular = async (req, res, next) => {
 exports.getNew = async (req, res, next) => {
   try {
     const { limit = 8, days = 30 } = req.query;
+    const safeDays = Math.min(Math.max(parseInt(days) || 30, 1), 365);
     const result = await query(
       `${BASE_SELECT}
        WHERE d.is_active = true AND d.status = 'published'
-         AND (d.is_new = true OR d.published_at >= NOW() - INTERVAL '${parseInt(days)} days')
+         AND (d.is_new = true OR d.published_at >= NOW() - ($1 || ' days')::INTERVAL)
        ORDER BY d.published_at DESC NULLS LAST
-       LIMIT $1`,
-      [parseInt(limit)]
+       LIMIT $2`,
+      [safeDays, parseInt(limit)]
     );
-    res.json({ success: true, data: result.rows.map((r) => serialize(r)), count: result.rows.length });
+    res.json({
+      success: true,
+      data: result.rows.map((r) => serialize(r)),
+      count: result.rows.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -777,44 +887,57 @@ exports.getNew = async (req, res, next) => {
 
 exports.getByCountry = async (req, res, next) => {
   try {
-    const { countrySlug }                                       = req.params;
-    const { page = 1, limit = 12, sort = "featured", category } = req.query;
+    const { countrySlug } = req.params;
+    const {
+      page = 1,
+      limit = 12,
+      sort = "featured",
+      category,
+    } = req.query;
 
     const country = await resolveCountry(countrySlug);
     if (!country) {
-      return res.status(404).json({ success: false, error: "Country not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Country not found" });
     }
 
-    let where  = "WHERE d.country_id = $1 AND d.is_active = true AND d.status = 'published'";
+    let where =
+      "WHERE d.country_id = $1 AND d.is_active = true AND d.status = 'published'";
     const params = [country.id];
     let idx = 2;
 
-    if (category) { where += ` AND d.category = $${idx++}`; params.push(category); }
+    if (category) {
+      where += ` AND d.category = $${idx++}`;
+      params.push(category);
+    }
 
     const countRes = await query(
-      `SELECT COUNT(*) FROM destinations d ${where}`, params
+      `SELECT COUNT(*) FROM destinations d
+       INNER JOIN countries c ON d.country_id = c.id AND c.is_active = true
+       ${where}`,
+      params
     );
-    const total      = parseInt(countRes.rows[0].count);
+    const total = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
-    params.push(pagination.limit, pagination.offset);
     const result = await query(
       `${BASE_SELECT} ${where}
        ORDER BY ${buildSort(sort)}
        LIMIT $${idx++} OFFSET $${idx}`,
-      params
+      [...params, pagination.limit, pagination.offset]
     );
 
     res.json({
       success: true,
-      data:    result.rows.map((r) => serialize(r)),
+      data: result.rows.map((r) => serialize(r)),
       pagination,
       country: {
-        id:               country.id,
-        slug:             country.slug,
-        name:             country.name,
-        flag:             country.flag,
-        continent:        country.continent,
+        id: country.id,
+        slug: country.slug,
+        name: country.name,
+        flag: country.flag,
+        continent: country.continent,
         destinationCount: total,
       },
     });
@@ -826,19 +949,25 @@ exports.getByCountry = async (req, res, next) => {
 exports.getCategories = async (req, res, next) => {
   try {
     const { country } = req.query;
-    let where  = "WHERE d.is_active = true AND d.status = 'published' AND d.category IS NOT NULL";
+    let where =
+      "WHERE d.is_active = true AND d.status = 'published' AND d.category IS NOT NULL";
     const params = [];
 
     if (country) {
       const c = await resolveCountry(country);
-      if (c) { where += " AND d.country_id = $1"; params.push(c.id); }
+      if (c) {
+        where += " AND d.country_id = $1";
+        params.push(c.id);
+      }
     }
 
     const result = await query(
       `SELECT d.category,
               COUNT(*)                                   AS count,
               AVG(d.rating) FILTER (WHERE d.rating > 0) AS avg_rating
-       FROM destinations d ${where}
+       FROM destinations d
+       INNER JOIN countries c ON d.country_id = c.id AND c.is_active = true
+       ${where}
        GROUP BY d.category ORDER BY count DESC`,
       params
     );
@@ -846,11 +975,13 @@ exports.getCategories = async (req, res, next) => {
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        name:        r.category,
-        slug:        slugify(r.category),
-        displayName: r.category.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()),
-        count:       parseInt(r.count),
-        avgRating:   toNumber(r.avg_rating),
+        name: r.category,
+        slug: slugify(r.category),
+        displayName: r.category
+          .replace(/_/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase()),
+        count: parseInt(r.count),
+        avgRating: toNumber(r.avg_rating),
       })),
     });
   } catch (err) {
@@ -868,14 +999,15 @@ exports.getDifficulties = async (req, res, next) => {
       ORDER BY CASE difficulty
         WHEN 'easy'        THEN 1 WHEN 'moderate'   THEN 2
         WHEN 'challenging' THEN 3 WHEN 'difficult'  THEN 4
-        WHEN 'expert'      THEN 5 END
+        WHEN 'expert'      THEN 5 ELSE 6 END
     `);
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        level:       r.difficulty,
-        displayName: r.difficulty.charAt(0).toUpperCase() + r.difficulty.slice(1),
-        count:       parseInt(r.count),
+        level: r.difficulty,
+        displayName:
+          r.difficulty.charAt(0).toUpperCase() + r.difficulty.slice(1),
+        count: parseInt(r.count),
       })),
     });
   } catch (err) {
@@ -886,16 +1018,22 @@ exports.getDifficulties = async (req, res, next) => {
 exports.getMapData = async (req, res, next) => {
   try {
     const { country, category, bounds, limit = 500 } = req.query;
-    let where  = `WHERE d.is_active = true AND d.status = 'published'
+    let where = `WHERE d.is_active = true AND d.status = 'published'
                    AND d.latitude IS NOT NULL AND d.longitude IS NOT NULL`;
     const params = [];
     let idx = 1;
 
     if (country) {
       const c = await resolveCountry(country);
-      if (c) { where += ` AND d.country_id = $${idx++}`; params.push(c.id); }
+      if (c) {
+        where += ` AND d.country_id = $${idx++}`;
+        params.push(c.id);
+      }
     }
-    if (category) { where += ` AND d.category = $${idx++}`; params.push(category); }
+    if (category) {
+      where += ` AND d.category = $${idx++}`;
+      params.push(category);
+    }
     if (bounds) {
       try {
         const [swLat, swLng, neLat, neLng] = bounds.split(",").map(Number);
@@ -907,7 +1045,7 @@ exports.getMapData = async (req, res, next) => {
         }
       } catch (_) {}
     }
-    params.push(parseInt(limit));
+    params.push(Math.min(parseInt(limit) || 500, 1000));
 
     const result = await query(
       `SELECT d.id, d.name, d.slug, d.latitude, d.longitude,
@@ -915,7 +1053,7 @@ exports.getMapData = async (req, res, next) => {
               d.rating, d.review_count, d.is_featured, d.is_popular,
               c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
        FROM destinations d
-       INNER JOIN countries c ON d.country_id = c.id
+       INNER JOIN countries c ON d.country_id = c.id AND c.is_active = true
        ${where}
        ORDER BY d.is_featured DESC, d.rating DESC NULLS LAST
        LIMIT $${idx}`,
@@ -925,19 +1063,23 @@ exports.getMapData = async (req, res, next) => {
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        id:               r.id,
-        name:             r.name,
-        slug:             r.slug,
-        position:         { lat: toNumber(r.latitude), lng: toNumber(r.longitude) },
-        category:         r.category,
-        difficulty:       r.difficulty,
-        imageUrl:         r.image_url,
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
+        position: { lat: toNumber(r.latitude), lng: toNumber(r.longitude) },
+        category: r.category,
+        difficulty: r.difficulty,
+        imageUrl: r.image_url,
         shortDescription: r.short_description,
-        rating:           toNumber(r.rating),
-        reviewCount:      toNumber(r.review_count),
-        isFeatured:       toBoolean(r.is_featured),
-        isPopular:        toBoolean(r.is_popular),
-        country: { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
+        rating: toNumber(r.rating),
+        reviewCount: toNumber(r.review_count),
+        isFeatured: toBoolean(r.is_featured),
+        isPopular: toBoolean(r.is_popular),
+        country: {
+          name: r.country_name,
+          slug: r.country_slug,
+          flag: r.country_flag,
+        },
       })),
       count: result.rows.length,
     });
@@ -950,7 +1092,11 @@ exports.search = async (req, res, next) => {
   try {
     const { q, page = 1, limit = 12 } = req.query;
     if (!q || q.length < 2) {
-      return res.json({ success: true, data: [], pagination: paginate(0, page, limit) });
+      return res.json({
+        success: true,
+        data: [],
+        pagination: paginate(0, page, limit),
+      });
     }
 
     const { where, params, nextIdx } = await buildFilters({ search: q });
@@ -961,7 +1107,7 @@ exports.search = async (req, res, next) => {
        ${where}`,
       params
     );
-    const total      = parseInt(countRes.rows[0].count);
+    const total = parseInt(countRes.rows[0].count);
     const pagination = paginate(total, page, limit);
 
     const result = await query(
@@ -972,7 +1118,12 @@ exports.search = async (req, res, next) => {
       [...params, pagination.limit, pagination.offset, `${q}%`]
     );
 
-    res.json({ success: true, data: result.rows.map((r) => serialize(r)), pagination, query: q });
+    res.json({
+      success: true,
+      data: result.rows.map((r) => serialize(r)),
+      pagination,
+      query: q,
+    });
   } catch (err) {
     next(err);
   }
@@ -987,26 +1138,30 @@ exports.getSuggestions = async (req, res, next) => {
       `SELECT d.id, d.name, d.slug, d.category, d.image_url, d.rating,
               c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
        FROM destinations d
-       INNER JOIN countries c ON d.country_id = c.id
+       INNER JOIN countries c ON d.country_id = c.id AND c.is_active = true
        WHERE d.is_active = true AND d.status = 'published'
          AND (d.name ILIKE $1 OR c.name ILIKE $1)
        ORDER BY CASE WHEN d.name ILIKE $2 THEN 0 ELSE 1 END,
                 d.is_featured DESC, d.rating DESC NULLS LAST
        LIMIT $3`,
-      [`%${q}%`, `${q}%`, parseInt(limit)]
+      [`%${q}%`, `${q}%`, Math.min(parseInt(limit) || 10, 20)]
     );
 
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        id:       r.id,
-        name:     r.name,
-        slug:     r.slug,
+        id: r.id,
+        name: r.name,
+        slug: r.slug,
         category: r.category,
         imageUrl: r.image_url,
-        rating:   toNumber(r.rating),
-        country: { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
-        type:     "destination",
+        rating: toNumber(r.rating),
+        country: {
+          name: r.country_name,
+          slug: r.country_slug,
+          flag: r.country_flag,
+        },
+        type: "destination",
       })),
     });
   } catch (err) {
@@ -1022,20 +1177,20 @@ exports.getTags = async (req, res, next) => {
               COUNT(DISTINCT dt.destination_id) AS count
        FROM destination_tags dt
        INNER JOIN destinations d ON dt.destination_id = d.id
-       WHERE d.is_active = true AND d.status = 'published'
+         AND d.is_active = true AND d.status = 'published'
        GROUP BY dt.tag_name, dt.tag_slug, dt.tag_category
        ORDER BY count DESC
        LIMIT $1`,
-      [parseInt(limit)]
-    ).catch(() => ({ rows: [] }));   // safe if table missing
+      [Math.min(parseInt(limit) || 50, 200)]
+    ).catch(() => ({ rows: [] }));
 
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        name:     r.tag_name,
-        slug:     r.tag_slug,
+        name: r.tag_name,
+        slug: r.tag_slug,
         category: r.tag_category,
-        count:    parseInt(r.count),
+        count: parseInt(r.count),
       })),
     });
   } catch (err) {
@@ -1045,52 +1200,58 @@ exports.getTags = async (req, res, next) => {
 
 exports.getStats = async (req, res, next) => {
   try {
-    const stats = await query(`
-      SELECT
-        COUNT(*)                                              AS total,
-        COUNT(*) FILTER (WHERE status = 'published')         AS published,
-        COUNT(*) FILTER (WHERE is_featured)                  AS featured,
-        COUNT(*) FILTER (WHERE is_popular)                   AS popular,
-        COUNT(DISTINCT country_id)                           AS countries,
-        AVG(rating) FILTER (WHERE rating > 0)                AS avg_rating,
-        SUM(view_count)                                      AS total_views,
-        SUM(review_count)                                    AS total_reviews
-      FROM destinations WHERE is_active = true
-    `);
+    const [statsRes, byCategoryRes, byCountryRes] = await Promise.all([
+      query(`
+        SELECT
+          COUNT(*)                                              AS total,
+          COUNT(*) FILTER (WHERE status = 'published')         AS published,
+          COUNT(*) FILTER (WHERE is_featured = true)           AS featured,
+          COUNT(*) FILTER (WHERE is_popular  = true)           AS popular,
+          COUNT(DISTINCT country_id)                           AS countries,
+          ROUND(AVG(rating) FILTER (WHERE rating > 0)::numeric, 2) AS avg_rating,
+          COALESCE(SUM(view_count),   0)                       AS total_views,
+          COALESCE(SUM(review_count), 0)                       AS total_reviews
+        FROM destinations WHERE is_active = true
+      `),
+      query(`
+        SELECT category, COUNT(*) AS count
+        FROM destinations
+        WHERE is_active = true AND status = 'published' AND category IS NOT NULL
+        GROUP BY category ORDER BY count DESC
+      `),
+      query(`
+        SELECT c.name, c.slug, c.flag, COUNT(d.id) AS count
+        FROM destinations d
+        INNER JOIN countries c ON d.country_id = c.id
+        WHERE d.is_active = true AND d.status = 'published'
+        GROUP BY c.id, c.name, c.slug, c.flag
+        ORDER BY count DESC LIMIT 10
+      `),
+    ]);
 
-    const byCategory = await query(`
-      SELECT category, COUNT(*) AS count
-      FROM destinations
-      WHERE is_active = true AND status = 'published' AND category IS NOT NULL
-      GROUP BY category ORDER BY count DESC
-    `);
-
-    const byCountry = await query(`
-      SELECT c.name, c.slug, c.flag, COUNT(d.id) AS count
-      FROM destinations d
-      INNER JOIN countries c ON d.country_id = c.id
-      WHERE d.is_active = true AND d.status = 'published'
-      GROUP BY c.id ORDER BY count DESC LIMIT 10
-    `);
-
+    const s = statsRes.rows[0] || {};
     res.json({
       success: true,
       data: {
         overview: {
-          total:        parseInt(stats.rows[0].total)        || 0,
-          published:    parseInt(stats.rows[0].published)    || 0,
-          featured:     parseInt(stats.rows[0].featured)     || 0,
-          popular:      parseInt(stats.rows[0].popular)      || 0,
-          countries:    parseInt(stats.rows[0].countries)    || 0,
-          avgRating:    toNumber(stats.rows[0].avg_rating),
-          totalViews:   parseInt(stats.rows[0].total_views)  || 0,
-          totalReviews: parseInt(stats.rows[0].total_reviews)|| 0,
+          total: parseInt(s.total) || 0,
+          published: parseInt(s.published) || 0,
+          featured: parseInt(s.featured) || 0,
+          popular: parseInt(s.popular) || 0,
+          countries: parseInt(s.countries) || 0,
+          avgRating: toNumber(s.avg_rating),
+          totalViews: parseInt(s.total_views) || 0,
+          totalReviews: parseInt(s.total_reviews) || 0,
         },
-        byCategory: byCategory.rows.map((r) => ({
-          category: r.category, count: parseInt(r.count),
+        byCategory: byCategoryRes.rows.map((r) => ({
+          category: r.category,
+          count: parseInt(r.count),
         })),
-        byCountry: byCountry.rows.map((r) => ({
-          name: r.name, slug: r.slug, flag: r.flag, count: parseInt(r.count),
+        byCountry: byCountryRes.rows.map((r) => ({
+          name: r.name,
+          slug: r.slug,
+          flag: r.flag,
+          count: parseInt(r.count),
         })),
       },
     });
@@ -1105,266 +1266,300 @@ exports.getStats = async (req, res, next) => {
 
 exports.getOne = async (req, res, next) => {
   try {
-    const { idOrSlug } = req.params;
-    const { include }  = req.query;
+    // Support both :id and :slug via :idOrSlug param
+    const idOrSlug = req.params.idOrSlug || req.params.slug || req.params.id;
 
-    const isNum = /^\d+$/.test(idOrSlug);
-    const col   = isNum ? "d.id"   : "d.slug";
-    const val   = isNum ? parseInt(idOrSlug) : idOrSlug.toLowerCase();
+    if (!idOrSlug) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Destination id or slug is required" });
+    }
 
+    const { include } = req.query;
+    const isNum = /^\d+$/.test(String(idOrSlug));
+    const col = isNum ? "d.id" : "d.slug";
+    const val = isNum ? parseInt(idOrSlug) : String(idOrSlug).toLowerCase();
+
+    // ── Fetch main destination row ────────────────────────────
     const result = await query(
-      `${BASE_SELECT} WHERE ${col} = $1 AND d.is_active = true`, [val]
+      `${BASE_SELECT} WHERE ${col} = $1 AND d.is_active = true`,
+      [val]
     );
 
     if (result.rows.length === 0) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
-    const row    = result.rows[0];
+    const row = result.rows[0];
     const destId = row.id;
 
-    // Async view increment — non-blocking
+    // Non-blocking view increment
     query(
-      "UPDATE destinations SET view_count = view_count + 1 WHERE id = $1", [destId]
+      "UPDATE destinations SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1",
+      [destId]
     ).catch(() => {});
 
-    const dest     = serialize(row);
-    const includes = include ? include.split(",").map((s) => s.trim().toLowerCase()) : [];
-    const all      = includes.includes("all");
+    const dest = serialize(row);
+
+    const includes = include
+      ? include.split(",").map((s) => s.trim().toLowerCase())
+      : [];
+    const all = includes.includes("all");
 
     const tasks = [];
 
     // ── 1. Gallery ────────────────────────────────────────────
     if (all || includes.includes("gallery") || includes.includes("images")) {
-      tasks.push(safeTask("gallery", async () => {
-        const r = await query(
-          `SELECT * FROM destination_images
-           WHERE destination_id = $1 AND is_active = true
-           ORDER BY is_primary DESC, sort_order ASC`,
-          [destId]
-        );
-        dest.gallery = r.rows.map((img) => ({
-          id:           img.id,
-          imageUrl:     img.image_url,
-          thumbnailUrl: img.thumbnail_url,
-          caption:      img.caption,
-          altText:      img.alt_text,
-          isPrimary:    toBoolean(img.is_primary),
-          sortOrder:    img.sort_order,
-        }));
-      }));
+      tasks.push(
+        safeTask("gallery", async () => {
+          const r = await query(
+            `SELECT * FROM destination_images
+             WHERE destination_id = $1 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC`,
+            [destId]
+          );
+          dest.gallery = r.rows.map(serializeImage);
+        })
+      );
     }
 
     // ── 2. Itinerary ──────────────────────────────────────────
     if (all || includes.includes("itinerary")) {
-      tasks.push(safeTask("itinerary", async () => {
-        const r = await query(
-          `SELECT * FROM destination_itineraries
-           WHERE destination_id = $1 AND is_active = true
-           ORDER BY day_number ASC`,
-          [destId]
-        );
-        dest.itinerary = r.rows.map((it) => ({
-          id:            it.id,
-          dayNumber:     it.day_number,
-          title:         it.title,
-          description:   it.description,
-          activities:    it.activities || [],
-          highlights:    it.highlights || [],
-          meals:         it.meals      || [],
-          accommodation: it.accommodation,
-          distanceKm:    toNumber(it.distance_km),
-          imageUrl:      it.image_url,
-        }));
-      }));
+      tasks.push(
+        safeTask("itinerary", async () => {
+          const r = await query(
+            `SELECT * FROM destination_itineraries
+             WHERE destination_id = $1 AND is_active = true
+             ORDER BY day_number ASC, sort_order ASC`,
+            [destId]
+          );
+          dest.itinerary = r.rows.map((it) => ({
+            id: it.id,
+            dayNumber: it.day_number,
+            title: it.title,
+            description: it.description,
+            activities: normalizeArray(it.activities),
+            highlights: normalizeArray(it.highlights),
+            meals: normalizeArray(it.meals),
+            accommodation: it.accommodation,
+            distanceKm: toNumber(it.distance_km),
+            imageUrl: it.image_url,
+          }));
+        })
+      );
     }
 
     // ── 3. FAQs ───────────────────────────────────────────────
     if (all || includes.includes("faqs")) {
-      tasks.push(safeTask("faqs", async () => {
-        const r = await query(
-          `SELECT * FROM destination_faqs
-           WHERE destination_id = $1 AND is_active = true
-           ORDER BY sort_order ASC`,
-          [destId]
-        );
-        dest.faqs = r.rows.map((f) => ({
-          id:           f.id,
-          question:     f.question,
-          answer:       f.answer,
-          category:     f.category,
-          helpfulCount: toNumber(f.helpful_count, 0),
-        }));
-      }));
+      tasks.push(
+        safeTask("faqs", async () => {
+          const r = await query(
+            `SELECT * FROM destination_faqs
+             WHERE destination_id = $1 AND is_active = true
+             ORDER BY sort_order ASC, id ASC`,
+            [destId]
+          );
+          dest.faqs = r.rows.map((f) => ({
+            id: f.id,
+            question: f.question,
+            answer: f.answer,
+            category: f.category,
+            helpfulCount: toNumber(f.helpful_count, 0),
+          }));
+        })
+      );
     }
 
     // ── 4. Reviews + Aggregate ────────────────────────────────
     if (all || includes.includes("reviews")) {
-      tasks.push(safeTask("reviews", async () => {
-        const r = await query(
-          `SELECT * FROM destination_reviews
-           WHERE destination_id = $1 AND status = 'approved'
-           ORDER BY is_featured DESC, created_at DESC
-           LIMIT 10`,
-          [destId]
-        );
-        dest.reviews = r.rows.map(serializeReview);
+      tasks.push(
+        safeTask("reviews", async () => {
+          const [reviewRes, aggRes] = await Promise.all([
+            query(
+              `SELECT * FROM destination_reviews
+               WHERE destination_id = $1 AND status = 'approved'
+               ORDER BY is_featured DESC, created_at DESC
+               LIMIT 10`,
+              [destId]
+            ),
+            query(REVIEW_AGGREGATE_SQL, [destId]),
+          ]);
 
-        const agg = await query(
-          `SELECT
-             AVG(overall_rating)                                   AS avg_rating,
-             COUNT(*)                                              AS total_reviews,
-             COUNT(*) FILTER (WHERE overall_rating >= 4.5)        AS five_star,
-             COUNT(*) FILTER (WHERE overall_rating >= 3.5
-                                AND overall_rating  < 4.5)        AS four_star,
-             COUNT(*) FILTER (WHERE overall_rating >= 2.5
-                                AND overall_rating  < 3.5)        AS three_star,
-             COUNT(*) FILTER (WHERE overall_rating >= 1.5
-                                AND overall_rating  < 2.5)        AS two_star,
-             COUNT(*) FILTER (WHERE overall_rating  < 1.5)        AS one_star
-           FROM destination_reviews
-           WHERE destination_id = $1 AND status = 'approved'`,
-          [destId]
-        );
-        const a = agg.rows[0] || {};
-        dest.aggregate = {
-          avgRating:    toNumber(a.avg_rating, 0),
-          totalReviews: parseInt(a.total_reviews) || 0,
-          distribution: {
-            fiveStar:  parseInt(a.five_star)  || 0,
-            fourStar:  parseInt(a.four_star)  || 0,
-            threeStar: parseInt(a.three_star) || 0,
-            twoStar:   parseInt(a.two_star)   || 0,
-            oneStar:   parseInt(a.one_star)   || 0,
-          },
-        };
-      }));
+          dest.reviews = reviewRes.rows.map(serializeReview);
+          const aggregate = serializeAggregate(aggRes.rows[0]);
+          dest.reviewAggregate = aggregate;
+          dest.aggregate = aggregate;
+        })
+      );
     }
 
     // ── 5. Tags ───────────────────────────────────────────────
     if (all || includes.includes("tags")) {
-      tasks.push(safeTask("tags", async () => {
-        const r = await query(
-          `SELECT * FROM destination_tags
-           WHERE destination_id = $1 ORDER BY tag_name ASC`,
-          [destId]
-        );
-        dest.tags = r.rows.map((t) => ({
-          name: t.tag_name, slug: t.tag_slug, category: t.tag_category,
-        }));
-      }));
+      tasks.push(
+        safeTask("tags", async () => {
+          const r = await query(
+            `SELECT * FROM destination_tags
+             WHERE destination_id = $1
+             ORDER BY tag_category ASC, tag_name ASC`,
+            [destId]
+          );
+          dest.tags = r.rows.map((t) => ({
+            id: t.id,
+            name: t.tag_name,
+            slug: t.tag_slug,
+            category: t.tag_category,
+          }));
+        })
+      );
     }
 
     // ── 6. Practical Info ─────────────────────────────────────
-    if (all || includes.includes("practical") || includes.includes("practical_info")) {
-      tasks.push(safeTask("practical_info", async () => {
-        const r = await query(
-          `SELECT * FROM destination_practical_info WHERE destination_id = $1`,
-          [destId]
-        );
-        dest.practicalInfo = serializePracticalInfo(r.rows[0] || null);
-      }));
+    if (
+      all ||
+      includes.includes("practical") ||
+      includes.includes("practical_info")
+    ) {
+      tasks.push(
+        safeTask("practical_info", async () => {
+          const r = await query(
+            `SELECT * FROM destination_practical_info WHERE destination_id = $1`,
+            [destId]
+          );
+          dest.practicalInfo = serializePracticalInfo(r.rows[0] || null);
+        })
+      );
     }
 
     // ── 7. How To Get There ───────────────────────────────────
-    if (all || includes.includes("how_to_get_there") || includes.includes("getting_there")) {
-      tasks.push(safeTask("how_to_get_there", async () => {
-        const r = await query(
-          `SELECT
-             dpi.nearest_airport,
-             dpi.distance_from_airport,
-             dpi.drive_time_from_capital,
-             dpi.road_conditions,
-             dpi.transport_options,
-             dpi.border_crossings,
-             d.nearest_airport          AS dest_nearest_airport,
-             d.nearest_city             AS dest_nearest_city,
-             d.distance_from_airport_km,
-             d.getting_there            AS dest_getting_there,
-             d.latitude,
-             d.longitude,
-             d.address,
-             c.capital                  AS country_capital,
-             c.name                     AS country_name,
-             c.calling_code
-           FROM destinations d
-           INNER JOIN countries c ON d.country_id = c.id
-           LEFT JOIN destination_practical_info dpi ON dpi.destination_id = d.id
-           WHERE d.id = $1`,
-          [destId]
-        );
-        const r2 = r.rows[0] || {};
-        dest.howToGetThere = {
-          nearestAirport:       r2.nearest_airport       || r2.dest_nearest_airport || null,
-          nearestCity:          r2.dest_nearest_city      || null,
-          distanceFromAirport:  r2.distance_from_airport  ||
-                                (r2.distance_from_airport_km
-                                  ? `${r2.distance_from_airport_km} km`
-                                  : null),
-          driveTimeFromCapital: r2.drive_time_from_capital || null,
-          countryCapital:       r2.country_capital         || null,
-          roadConditions:       r2.road_conditions         || null,
-          transportOptions:     r2.transport_options       || [],
-          borderCrossings:      r2.border_crossings        || null,
-          generalInfo:          r2.dest_getting_there      || null,
-          mapPosition: {
-            lat: toNumber(r2.latitude),
-            lng: toNumber(r2.longitude),
-          },
-          address:     r2.address      || null,
-          countryName: r2.country_name || null,
-          callingCode: r2.calling_code || null,
-        };
-      }));
+    if (
+      all ||
+      includes.includes("how_to_get_there") ||
+      includes.includes("getting_there")
+    ) {
+      tasks.push(
+        safeTask("how_to_get_there", async () => {
+          const r = await query(
+            `SELECT
+               dpi.nearest_airport,
+               dpi.distance_from_airport,
+               dpi.drive_time_from_capital,
+               dpi.road_conditions,
+               dpi.transport_options,
+               dpi.border_crossings,
+               d.nearest_airport          AS dest_nearest_airport,
+               d.nearest_city             AS dest_nearest_city,
+               d.distance_from_airport_km,
+               d.getting_there            AS dest_getting_there,
+               d.latitude,
+               d.longitude,
+               d.address,
+               c.capital                  AS country_capital,
+               c.name                     AS country_name,
+               c.calling_code
+             FROM destinations d
+             INNER JOIN countries c ON d.country_id = c.id
+             LEFT JOIN destination_practical_info dpi ON dpi.destination_id = d.id
+             WHERE d.id = $1`,
+            [destId]
+          );
+          const r2 = r.rows[0] || {};
+          dest.howToGetThere = {
+            nearestAirport:
+              r2.nearest_airport || r2.dest_nearest_airport || null,
+            nearestCity: r2.dest_nearest_city || null,
+            distanceFromAirport:
+              r2.distance_from_airport ||
+              (r2.distance_from_airport_km
+                ? `${r2.distance_from_airport_km} km`
+                : null),
+            driveTimeFromCapital: r2.drive_time_from_capital || null,
+            countryCapital: r2.country_capital || null,
+            roadConditions: r2.road_conditions || null,
+            transportOptions: normalizeArray(r2.transport_options),
+            borderCrossings: r2.border_crossings || null,
+            generalInfo: r2.dest_getting_there || null,
+            mapPosition: {
+              lat: toNumber(r2.latitude),
+              lng: toNumber(r2.longitude),
+            },
+            address: r2.address || null,
+            countryName: r2.country_name || null,
+            callingCode: r2.calling_code || null,
+          };
+        })
+      );
     }
 
     // ── 8. Linked Tips ────────────────────────────────────────
     if (all || includes.includes("tips")) {
-      tasks.push(safeTask("tips", async () => {
-        const r = await query(
-          `SELECT
-             dt_link.id, dt_link.tip_id, dt_link.sort_order, dt_link.is_featured,
-             t.slug, t.summary, t.body, t.category, t.trip_phase,
-             t.icon, t.image_url, t.tags, t.checklist, t.is_active
-           FROM destination_tips dt_link
-           INNER JOIN tips t ON t.id = dt_link.tip_id AND t.is_active = true
-           WHERE dt_link.destination_id = $1
-           ORDER BY dt_link.is_featured DESC, dt_link.sort_order ASC`,
-          [destId]
-        );
-        dest.tips = r.rows.map(serializeTipLink);
-      }));
+      tasks.push(
+        safeTask("tips", async () => {
+          const r = await query(
+            `SELECT
+               dt_link.id,
+               dt_link.tip_id,
+               dt_link.sort_order,
+               dt_link.is_featured,
+               t.slug,
+               t.summary,
+               t.body,
+               t.category,
+               t.trip_phase,
+               t.icon,
+               t.image_url,
+               t.tags,
+               t.checklist,
+               t.is_active
+             FROM destination_tips dt_link
+             INNER JOIN tips t ON t.id = dt_link.tip_id AND t.is_active = true
+             WHERE dt_link.destination_id = $1
+             ORDER BY dt_link.is_featured DESC, dt_link.sort_order ASC`,
+            [destId]
+          );
+          dest.tips = r.rows.map(serializeTipLink);
+        })
+      );
     }
 
     // ── 9. Related Destinations ───────────────────────────────
     if (all || includes.includes("related")) {
-      tasks.push(safeTask("related", async () => {
-        const r = await query(
-          `${BASE_SELECT}
-           WHERE d.id != $1 AND d.is_active = true AND d.status = 'published'
-             AND (d.country_id = $2 OR d.category = $3)
-           ORDER BY
-             CASE WHEN d.country_id = $2 AND d.category = $3 THEN 0
-                  WHEN d.category   = $3                      THEN 1
-                  WHEN d.country_id = $2                      THEN 2
-                  ELSE 3 END,
-             d.rating DESC NULLS LAST
-           LIMIT 6`,
-          [destId, row.country_id, row.category]
-        );
-        dest.related = r.rows.map((rr) => serialize(rr));
-      }));
+      tasks.push(
+        safeTask("related", async () => {
+          const r = await query(
+            `${BASE_SELECT}
+             WHERE d.id != $1
+               AND d.is_active = true
+               AND d.status = 'published'
+               AND (d.country_id = $2 OR d.category = $3)
+             ORDER BY
+               CASE
+                 WHEN d.country_id = $2 AND d.category = $3 THEN 0
+                 WHEN d.category   = $3                      THEN 1
+                 WHEN d.country_id = $2                      THEN 2
+                 ELSE 3
+               END,
+               d.rating DESC NULLS LAST
+             LIMIT 6`,
+            [destId, row.country_id, row.category]
+          );
+          dest.related = r.rows.map((rr) => serialize(rr));
+        })
+      );
     }
 
     // ── Run all tasks in parallel ─────────────────────────────
     await Promise.all(tasks);
 
-    // Fallback gallery from images array when no DB gallery rows
+    // Fallback: build gallery from image_urls array if no DB gallery rows
     if (!dest.gallery?.length && dest.images?.length) {
       dest.gallery = dest.images.map((url, i) => ({
-        id:        `img-${i}`,
-        imageUrl:  url,
+        id: `img-${i}`,
+        imageUrl: url,
+        thumbnailUrl: url,
         isPrimary: i === 0,
+        sortOrder: i,
       }));
     }
 
@@ -1376,69 +1571,132 @@ exports.getOne = async (req, res, next) => {
 
 exports.getRelated = async (req, res, next) => {
   try {
-    const { idOrSlug }  = req.params;
+    const idOrSlug = req.params.idOrSlug || req.params.slug || req.params.id;
     const { limit = 6 } = req.query;
 
-    const isNum = /^\d+$/.test(idOrSlug);
-    const col   = isNum ? "id" : "slug";
-    const val   = isNum ? parseInt(idOrSlug) : idOrSlug.toLowerCase();
+    const isNum = /^\d+$/.test(String(idOrSlug));
+    const col = isNum ? "id" : "slug";
+    const val = isNum ? parseInt(idOrSlug) : String(idOrSlug).toLowerCase();
 
     const source = await query(
-      `SELECT id, country_id, category FROM destinations WHERE ${col} = $1`, [val]
+      `SELECT id, country_id, category FROM destinations
+       WHERE ${col} = $1 AND is_active = true`,
+      [val]
     );
     if (!source.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
     const { id, country_id, category } = source.rows[0];
     const result = await query(
       `${BASE_SELECT}
-       WHERE d.id != $1 AND d.is_active = true AND d.status = 'published'
+       WHERE d.id != $1
+         AND d.is_active = true
+         AND d.status = 'published'
          AND (d.country_id = $2 OR d.category = $3)
        ORDER BY
-         CASE WHEN d.country_id = $2 AND d.category = $3 THEN 0
-              WHEN d.category   = $3                      THEN 1
-              WHEN d.country_id = $2                      THEN 2
-              ELSE 3 END,
+         CASE
+           WHEN d.country_id = $2 AND d.category = $3 THEN 0
+           WHEN d.category   = $3                      THEN 1
+           WHEN d.country_id = $2                      THEN 2
+           ELSE 3
+         END,
          d.rating DESC NULLS LAST
        LIMIT $4`,
-      [id, country_id, category, parseInt(limit)]
+      [id, country_id, category, Math.min(parseInt(limit) || 6, 20)]
     );
 
-    res.json({ success: true, data: result.rows.map((r) => serialize(r)) });
+    res.json({
+      success: true,
+      data: result.rows.map((r) => serialize(r)),
+      count: result.rows.length,
+    });
   } catch (err) {
     next(err);
   }
 };
 
 /* ═══════════════════════════════════════════════════════════════
-    ITINERARY CRUD
-    ═══════════════════════════════════════════════════════════════ */
+   ITINERARY CRUD
+   ═══════════════════════════════════════════════════════════════ */
+
+exports.getItinerary = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const result = await query(
+      `SELECT * FROM destination_itineraries
+       WHERE destination_id = $1 AND is_active = true
+       ORDER BY day_number ASC`,
+      [id]
+    ).catch(() => ({ rows: [] }));
+
+    res.json({
+      success: true,
+      data: result.rows.map((it) => ({
+        id: it.id,
+        dayNumber: it.day_number,
+        title: it.title,
+        description: it.description,
+        activities: normalizeArray(it.activities),
+        highlights: normalizeArray(it.highlights),
+        meals: normalizeArray(it.meals),
+        accommodation: it.accommodation,
+        distanceKm: toNumber(it.distance_km),
+        imageUrl: it.image_url,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
 
 exports.addItineraryDay = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { day_number, title, description, activities, highlights, meals,
-            accommodation, distance_km, image_url } = req.body;
+    const {
+      day_number,
+      title,
+      description,
+      activities,
+      highlights,
+      meals,
+      accommodation,
+      distance_km,
+      image_url,
+    } = req.body;
 
-    if (!day_number || !title) {
-      return res.status(400).json({ success: false, error: "day_number and title are required" });
+    if (!title?.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, error: "title is required" });
     }
 
-    const max = await query(
+    const maxRes = await query(
       `SELECT COALESCE(MAX(day_number), 0) AS max FROM destination_itineraries WHERE destination_id = $1`,
       [id]
     ).catch(() => ({ rows: [{ max: 0 }] }));
 
-    const dayNum = parseInt(day_number) || max.rows[0].max + 1;
+    const dayNum = parseInt(day_number) || maxRes.rows[0].max + 1;
 
     const result = await query(
-      `INSERT INTO destination_itineraries (
-        destination_id, day_number, title, description, activities, highlights, meals,
-        accommodation, distance_km, image_url
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [id, dayNum, title, description || null, normalizeArray(activities), normalizeArray(highlights),
-       normalizeArray(meals), accommodation || null, toNumber(distance_km), image_url || null]
+      `INSERT INTO destination_itineraries
+       (destination_id, day_number, title, description, activities, highlights,
+        meals, accommodation, distance_km, image_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+      [
+        id,
+        dayNum,
+        title.trim(),
+        description || null,
+        normalizeArray(activities),
+        normalizeArray(highlights),
+        normalizeArray(meals),
+        accommodation || null,
+        toNumber(distance_km),
+        image_url || null,
+      ]
     );
 
     res.status(201).json({ success: true, data: result.rows[0] });
@@ -1451,13 +1709,16 @@ exports.updateItineraryDay = async (req, res, next) => {
   try {
     const { id, dayId } = req.params;
     const fields = { ...req.body };
-    const keys = Object.keys(fields);
+    const keys = Object.keys(fields).filter((k) => fields[k] !== undefined);
+
     if (!keys.length) {
-      return res.status(400).json({ success: false, error: "No fields to update" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
     }
 
     ["activities", "highlights", "meals"].forEach((f) => {
-      if (fields[f]) fields[f] = normalizeArray(fields[f]);
+      if (fields[f] !== undefined) fields[f] = normalizeArray(fields[f]);
     });
 
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -1470,7 +1731,9 @@ exports.updateItineraryDay = async (req, res, next) => {
       vals
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Itinerary day not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Itinerary day not found" });
     }
     res.json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -1487,7 +1750,9 @@ exports.removeItineraryDay = async (req, res, next) => {
       [dayId, id]
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Itinerary day not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Itinerary day not found" });
     }
     res.json({ success: true, message: "Itinerary day deleted" });
   } catch (err) {
@@ -1496,16 +1761,20 @@ exports.removeItineraryDay = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════
-    PRACTICAL INFO CRUD
-    ═══════════════════════════════════════════════════════════════ */
+   PRACTICAL INFO CRUD
+   ═══════════════════════════════════════════════════════════════ */
 
 exports.getPracticalInfo = async (req, res, next) => {
   try {
     const { id } = req.params;
     const result = await query(
-      `SELECT * FROM destination_practical_info WHERE destination_id = $1`, [id]
+      `SELECT * FROM destination_practical_info WHERE destination_id = $1`,
+      [id]
     ).catch(() => ({ rows: [] }));
-    res.json({ success: true, data: serializePracticalInfo(result.rows[0] || null) });
+    res.json({
+      success: true,
+      data: serializePracticalInfo(result.rows[0] || null),
+    });
   } catch (err) {
     next(err);
   }
@@ -1517,10 +1786,13 @@ exports.upsertPracticalInfo = async (req, res, next) => {
     const b = req.body;
 
     const dest = await query(
-      "SELECT id FROM destinations WHERE id = $1 AND is_active = true", [id]
+      "SELECT id FROM destinations WHERE id = $1 AND is_active = true",
+      [id]
     );
     if (!dest.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
     const result = await query(
@@ -1591,25 +1863,25 @@ exports.upsertPracticalInfo = async (req, res, next) => {
       RETURNING *`,
       [
         id,
-        b.nearest_airport         || null,
-        b.distance_from_airport   || null,
+        b.nearest_airport || null,
+        b.distance_from_airport || null,
         b.drive_time_from_capital || null,
-        b.road_conditions         || null,
+        b.road_conditions || null,
         normalizeArray(b.transport_options),
-        b.border_crossings        || null,
+        b.border_crossings || null,
         normalizeArray(b.vaccinations_required),
         normalizeArray(b.vaccinations_recommended),
-        b.malaria_risk            || null,
-        b.water_safety            || null,
-        b.medical_facilities      || null,
+        b.malaria_risk || null,
+        b.water_safety || null,
+        b.medical_facilities || null,
         b.emergency_contacts ? JSON.stringify(b.emergency_contacts) : "{}",
-        b.safety_rating           || null,
-        b.safety_notes            || null,
+        b.safety_rating || null,
+        b.safety_notes || null,
         normalizeArray(b.permits_required),
-        b.permit_cost             || null,
-        b.booking_lead_time       || null,
-        b.visitor_limits          || null,
-        b.regulations             || null,
+        b.permit_cost || null,
+        b.booking_lead_time || null,
+        b.visitor_limits || null,
+        b.regulations || null,
         toNumber(b.avg_temp_low_c),
         toNumber(b.avg_temp_high_c),
         toNumber(b.rainfall_mm_annual),
@@ -1617,26 +1889,30 @@ exports.upsertPracticalInfo = async (req, res, next) => {
         toNumber(b.uv_index_peak),
         normalizeArray(b.best_months),
         normalizeArray(b.avoid_months),
-        b.climate_notes           || null,
+        b.climate_notes || null,
         normalizeArray(b.packing_essentials),
-        b.clothing_tips           || null,
+        b.clothing_tips || null,
         normalizeArray(b.gear_recommendations),
-        b.budget_range_usd        || null,
-        b.entrance_fee_usd        || null,
-        b.guide_cost_usd          || null,
-        b.meal_cost_range         || null,
-        b.cell_coverage           || null,
+        b.budget_range_usd || null,
+        b.entrance_fee_usd || null,
+        b.guide_cost_usd || null,
+        b.meal_cost_range || null,
+        b.cell_coverage || null,
         toBoolean(b.wifi_available),
-        b.electricity_voltage     || null,
+        b.electricity_voltage || null,
         normalizeArray(b.plug_types),
-        b.currency_tips           || null,
-        b.tipping_culture         || null,
+        b.currency_tips || null,
+        b.tipping_culture || null,
         normalizeArray(b.local_etiquette),
-        b.photography_rules       || null,
+        b.photography_rules || null,
       ]
     );
 
-    res.json({ success: true, message: "Practical info saved", data: serializePracticalInfo(result.rows[0]) });
+    res.json({
+      success: true,
+      message: "Practical info saved",
+      data: serializePracticalInfo(result.rows[0]),
+    });
   } catch (err) {
     next(err);
   }
@@ -1661,7 +1937,11 @@ exports.getDestinationTipsLinked = async (req, res, next) => {
       [id]
     ).catch(() => ({ rows: [] }));
 
-    res.json({ success: true, data: result.rows.map(serializeTipLink), count: result.rows.length });
+    res.json({
+      success: true,
+      data: result.rows.map(serializeTipLink),
+      count: result.rows.length,
+    });
   } catch (err) {
     next(err);
   }
@@ -1669,18 +1949,23 @@ exports.getDestinationTipsLinked = async (req, res, next) => {
 
 exports.linkTip = async (req, res, next) => {
   try {
-    const { id }                              = req.params;
+    const { id } = req.params;
     const { tip_id, sort_order = 0, is_featured = false } = req.body;
 
     if (!tip_id) {
-      return res.status(400).json({ success: false, error: "tip_id is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "tip_id is required" });
     }
 
     const tipCheck = await query(
-      "SELECT id FROM tips WHERE id = $1 AND is_active = true", [tip_id]
+      "SELECT id FROM tips WHERE id = $1 AND is_active = true",
+      [tip_id]
     );
     if (!tipCheck.rows.length) {
-      return res.status(404).json({ success: false, error: "Tip not found or inactive" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Tip not found or inactive" });
     }
 
     const result = await query(
@@ -1708,7 +1993,9 @@ exports.unlinkTip = async (req, res, next) => {
       [id, tipId]
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Tip link not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Tip link not found" });
     }
     res.json({ success: true, message: "Tip unlinked from destination" });
   } catch (err) {
@@ -1722,10 +2009,20 @@ exports.unlinkTip = async (req, res, next) => {
 
 exports.incrementView = async (req, res, next) => {
   try {
-    await query(
-      "UPDATE destinations SET view_count = view_count + 1 WHERE id = $1", [req.params.id]
+    const result = await query(
+      "UPDATE destinations SET view_count = COALESCE(view_count,0) + 1 WHERE id = $1 RETURNING view_count",
+      [req.params.id]
     );
-    res.json({ success: true, message: "View recorded" });
+    if (!result.rows.length) {
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
+    }
+    res.json({
+      success: true,
+      message: "View recorded",
+      viewCount: parseInt(result.rows[0].view_count),
+    });
   } catch (err) {
     next(err);
   }
@@ -1733,20 +2030,25 @@ exports.incrementView = async (req, res, next) => {
 
 exports.incrementWishlist = async (req, res, next) => {
   try {
-    const { id }             = req.params;
+    const { id } = req.params;
     const { action = "add" } = req.body;
-    const inc                = action === "remove" ? -1 : 1;
+    const inc = action === "remove" ? -1 : 1;
 
     const result = await query(
       `UPDATE destinations
-       SET wishlist_count = GREATEST(0, wishlist_count + $2)
+       SET wishlist_count = GREATEST(0, COALESCE(wishlist_count, 0) + $2)
        WHERE id = $1 RETURNING wishlist_count`,
       [id, inc]
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
-    res.json({ success: true, wishlistCount: parseInt(result.rows[0].wishlist_count) });
+    res.json({
+      success: true,
+      wishlistCount: parseInt(result.rows[0].wishlist_count),
+    });
   } catch (err) {
     next(err);
   }
@@ -1754,11 +2056,15 @@ exports.incrementWishlist = async (req, res, next) => {
 
 exports.incrementShare = async (req, res, next) => {
   try {
-    await query(
-      "UPDATE destinations SET share_count = COALESCE(share_count,0) + 1 WHERE id = $1",
+    const result = await query(
+      "UPDATE destinations SET share_count = COALESCE(share_count,0) + 1 WHERE id = $1 RETURNING share_count",
       [req.params.id]
-    ).catch(() => {});
-    res.json({ success: true, message: "Share recorded" });
+    );
+    res.json({
+      success: true,
+      message: "Share recorded",
+      shareCount: parseInt(result.rows[0]?.share_count || 0),
+    });
   } catch (err) {
     next(err);
   }
@@ -1770,66 +2076,47 @@ exports.incrementShare = async (req, res, next) => {
 
 exports.getReviews = async (req, res, next) => {
   try {
-    const { id }                              = req.params;
+    const { id } = req.params;
     const { page = 1, limit = 10, sort = "-created" } = req.query;
 
-    const countRes = await query(
-      `SELECT COUNT(*) FROM destination_reviews
-       WHERE destination_id = $1 AND status = 'approved'`, [id]
-    ).catch(() => ({ rows: [{ count: "0" }] }));
-
-    const total      = parseInt(countRes.rows[0].count);
-    const pagination = paginate(total, page, limit);
-
     const sortMap = {
-      "created":  "created_at ASC",
+      created: "created_at ASC",
       "-created": "created_at DESC",
-      "rating":   "overall_rating DESC",
-      "helpful":  "helpful_count DESC",
+      rating: "overall_rating DESC",
+      helpful: "helpful_count DESC",
     };
+    const orderBy = sortMap[sort] || sortMap["-created"];
 
-    const result = await query(
-      `SELECT * FROM destination_reviews
-       WHERE destination_id = $1 AND status = 'approved'
-       ORDER BY is_featured DESC, ${sortMap[sort] || sortMap["-created"]}
-       LIMIT $2 OFFSET $3`,
-      [id, pagination.limit, pagination.offset]
-    ).catch(() => ({ rows: [] }));
+    const [countRes, reviewRes, aggRes] = await Promise.all([
+      query(
+        `SELECT COUNT(*) FROM destination_reviews
+         WHERE destination_id = $1 AND status = 'approved'`,
+        [id]
+      ).catch(() => ({ rows: [{ count: "0" }] })),
+      query(
+        `SELECT * FROM destination_reviews
+         WHERE destination_id = $1 AND status = 'approved'
+         ORDER BY is_featured DESC, ${orderBy}
+         LIMIT $2 OFFSET $3`,
+        [
+          id,
+          Math.min(parseInt(limit) || 10, 50),
+          (Math.max(parseInt(page) || 1, 1) - 1) * Math.min(parseInt(limit) || 10, 50),
+        ]
+      ).catch(() => ({ rows: [] })),
+      query(REVIEW_AGGREGATE_SQL, [id]).catch(() => ({
+        rows: [{}],
+      })),
+    ]);
 
-    const aggRes = await query(
-      `SELECT
-         AVG(overall_rating)                                   AS avg_rating,
-         COUNT(*)                                              AS total_reviews,
-         COUNT(*) FILTER (WHERE overall_rating >= 4.5)        AS five_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 3.5
-                            AND overall_rating  < 4.5)        AS four_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 2.5
-                            AND overall_rating  < 3.5)        AS three_star,
-         COUNT(*) FILTER (WHERE overall_rating >= 1.5
-                            AND overall_rating  < 2.5)        AS two_star,
-         COUNT(*) FILTER (WHERE overall_rating  < 1.5)        AS one_star
-       FROM destination_reviews
-       WHERE destination_id = $1 AND status = 'approved'`,
-      [id]
-    ).catch(() => ({ rows: [{}] }));
-
-    const agg = aggRes.rows[0] || {};
+    const total = parseInt(countRes.rows[0].count);
+    const pagination = paginate(total, page, limit);
 
     res.json({
       success: true,
-      data:    result.rows.map(serializeReview),
+      data: reviewRes.rows.map(serializeReview),
       pagination,
-      aggregate: {
-        avgRating:    toNumber(agg.avg_rating, 0),
-        totalReviews: parseInt(agg.total_reviews) || 0,
-        distribution: {
-          fiveStar:  parseInt(agg.five_star)  || 0,
-          fourStar:  parseInt(agg.four_star)  || 0,
-          threeStar: parseInt(agg.three_star) || 0,
-          twoStar:   parseInt(agg.two_star)   || 0,
-          oneStar:   parseInt(agg.one_star)   || 0,
-        },
-      },
+      aggregate: serializeAggregate(aggRes.rows[0]),
     });
   } catch (err) {
     next(err);
@@ -1839,25 +2126,45 @@ exports.getReviews = async (req, res, next) => {
 exports.addReview = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const { reviewer_name, reviewer_country, title, content, overall_rating, trip_date, trip_type } = req.body;
+    const {
+      reviewer_name,
+      reviewer_country,
+      title,
+      content,
+      overall_rating,
+      trip_date,
+      trip_type,
+    } = req.body;
 
-    if (!content || !overall_rating) {
-      return res.status(400).json({ success: false, error: "Content and rating are required" });
+    if (!content?.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, error: "content is required" });
+    }
+    if (!overall_rating) {
+      return res
+        .status(400)
+        .json({ success: false, error: "overall_rating is required" });
     }
 
     const rating = parseFloat(overall_rating);
-    if (rating < 1 || rating > 5) {
-      return res.status(400).json({ success: false, error: "Rating must be between 1 and 5" });
+    if (!Number.isFinite(rating) || rating < 1 || rating > 5) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Rating must be between 1 and 5" });
     }
 
     const dest = await query(
-      "SELECT id FROM destinations WHERE id = $1 AND is_active = true", [id]
+      "SELECT id FROM destinations WHERE id = $1 AND is_active = true",
+      [id]
     );
     if (!dest.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
-    const images = req.files
+    const images = req.files?.length
       ? req.files.map((f) => getUploadedFileUrl(f))
       : normalizeArray(req.body.images);
 
@@ -1869,14 +2176,14 @@ exports.addReview = async (req, res, next) => {
        RETURNING *`,
       [
         id,
-        req.user?.id      || null,
-        reviewer_name     || "Anonymous",
-        reviewer_country  || null,
-        title             || null,
-        content,
+        req.user?.id || null,
+        reviewer_name?.trim() || "Anonymous",
+        reviewer_country || null,
+        title?.trim() || null,
+        content.trim(),
         rating,
-        trip_date         || null,
-        trip_type         || null,
+        trip_date || null,
+        trip_type || null,
         images,
       ]
     );
@@ -1884,7 +2191,7 @@ exports.addReview = async (req, res, next) => {
     res.status(201).json({
       success: true,
       message: "Review submitted. It will be visible after moderation.",
-      data:    serializeReview(result.rows[0]),
+      data: serializeReview(result.rows[0]),
     });
   } catch (err) {
     next(err);
@@ -1896,14 +2203,19 @@ exports.markReviewHelpful = async (req, res, next) => {
     const { reviewId } = req.params;
     const result = await query(
       `UPDATE destination_reviews
-       SET helpful_count = helpful_count + 1
+       SET helpful_count = COALESCE(helpful_count, 0) + 1
        WHERE id = $1 RETURNING helpful_count`,
       [reviewId]
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Review not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Review not found" });
     }
-    res.json({ success: true, helpfulCount: parseInt(result.rows[0].helpful_count) });
+    res.json({
+      success: true,
+      helpfulCount: parseInt(result.rows[0].helpful_count),
+    });
   } catch (err) {
     next(err);
   }
@@ -1923,18 +2235,7 @@ exports.getImages = async (req, res, next) => {
       [id]
     ).catch(() => ({ rows: [] }));
 
-    res.json({
-      success: true,
-      data: result.rows.map((r) => ({
-        id:           r.id,
-        imageUrl:     r.image_url,
-        thumbnailUrl: r.thumbnail_url,
-        caption:      r.caption,
-        altText:      r.alt_text,
-        isPrimary:    toBoolean(r.is_primary),
-        sortOrder:    r.sort_order,
-      })),
-    });
+    res.json({ success: true, data: result.rows.map(serializeImage) });
   } catch (err) {
     next(err);
   }
@@ -1944,62 +2245,71 @@ exports.addImages = async (req, res, next) => {
   try {
     const { id } = req.params;
 
-    const dest = await query("SELECT id FROM destinations WHERE id = $1", [id]);
+    const dest = await query(
+      "SELECT id FROM destinations WHERE id = $1 AND is_active = true",
+      [id]
+    );
     if (!dest.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
     if (!req.files?.length && !req.body.image_urls) {
-      return res.status(400).json({ success: false, error: "No images provided" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No images provided" });
     }
 
     const maxOrder = await query(
       `SELECT COALESCE(MAX(sort_order), 0) AS max
-       FROM destination_images WHERE destination_id = $1`, [id]
+       FROM destination_images WHERE destination_id = $1`,
+      [id]
     ).catch(() => ({ rows: [{ max: 0 }] }));
 
-    let order     = maxOrder.rows[0].max;
-    const images  = [];
-    const urls    = [];
+    let order = parseInt(maxOrder.rows[0].max) || 0;
+    const insertedImages = [];
+    const urls = [];
+
+    const insertImage = async (url) => {
+      order++;
+      const r = await query(
+        `INSERT INTO destination_images
+         (destination_id, image_url, sort_order, caption, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
+        [id, url, order, req.body.caption || null, req.user?.id || null]
+      );
+      insertedImages.push(r.rows[0]);
+      urls.push(url);
+    };
 
     if (req.files?.length) {
       for (const file of req.files) {
-        order++;
-        const url    = getUploadedFileUrl(file);
-        const result = await query(
-          `INSERT INTO destination_images
-           (destination_id, image_url, sort_order, caption, uploaded_by)
-           VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-          [id, url, order, req.body.caption || null, req.user?.id || null]
-        );
-        images.push(result.rows[0]);
-        urls.push(url);
+        await insertImage(getUploadedFileUrl(file));
       }
     }
 
     if (req.body.image_urls) {
       for (const url of normalizeArray(req.body.image_urls)) {
-        order++;
-        const result = await query(
-          `INSERT INTO destination_images
-           (destination_id, image_url, sort_order, caption, uploaded_by)
-           VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-          [id, url, order, req.body.caption || null, req.user?.id || null]
-        );
-        images.push(result.rows[0]);
-        urls.push(url);
+        await insertImage(url);
       }
     }
 
-    await query(
-      `UPDATE destinations
-       SET image_urls = COALESCE(image_urls, '{}'::TEXT[]) || $2::TEXT[],
-           image_url  = COALESCE(image_url, $3),
-           updated_at = NOW()
-       WHERE id = $1`,
-      [id, urls, urls[0]]
-    );
+    if (urls.length) {
+      await query(
+        `UPDATE destinations
+         SET image_urls = COALESCE(image_urls, '{}'::TEXT[]) || $2::TEXT[],
+             image_url  = COALESCE(image_url, $3),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [id, urls, urls[0]]
+      );
+    }
 
-    res.status(201).json({ success: true, message: `${images.length} image(s) added`, data: images });
+    res.status(201).json({
+      success: true,
+      message: `${insertedImages.length} image(s) added`,
+      data: insertedImages.map(serializeImage),
+    });
   } catch (err) {
     next(err);
   }
@@ -2007,25 +2317,28 @@ exports.addImages = async (req, res, next) => {
 
 exports.updateImage = async (req, res, next) => {
   try {
-    const { id, imageId }                                    = req.params;
-    const { caption, alt_text, is_primary, sort_order }     = req.body;
+    const { id, imageId } = req.params;
+    const { caption, alt_text, is_primary, sort_order } = req.body;
 
-    if (toBoolean(is_primary)) {
+    if (is_primary !== undefined && toBoolean(is_primary)) {
       await query(
         `UPDATE destination_images SET is_primary = false
-         WHERE destination_id = $1 AND id != $2`, [id, imageId]
+         WHERE destination_id = $1 AND id != $2`,
+        [id, imageId]
       );
     }
 
     const fields = {};
-    if (caption    !== undefined) fields.caption    = caption;
-    if (alt_text   !== undefined) fields.alt_text   = alt_text;
+    if (caption !== undefined) fields.caption = caption;
+    if (alt_text !== undefined) fields.alt_text = alt_text;
     if (is_primary !== undefined) fields.is_primary = toBoolean(is_primary);
     if (sort_order !== undefined) fields.sort_order = toNumber(sort_order);
 
     const keys = Object.keys(fields);
     if (!keys.length) {
-      return res.status(400).json({ success: false, error: "No fields to update" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
     }
 
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -2043,12 +2356,12 @@ exports.updateImage = async (req, res, next) => {
 
     if (toBoolean(is_primary)) {
       await query(
-        "UPDATE destinations SET image_url = $2 WHERE id = $1",
+        "UPDATE destinations SET image_url = $2, updated_at = NOW() WHERE id = $1",
         [id, result.rows[0].image_url]
       );
     }
 
-    res.json({ success: true, data: result.rows[0] });
+    res.json({ success: true, data: serializeImage(result.rows[0]) });
   } catch (err) {
     next(err);
   }
@@ -2068,9 +2381,11 @@ exports.removeImage = async (req, res, next) => {
     }
 
     const deleted = result.rows[0];
+
     await query(
       `UPDATE destinations
-       SET image_urls = array_remove(COALESCE(image_urls, '{}'::TEXT[]), $2)
+       SET image_urls = array_remove(COALESCE(image_urls, '{}'::TEXT[]), $2),
+           updated_at = NOW()
        WHERE id = $1`,
       [id, deleted.image_url]
     );
@@ -2085,8 +2400,9 @@ exports.removeImage = async (req, res, next) => {
          ) RETURNING image_url`,
         [id]
       ).catch(() => ({ rows: [] }));
+
       await query(
-        "UPDATE destinations SET image_url = $2 WHERE id = $1",
+        "UPDATE destinations SET image_url = $2, updated_at = NOW() WHERE id = $1",
         [id, newPrimary.rows[0]?.image_url || null]
       );
     }
@@ -2099,11 +2415,13 @@ exports.removeImage = async (req, res, next) => {
 
 exports.reorderImages = async (req, res, next) => {
   try {
-    const { id }       = req.params;
+    const { id } = req.params;
     const { imageIds } = req.body;
 
     if (!Array.isArray(imageIds) || !imageIds.length) {
-      return res.status(400).json({ success: false, error: "imageIds array required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "imageIds array required" });
     }
 
     await Promise.all(
@@ -2118,11 +2436,13 @@ exports.reorderImages = async (req, res, next) => {
     const ordered = await query(
       `SELECT image_url FROM destination_images
        WHERE destination_id = $1 AND is_active = true
-       ORDER BY sort_order ASC`, [id]
+       ORDER BY sort_order ASC`,
+      [id]
     );
     const urls = ordered.rows.map((r) => r.image_url);
+
     await query(
-      "UPDATE destinations SET image_urls = $2, image_url = $3 WHERE id = $1",
+      "UPDATE destinations SET image_urls = $2, image_url = $3, updated_at = NOW() WHERE id = $1",
       [id, urls, urls[0] || null]
     );
 
@@ -2142,17 +2462,17 @@ exports.getFaqs = async (req, res, next) => {
     const result = await query(
       `SELECT * FROM destination_faqs
        WHERE destination_id = $1 AND is_active = true
-       ORDER BY sort_order ASC`,
+       ORDER BY sort_order ASC, id ASC`,
       [id]
     ).catch(() => ({ rows: [] }));
 
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        id:           r.id,
-        question:     r.question,
-        answer:       r.answer,
-        category:     r.category,
+        id: r.id,
+        question: r.question,
+        answer: r.answer,
+        category: r.category,
         helpfulCount: toNumber(r.helpful_count, 0),
       })),
     });
@@ -2163,18 +2483,26 @@ exports.getFaqs = async (req, res, next) => {
 
 exports.addFaq = async (req, res, next) => {
   try {
-    const { id }                               = req.params;
+    const { id } = req.params;
     const { question, answer, category, sort_order } = req.body;
 
-    if (!question || !answer) {
-      return res.status(400).json({ success: false, error: "question and answer are required" });
+    if (!question?.trim() || !answer?.trim()) {
+      return res
+        .status(400)
+        .json({ success: false, error: "question and answer are required" });
     }
 
     const result = await query(
       `INSERT INTO destination_faqs
        (destination_id, question, answer, category, sort_order)
        VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-      [id, question, answer, category || null, toNumber(sort_order, 0)]
+      [
+        id,
+        question.trim(),
+        answer.trim(),
+        category || null,
+        toNumber(sort_order, 0),
+      ]
     );
     res.status(201).json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -2186,9 +2514,12 @@ exports.updateFaq = async (req, res, next) => {
   try {
     const { id, faqId } = req.params;
     const fields = { ...req.body };
-    const keys   = Object.keys(fields);
+    const keys = Object.keys(fields).filter((k) => fields[k] !== undefined);
+
     if (!keys.length) {
-      return res.status(400).json({ success: false, error: "No fields to update" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
     }
 
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -2235,14 +2566,18 @@ exports.getDestinationTags = async (req, res, next) => {
     const { id } = req.params;
     const result = await query(
       `SELECT * FROM destination_tags
-       WHERE destination_id = $1 ORDER BY tag_name ASC`,
+       WHERE destination_id = $1
+       ORDER BY tag_category ASC, tag_name ASC`,
       [id]
     ).catch(() => ({ rows: [] }));
 
     res.json({
       success: true,
       data: result.rows.map((r) => ({
-        id: r.id, name: r.tag_name, slug: r.tag_slug, category: r.tag_category,
+        id: r.id,
+        name: r.tag_name,
+        slug: r.tag_slug,
+        category: r.tag_category,
       })),
     });
   } catch (err) {
@@ -2252,15 +2587,17 @@ exports.getDestinationTags = async (req, res, next) => {
 
 exports.addDestinationTag = async (req, res, next) => {
   try {
-    const { id }                     = req.params;
+    const { id } = req.params;
     const { tag_name, tag_category } = req.body;
 
     if (!tag_name?.trim()) {
-      return res.status(400).json({ success: false, error: "tag_name is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "tag_name is required" });
     }
 
-    const tag_slug = slugify(tag_name);
-    const result   = await query(
+    const tag_slug = slugify(tag_name.trim());
+    const result = await query(
       `INSERT INTO destination_tags (destination_id, tag_name, tag_slug, tag_category)
        VALUES ($1,$2,$3,$4)
        ON CONFLICT (destination_id, tag_slug) DO NOTHING
@@ -2269,7 +2606,9 @@ exports.addDestinationTag = async (req, res, next) => {
     );
 
     if (!result.rows.length) {
-      return res.status(409).json({ success: false, error: "Tag already exists" });
+      return res
+        .status(409)
+        .json({ success: false, error: "Tag already exists" });
     }
     res.status(201).json({ success: true, data: result.rows[0] });
   } catch (err) {
@@ -2303,28 +2642,35 @@ exports.create = async (req, res, next) => {
     const data = req.body;
 
     if (!data.name?.trim()) {
-      return res.status(400).json({ success: false, error: "Name is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Name is required" });
     }
     if (!data.country_id) {
-      return res.status(400).json({ success: false, error: "country_id is required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "country_id is required" });
     }
 
     const country = await resolveCountry(data.country_id);
     if (!country) {
-      return res.status(400).json({ success: false, error: "Invalid country_id" });
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid country_id" });
     }
 
-    const slug = await createUniqueSlug(data.name);
+    const slug = await createUniqueSlug(data.name.trim());
 
     const uploadedImg = req.file ? getUploadedFileUrl(req.file) : null;
-    let imageUrls     = normalizeArray(data.image_urls);
-    if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter((u) => u !== uploadedImg)];
+    let imageUrls = normalizeArray(data.image_urls);
+    if (uploadedImg)
+      imageUrls = [uploadedImg, ...imageUrls.filter((u) => u !== uploadedImg)];
     if (!imageUrls.length && data.image_url) imageUrls = [data.image_url];
     const mainImg = imageUrls[0] || null;
 
-    const status      = data.status    || "draft";
-    const publishedAt = status         === "published" ? new Date() : null;
-    const featuredAt  = toBoolean(data.is_featured) ? new Date() : null;
+    const status = data.status || "draft";
+    const publishedAt = status === "published" ? new Date() : null;
+    const featuredAt = toBoolean(data.is_featured) ? new Date() : null;
 
     const result = await query(
       `INSERT INTO destinations (
@@ -2350,69 +2696,77 @@ exports.create = async (req, res, next) => {
         country.id,
         data.name.trim(),
         slug,
-        data.tagline            || null,
-        data.short_description  || null,
-        data.description        || null,
-        data.overview           || null,
-        data.what_to_expect     || null,
+        data.tagline || null,
+        data.short_description || null,
+        data.description || null,
+        data.overview || null,
+        data.what_to_expect || null,
         data.best_time_to_visit || country.best_time_to_visit || null,
-        data.getting_there      || null,
-        data.local_tips         || null,
-        data.safety_info        || null,
-        data.category           || "safari",
-        data.difficulty         || "moderate",
-        data.destination_type   || null,
+        data.getting_there || null,
+        data.local_tips || null,
+        data.safety_info || null,
+        data.category || "safari",
+        data.difficulty || "moderate",
+        data.destination_type || null,
         toNumber(data.latitude),
         toNumber(data.longitude),
         toNumber(data.altitude_meters),
-        data.address            || null,
-        data.region             || country.region  || null,
-        data.nearest_city       || country.capital || null,
-        data.nearest_airport    || null,
+        data.address || null,
+        data.region || country.region || null,
+        data.nearest_city || country.capital || null,
+        data.nearest_airport || null,
         toNumber(data.distance_from_airport_km),
         mainImg,
         imageUrls,
-        data.hero_image         || mainImg,
-        data.thumbnail_url      || mainImg,
-        data.video_url          || null,
-        data.virtual_tour_url   || null,
+        data.hero_image || mainImg,
+        data.thumbnail_url || mainImg,
+        data.video_url || null,
+        data.virtual_tour_url || null,
         toNumber(data.duration_days),
         toNumber(data.duration_nights),
-        formatDuration(toNumber(data.duration_days), toNumber(data.duration_nights)),
+        formatDuration(
+          toNumber(data.duration_days),
+          toNumber(data.duration_nights)
+        ),
         toNumber(data.min_group_size, 1),
         toNumber(data.max_group_size),
         toNumber(data.min_age),
-        data.fitness_level      || null,
+        data.fitness_level || null,
         normalizeArray(data.highlights),
         normalizeArray(data.activities),
         normalizeArray(data.wildlife),
-        data.entrance_fee       || null,
-        data.operating_hours    || null,
+        data.entrance_fee || null,
+        data.operating_hours || null,
         status,
         toBoolean(data.is_featured),
         toBoolean(data.is_popular),
         toBoolean(data.is_new),
         toBoolean(data.is_eco_friendly),
         toBoolean(data.is_family_friendly),
-        data.meta_title         || data.name.trim(),
-        data.meta_description   || data.short_description || null,
+        data.meta_title || data.name.trim(),
+        data.meta_description || data.short_description || null,
         publishedAt,
         featuredAt,
-        req.user?.id            || null,
+        req.user?.id || null,
       ]
     );
 
     await syncCountryDestinationCount(country.id);
 
-    const full = await query(`${BASE_SELECT} WHERE d.id = $1`, [result.rows[0].id]);
+    const full = await query(`${BASE_SELECT} WHERE d.id = $1`, [
+      result.rows[0].id,
+    ]);
     res.status(201).json({
       success: true,
       message: "Destination created",
-      data:    serialize(full.rows[0]),
+      data: serialize(full.rows[0]),
     });
   } catch (err) {
     if (err.code === "23505") {
-      return res.status(409).json({ success: false, error: "Destination with this name already exists" });
+      return res.status(409).json({
+        success: false,
+        error: "Destination with this name already exists",
+      });
     }
     next(err);
   }
@@ -2421,70 +2775,97 @@ exports.create = async (req, res, next) => {
 exports.update = async (req, res, next) => {
   try {
     const { id } = req.params;
-    const data   = req.body;
+    const data = req.body;
 
-    const existing = await query("SELECT * FROM destinations WHERE id = $1", [id]);
+    const existing = await query(
+      "SELECT * FROM destinations WHERE id = $1",
+      [id]
+    );
     if (!existing.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
     const current = existing.rows[0];
-    const fields  = { ...data };
+    const fields = { ...data };
 
     // Never allow pricing through update
     delete fields.price;
     delete fields.prices;
+    delete fields.id;
+    delete fields.created_at;
+    delete fields.slug; // Prevent direct slug updates — use name change instead
 
-    if (fields.name && fields.name !== current.name) {
+    if (fields.name && fields.name.trim() !== current.name) {
+      fields.name = fields.name.trim();
       fields.slug = await createUniqueSlug(fields.name, id);
+    } else {
+      delete fields.name;
     }
 
-    if (fields.country_id && fields.country_id !== current.country_id) {
+    if (
+      fields.country_id &&
+      parseInt(fields.country_id) !== parseInt(current.country_id)
+    ) {
       const newCountry = await resolveCountry(fields.country_id);
       if (!newCountry) {
-        return res.status(400).json({ success: false, error: "Invalid country_id" });
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid country_id" });
       }
       fields.country_id = newCountry.id;
     }
 
     if (req.file) {
-      const url          = getUploadedFileUrl(req.file);
-      fields.image_url   = url;
-      const existingUrls = normalizeArray(fields.image_urls || current.image_urls);
-      fields.image_urls  = [url, ...existingUrls.filter((u) => u !== url)];
+      const url = getUploadedFileUrl(req.file);
+      fields.image_url = url;
+      const existingUrls = normalizeArray(data.image_urls || current.image_urls);
+      fields.image_urls = [url, ...existingUrls.filter((u) => u !== url)];
     } else if (fields.image_urls) {
       fields.image_urls = normalizeArray(fields.image_urls);
-      fields.image_url  = fields.image_urls[0] || current.image_url;
+      if (fields.image_urls.length) {
+        fields.image_url = fields.image_urls[0];
+      }
     }
 
     ["highlights", "activities", "wildlife"].forEach((f) => {
-      if (fields[f]) fields[f] = normalizeArray(fields[f]);
+      if (fields[f] !== undefined) fields[f] = normalizeArray(fields[f]);
     });
 
-    if (fields.duration_days || fields.duration_nights) {
-      fields.duration_display = formatDuration(
-        toNumber(fields.duration_days   ?? current.duration_days),
-        toNumber(fields.duration_nights ?? current.duration_nights)
-      );
+    const newDays = toNumber(fields.duration_days ?? current.duration_days);
+    const newNights = toNumber(
+      fields.duration_nights ?? current.duration_nights
+    );
+    if (fields.duration_days !== undefined || fields.duration_nights !== undefined) {
+      fields.duration_display = formatDuration(newDays, newNights);
     }
 
     if (fields.status === "published" && current.status !== "published") {
       fields.published_at = new Date();
     }
 
-    if (fields.is_featured === true && !current.is_featured) {
-      fields.featured_at = new Date();
-    } else if (fields.is_featured === false) {
+    if (fields.is_featured === true || fields.is_featured === "true") {
+      fields.is_featured = true;
+      if (!current.is_featured) fields.featured_at = new Date();
+    } else if (
+      fields.is_featured === false ||
+      fields.is_featured === "false"
+    ) {
+      fields.is_featured = false;
       fields.featured_at = null;
     }
 
+    // Clean undefined fields
     Object.keys(fields).forEach((k) => {
       if (fields[k] === undefined) delete fields[k];
     });
 
     const keys = Object.keys(fields);
     if (!keys.length) {
-      return res.status(400).json({ success: false, error: "No fields to update" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No fields to update" });
     }
 
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
@@ -2496,16 +2877,25 @@ exports.update = async (req, res, next) => {
       vals
     );
 
-    if (fields.country_id && fields.country_id !== current.country_id) {
+    if (
+      fields.country_id &&
+      parseInt(fields.country_id) !== parseInt(current.country_id)
+    ) {
       await syncCountryDestinationCount(current.country_id);
       await syncCountryDestinationCount(fields.country_id);
     }
 
     const full = await query(`${BASE_SELECT} WHERE d.id = $1`, [id]);
-    res.json({ success: true, message: "Destination updated", data: serialize(full.rows[0]) });
+    res.json({
+      success: true,
+      message: "Destination updated",
+      data: serialize(full.rows[0]),
+    });
   } catch (err) {
     if (err.code === "23505") {
-      return res.status(409).json({ success: false, error: "Name/slug already exists" });
+      return res
+        .status(409)
+        .json({ success: false, error: "Name/slug already exists" });
     }
     next(err);
   }
@@ -2513,14 +2903,17 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const { id }               = req.params;
+    const { id } = req.params;
     const { permanent = false } = req.query;
 
     const existing = await query(
-      "SELECT id, name, slug, country_id FROM destinations WHERE id = $1", [id]
+      "SELECT id, name, slug, country_id FROM destinations WHERE id = $1",
+      [id]
     );
     if (!existing.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
 
     const { country_id, name, slug } = existing.rows[0];
@@ -2531,7 +2924,8 @@ exports.remove = async (req, res, next) => {
       await query(
         `UPDATE destinations
          SET is_active = false, status = 'archived', updated_at = NOW()
-         WHERE id = $1`, [id]
+         WHERE id = $1`,
+        [id]
       );
     }
 
@@ -2539,8 +2933,10 @@ exports.remove = async (req, res, next) => {
 
     res.json({
       success: true,
-      message: toBoolean(permanent) ? "Destination permanently deleted" : "Destination archived",
-      data:    { id: parseInt(id), name, slug },
+      message: toBoolean(permanent)
+        ? "Destination permanently deleted"
+        : "Destination archived",
+      data: { id: parseInt(id), name, slug },
     });
   } catch (err) {
     next(err);
@@ -2557,39 +2953,15 @@ exports.restore = async (req, res, next) => {
       [id]
     );
     if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: "Destination not found" });
+      return res
+        .status(404)
+        .json({ success: false, error: "Destination not found" });
     }
     await syncCountryDestinationCount(result.rows[0].country_id);
-    res.json({ success: true, message: "Destination restored", data: serialize(result.rows[0]) });
-  } catch (err) {
-    next(err);
-  }
-};
-
-exports.getItinerary = async (req, res, next) => {
-  try {
-    const { id } = req.params;
-    const result = await query(
-      `SELECT * FROM destination_itineraries
-       WHERE destination_id = $1 AND is_active = true
-       ORDER BY day_number ASC`,
-      [id]
-    ).catch(() => ({ rows: [] }));
-
     res.json({
       success: true,
-      data: result.rows.map((it) => ({
-        id:            it.id,
-        dayNumber:     it.day_number,
-        title:         it.title,
-        description:   it.description,
-        activities:    it.activities || [],
-        highlights:    it.highlights || [],
-        meals:         it.meals      || [],
-        accommodation: it.accommodation,
-        distanceKm:    toNumber(it.distance_km),
-        imageUrl:      it.image_url,
-      })),
+      message: "Destination restored",
+      data: serialize(result.rows[0]),
     });
   } catch (err) {
     next(err);
@@ -2601,45 +2973,72 @@ exports.bulkUpdate = async (req, res, next) => {
     const { ids, updates } = req.body;
 
     if (!Array.isArray(ids) || !ids.length) {
-      return res.status(400).json({ success: false, error: "ids array required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "ids array required" });
     }
     if (!updates || !Object.keys(updates).length) {
-      return res.status(400).json({ success: false, error: "updates object required" });
+      return res
+        .status(400)
+        .json({ success: false, error: "updates object required" });
     }
 
     const allowed = [
-      "status", "is_active", "is_featured", "is_popular", "is_new",
-      "is_eco_friendly", "is_family_friendly", "category", "difficulty",
+      "status",
+      "is_active",
+      "is_featured",
+      "is_popular",
+      "is_new",
+      "is_eco_friendly",
+      "is_family_friendly",
+      "category",
+      "difficulty",
     ];
+
     const fields = {};
     allowed.forEach((f) => {
       if (updates[f] !== undefined) fields[f] = updates[f];
     });
 
     if (!Object.keys(fields).length) {
-      return res.status(400).json({ success: false, error: "No valid fields" });
+      return res
+        .status(400)
+        .json({ success: false, error: "No valid fields to update" });
     }
 
-    if (fields.is_featured === true)   fields.featured_at  = new Date();
-    if (fields.is_featured === false)  fields.featured_at  = null;
-    if (fields.status === "published") fields.published_at = new Date();
+    if (fields.is_featured === true || fields.is_featured === "true") {
+      fields.is_featured = true;
+      fields.featured_at = new Date();
+    }
+    if (fields.is_featured === false || fields.is_featured === "false") {
+      fields.is_featured = false;
+      fields.featured_at = null;
+    }
+    if (fields.status === "published") {
+      fields.published_at = new Date();
+    }
     fields.updated_at = new Date();
 
-    const keys         = Object.keys(fields);
-    const sets         = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
-    const placeholders = ids.map((_, i) => `$${keys.length + i + 1}`).join(", ");
+    const keys = Object.keys(fields);
+    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(", ");
+    const safeIds = ids
+      .map((id) => parseInt(id))
+      .filter(Number.isFinite);
+    const placeholders = safeIds
+      .map((_, i) => `$${keys.length + i + 1}`)
+      .join(", ");
 
     const result = await query(
       `UPDATE destinations SET ${sets}
        WHERE id IN (${placeholders})
-       RETURNING id, name, slug`,
-      [...keys.map((k) => fields[k]), ...ids]
+       RETURNING id, name, slug, status, is_active, is_featured`,
+      [...keys.map((k) => fields[k]), ...safeIds]
     );
 
     res.json({
       success: true,
-      message: `${result.rows.length} destinations updated`,
-      data:    result.rows,
+      message: `${result.rows.length} destination(s) updated`,
+      data: result.rows,
     });
   } catch (err) {
     next(err);
