@@ -47,6 +47,7 @@ router.get("/stats", async (req, res) => {
 router.post("/register",    authLimiter,   auth.register);
 router.post("/login",       authLimiter,   auth.login);
 router.post("/verify-code", verifyLimiter, auth.verifyCode);
+router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
 
@@ -54,7 +55,13 @@ router.post("/check-email",                auth.checkEmail);
 // PUBLIC — Social Auth
 // ═══════════════════════════════════════════════════════════════
 router.post("/google", authLimiter, auth.googleAuth);
+router.post("/google/signin", authLimiter, auth.googleAuth);
+router.post("/google/signup-init", authLimiter, auth.googleAuth);
+router.post("/google/signup-complete", authLimiter, auth.completeGoogleSignUp);
 router.post("/github", authLimiter, auth.githubAuth);
+router.get("/github/signin", authLimiter, auth.githubSignInInit);
+router.get("/github/signup", authLimiter, auth.githubSignUpInit);
+router.get("/github/callback", authLimiter, auth.githubCallback);
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Token refresh
@@ -66,6 +73,7 @@ router.post("/refresh-token", auth.refreshToken);
 // MUST be before /:id wildcard
 // ═══════════════════════════════════════════════════════════════
 router.get("/me",        protect, auth.getMe);
+router.get("/profile",   protect, auth.getMe);
 router.put("/profile",   protect, auth.updateProfile);
 router.post("/logout",   protect, auth.logout);
 router.delete("/me",     protect, auth.deleteAccount);

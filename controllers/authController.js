@@ -790,7 +790,7 @@ exports.checkEmail = async (req, res) => {
 
 exports.googleAuth = async (req, res) => {
   try {
-    const { credential, phone, bio, avatar } = req.body;
+    const { credential, mode, phone, bio, avatar } = req.body;
 
     if (!credential || !credential.trim())
       return res.status(400).json({ success: false, message: "Google credential is required" });
@@ -834,6 +834,19 @@ exports.googleAuth = async (req, res) => {
     const email      = payload.email.toLowerCase();
     const providerId = String(payload.sub).trim();
     const name       = payload.name || email.split("@")[0] || "User";
+
+    // ── SIGNUP-INIT MODE: Return profile only, don't create user yet ──
+    if (mode === "signup") {
+      return res.json({
+        success: true,
+        profile: {
+          email: email,
+          name: name,
+          picture: payload.picture,
+          googleId: providerId,
+        },
+      });
+    }
 
     // ── Check if re-verification is required (existing user, login_counter >= 2) ──
     const existingResult = await query(
@@ -1002,6 +1015,229 @@ exports.githubAuth = async (req, res) => {
     return respondWithAuth(res, updated.rows[0], authResult.isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GOOGLE AUTH — Complete Signup (step 2 for new Google users)
+// ═══════════════════════════════════════════════════════════════════════════
+
+exports.completeGoogleSignUp = async (req, res) => {
+  try {
+    const { credential, fullName, phone, bio } = req.body;
+
+    if (!credential || !credential.trim())
+      return res.status(400).json({ success: false, message: "Google credential is required" });
+
+    if (!process.env.GOOGLE_CLIENT_ID) {
+      logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
+      return res.status(500).json({ success: false, message: "Google authentication is not configured on the server" });
+    }
+
+    let payload;
+    try {
+      const client = getGoogleOAuthClient();
+      const ticket = await client.verifyIdToken({
+        idToken: credential.trim(),
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (verifyError) {
+      logger.error("[Google Auth] Token verification failed:", verifyError.message);
+      return res.status(401).json({ success: false, message: "Invalid Google credential. Please try signing in again." });
+    }
+
+    if (!payload?.sub || !payload?.email)
+      return res.status(401).json({ success: false, message: "Could not get account information from Google" });
+
+    const email = payload.email.toLowerCase();
+    const providerId = String(payload.sub).trim();
+    const name = (fullName || payload.name || email.split("@")[0] || "User").trim();
+
+    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    const existingResult = await query(
+      `SELECT id, login_counter FROM users WHERE google_id = $1 OR email = $2`,
+      [providerId, email],
+    );
+    if (existingResult.rows.length > 0) {
+      const existingUser = existingResult.rows[0];
+      if ((existingUser.login_counter || 0) >= 2) {
+        return res.status(403).json({
+          success: false,
+          message: "For your security, please verify your email to continue.",
+          code: "REVERIFICATION_REQUIRED",
+          requiresReVerification: true,
+          email: email,
+        });
+      }
+    }
+
+    const authResult = await upsertSocialUser({
+      provider: "google",
+      providerId: providerId,
+      email: email,
+      name: name,
+      avatar: payload.picture,
+      phone: phone || null,
+      bio: bio || null,
+    });
+
+    await query(
+      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
+      [authResult.user.id],
+    );
+
+    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+
+    logger.info("[Google Auth] Signup complete:", { email: authResult.user.email, isNew: authResult.isNew });
+
+    return respondWithAuth(res, updated.rows[0], authResult.isNew);
+  } catch (err) {
+    handleError(res, err, "Google signup failed");
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GITHUB SIGNIN INIT — Redirect to GitHub OAuth
+// ═══════════════════════════════════════════════════════════════════════════
+
+exports.githubSignInInit = async (req, res) => {
+  try {
+    if (!process.env.GITHUB_CLIENT_ID)
+      return res.status(500).json({ success: false, message: "GitHub auth not configured" });
+
+    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback?mode=signin`;
+    const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
+    res.redirect(authUrl);
+  } catch (err) {
+    logger.error("[GitHub Signin] Init failed:", err.message);
+    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_init_failed`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GITHUB SIGNUP INIT — Redirect to GitHub OAuth
+// ═══════════════════════════════════════════════════════════════════════════
+
+exports.githubSignUpInit = async (req, res) => {
+  try {
+    if (!process.env.GITHUB_CLIENT_ID)
+      return res.status(500).json({ success: false, message: "GitHub auth not configured" });
+
+    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback?mode=signup`;
+    const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
+    res.redirect(authUrl);
+  } catch (err) {
+    logger.error("[GitHub Signup] Init failed:", err.message);
+    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_init_failed`);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// GITHUB CALLBACK — Handle OAuth redirect with code
+// ═══════════════════════════════════════════════════════════════════════════
+
+exports.githubCallback = async (req, res) => {
+  try {
+    const { code, mode } = req.query;
+    if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_auth_failed`);
+    }
+
+    // Exchange code for token
+    const tokenData = await fetchJsonOrThrow(
+      "https://github.com/login/oauth/access_token",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          client_id: process.env.GITHUB_CLIENT_ID,
+          client_secret: process.env.GITHUB_CLIENT_SECRET,
+          code,
+        }),
+      },
+      "GitHub token exchange",
+    );
+
+    if (!tokenData.access_token) {
+      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_token_failed`);
+    }
+
+    const ghHeaders = {
+      Authorization: `Bearer ${tokenData.access_token}`,
+      Accept: "application/vnd.github.v3+json",
+      "User-Agent": APP_NAME,
+    };
+
+    // Fetch user profile
+    const gh = await fetchJsonOrThrow(
+      "https://api.github.com/user",
+      { headers: ghHeaders },
+      "GitHub profile",
+    );
+
+    // Fetch email if not public
+    let ghEmail = gh.email;
+    if (!ghEmail) {
+      const emails = await fetchJsonOrThrow(
+        "https://api.github.com/user/emails",
+        { headers: ghHeaders },
+        "GitHub emails",
+      );
+      const list = Array.isArray(emails) ? emails : [];
+      ghEmail =
+        list.find((e) => e.primary && e.verified)?.email ||
+        list.find((e) => e.verified)?.email ||
+        list[0]?.email;
+    }
+
+    if (!ghEmail || !gh.id) {
+      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_profile_failed`);
+    }
+
+    const email = ghEmail.toLowerCase();
+    const providerId = String(gh.id).trim();
+    const name = gh.name || gh.login || email.split("@")[0] || "User";
+
+    // Check for re-verification
+    const existingResult = await query(
+      `SELECT id, login_counter FROM users WHERE github_id = $1 OR email = $2`,
+      [providerId, email],
+    );
+
+    if (existingResult.rows.length > 0) {
+      const existingUser = existingResult.rows[0];
+      if ((existingUser.login_counter || 0) >= 2) {
+        return res.redirect(
+          `${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=reverification_required&email=${encodeURIComponent(email)}`,
+        );
+      }
+    }
+
+    const authResult = await upsertSocialUser({
+      provider: "github",
+      providerId: providerId,
+      email: email,
+      name: name,
+      avatar: gh.avatar_url,
+      phone: null,
+      bio: gh.bio,
+    });
+
+    await query(
+      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
+      [authResult.user.id],
+    );
+
+    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+    const token = generateToken(updated.rows[0], "user");
+    const userData = sanitizeUser(updated.rows[0]);
+
+    const redirectUrl = `${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?github_token=${encodeURIComponent(token)}&user=${encodeURIComponent(JSON.stringify(userData))}`;
+    res.redirect(redirectUrl);
+  } catch (err) {
+    logger.error("[GitHub Callback] Error:", err.message);
+    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_callback_failed`);
   }
 };
 
