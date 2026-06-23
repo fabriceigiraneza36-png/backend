@@ -1,35 +1,27 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL - AUTH MIDDLEWARE v2.0
+ * ALTUVERA TRAVEL - AUTH MIDDLEWARE v2.1
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * CRITICAL FIX:
- *   adminProtect previously queried admin_users table exclusively AND required
- *   decoded.type === 'admin'. If your admin tokens have role='admin' in the
- *   users table instead, every request was rejected with 403 → which the
- *   frontend's notFoundHandler then converted to 404.
- *
- *   New behaviour:
- *   - Accepts tokens where decoded.type === 'admin' (admin_users table)
- *   - OR decoded.role === 'admin' / 'superadmin' (users table)
- *   - Falls back gracefully if admin_users table doesn't exist
- *
- * Exports:
+ * Exports (all names used across the codebase):
  *   protect         — valid JWT (user OR admin)
+ *   authenticate    — alias of protect
  *   adminOnly       — valid JWT with admin role/type
  *   adminProtect    — alias of adminOnly (backward compat)
+ *   requireAdmin    — alias of adminOnly (used in routes/packages.js)
  *   optionalAuth    — attaches user if token valid, never blocks
  *   requireVerified — must be called after protect
  *   selfOrAdmin     — factory: allows self-access or admin
  *   extractToken    — utility (used by socket auth)
  *   verifyToken     — utility (used by socket auth)
+ *   isAdminDecoded  — utility (used by socket auth)
  */
 
 "use strict";
 
-const jwt    = require("jsonwebtoken");
+const jwt     = require("jsonwebtoken");
 const { query } = require("../config/db");
-const logger = require("../utils/logger");
+const logger  = require("../utils/logger");
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -52,10 +44,9 @@ const ADMIN_ROLES = new Set([
  *   1. Authorization: Bearer <token>  (primary)
  *   2. x-auth-token header            (legacy)
  *   3. Cookie: token=<token>          (cookie-based sessions)
- *   4. ?token= query param            (dev/debug only, never in production)
+ *   4. ?token= query param            (dev/debug only)
  */
 const extractToken = (req) => {
-  // Authorization header (most common)
   const authHeader =
     req.headers.authorization ||
     req.headers.Authorization ||
@@ -65,20 +56,18 @@ const extractToken = (req) => {
     return authHeader.slice(7).trim() || null;
   }
 
-  // x-auth-token header (some older clients)
   if (req.headers["x-auth-token"]) {
     return String(req.headers["x-auth-token"]).trim() || null;
   }
 
-  // Cookie (cookie-based sessions)
   if (req.cookies?.token) {
     return String(req.cookies.token).trim() || null;
   }
+
   if (req.cookies?.adminToken) {
     return String(req.cookies.adminToken).trim() || null;
   }
 
-  // Query param — development only
   if (process.env.NODE_ENV !== "production" && req.query?.token) {
     return String(req.query.token).trim() || null;
   }
@@ -102,11 +91,11 @@ const verifyToken = (token) => {
 /**
  * Determine whether a decoded JWT payload belongs to an admin.
  *
- * Handles all token shapes used across the codebase:
- *   { type: 'admin' }           — admin_users tokens
- *   { role: 'admin' }           — users table with admin role
- *   { role: 'superadmin' }      — superadmins
- *   { isAdmin: true }           — legacy tokens
+ * Handles all token shapes:
+ *   { type: 'admin' }      — admin_users tokens
+ *   { role: 'admin' }      — users table with admin role
+ *   { role: 'superadmin' } — superadmins
+ *   { isAdmin: true }      — legacy tokens
  */
 const isAdminDecoded = (decoded) => {
   if (!decoded) return false;
@@ -122,10 +111,6 @@ const isAdminDecoded = (decoded) => {
  * Strategy:
  *   1. If decoded.type === 'admin' → try admin_users first, then users as fallback
  *   2. Otherwise → query users table directly
- *
- * This handles cases where:
- *   - admin_users table doesn't exist yet
- *   - Admins are stored in the users table with role='admin'
  */
 const fetchAccount = async (decoded) => {
   const id = decoded?.id;
@@ -143,14 +128,13 @@ const fetchAccount = async (decoded) => {
       );
       if (r.rows[0]) return { record: r.rows[0], isAdmin: true };
     } catch (err) {
-      // admin_users table may not exist — fall through to users table
       logger.warn(
         "[Auth] admin_users table not accessible, falling back to users table:",
         err.message,
       );
     }
 
-    // Fallback: check users table for role=admin
+    // Fallback: check users table for role = admin
     try {
       const r = await query(
         `SELECT * FROM users WHERE id = $1 AND is_active = true`,
@@ -187,19 +171,20 @@ const fetchAccount = async (decoded) => {
 };
 
 /**
- * Core auth logic — shared by protect, adminOnly, adminProtect.
+ * Core auth logic — shared by protect, adminOnly, adminProtect, requireAdmin.
  *
- * Returns { record, isAdmin } or responds with an appropriate error.
- * Returns null on error (caller should return early).
+ * Returns { record, isAdmin, decoded } or responds with an error and returns null.
  */
-const authenticate = async (req, res, { requireAdmin = false } = {}) => {
+const authenticateCore = async (req, res, { requireAdmin = false } = {}) => {
   const token = extractToken(req);
 
   if (!token) {
     res.status(401).json({
       success: false,
-      message: requireAdmin ? "Admin authentication required." : "Authentication required.",
-      code:    "NO_TOKEN",
+      message: requireAdmin
+        ? "Admin authentication required."
+        : "Authentication required.",
+      code: "NO_TOKEN",
     });
     return null;
   }
@@ -215,11 +200,7 @@ const authenticate = async (req, res, { requireAdmin = false } = {}) => {
     return null;
   }
 
-  // Token version check (optional — only when both sides carry the version)
-  // This is a soft check; skip if the field isn't present.
-  // (Hydrated below after DB fetch)
-
-  // Require admin at the token level first (fast-fail before DB hit)
+  // Fast-fail before DB hit if admin is required
   if (requireAdmin && !isAdminDecoded(decoded)) {
     logger.warn(
       `[Auth] Admin required but token is not admin | ` +
@@ -247,7 +228,7 @@ const authenticate = async (req, res, { requireAdmin = false } = {}) => {
 
   const { record, isAdmin } = result;
 
-  // Token version check (post-DB)
+  // Token version check
   if (
     typeof decoded.tokenVersion === "number" &&
     typeof record.token_version === "number" &&
@@ -261,7 +242,7 @@ const authenticate = async (req, res, { requireAdmin = false } = {}) => {
     return null;
   }
 
-  // Require admin at the record level (role in DB)
+  // Require admin at the DB record level
   if (requireAdmin && !isAdmin) {
     logger.warn(
       `[Auth] Admin required but user role=${record.role} | ` +
@@ -279,7 +260,7 @@ const authenticate = async (req, res, { requireAdmin = false } = {}) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ATTACH HELPERS  (populate req.user / req.admin consistently)
+// ATTACH HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const attachToRequest = (req, record, isAdmin) => {
@@ -293,14 +274,14 @@ const attachToRequest = (req, record, isAdmin) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MIDDLEWARE: protect
+// MIDDLEWARE: protect / authenticate
 // Requires a valid JWT (user OR admin).
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const protect = async (req, res, next) => {
   try {
-    const auth = await authenticate(req, res);
-    if (!auth) return; // authenticate already sent the response
+    const auth = await authenticateCore(req, res);
+    if (!auth) return;
 
     const { record, isAdmin } = auth;
     attachToRequest(req, record, isAdmin);
@@ -323,9 +304,9 @@ const protect = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MIDDLEWARE: adminOnly
+// MIDDLEWARE: adminOnly / adminProtect / requireAdmin
 // Requires a valid JWT WITH admin role or type.
-// Can be used standalone OR after protect (re-uses req.user if already set).
+// Can be used standalone OR after protect.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const adminOnly = async (req, res, next) => {
@@ -352,7 +333,6 @@ const adminOnly = async (req, res, next) => {
         });
       }
 
-      // Ensure req.admin is populated
       if (!req.admin)     req.admin     = req.user;
       if (!req.adminUser) req.adminUser = req.user;
       req.userType = "admin";
@@ -361,7 +341,7 @@ const adminOnly = async (req, res, next) => {
     }
 
     // protect hasn't run — authenticate from scratch
-    const auth = await authenticate(req, res, { requireAdmin: true });
+    const auth = await authenticateCore(req, res, { requireAdmin: true });
     if (!auth) return;
 
     const { record, isAdmin } = auth;
@@ -385,27 +365,11 @@ const adminOnly = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// MIDDLEWARE: adminProtect
-// ─────────────────────────────────────────────────────────────────────────────
-// Alias of adminOnly.
-//
-// Previously this was a stricter version that ONLY accepted decoded.type==='admin'
-// and ONLY looked in admin_users. That caused 401/403 for admins stored in the
-// users table. Now it behaves identically to adminOnly but logs the source.
-// ═══════════════════════════════════════════════════════════════════════════════
-
-const adminProtect = async (req, res, next) => {
-  // Delegate entirely to adminOnly — same logic, same fallbacks
-  return adminOnly(req, res, next);
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE: optionalAuth
 // Never blocks. Silently attaches req.user if token is valid.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const optionalAuth = async (req, res, next) => {
-  // Reset to safe defaults
   req.user      = null;
   req.userType  = null;
   req.admin     = null;
@@ -429,7 +393,6 @@ const optionalAuth = async (req, res, next) => {
       path:     req.path,
     });
   } catch {
-    // Silent — never block on optional auth
     req.user      = null;
     req.userType  = null;
     req.admin     = null;
@@ -465,7 +428,6 @@ const requireVerified = (req, res, next) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 // MIDDLEWARE FACTORY: selfOrAdmin
 // Must be used AFTER protect.
-// Allows a user to access only their own resource, or any admin to access any.
 //
 // Usage:
 //   router.get('/:id', protect, selfOrAdmin('id'), controller)
@@ -482,7 +444,7 @@ const selfOrAdmin = (paramKey = "id") => (req, res, next) => {
 
   const targetId = parseInt(req.params[paramKey], 10);
   const isAdmin  =
-    req.userType === "admin" ||
+    req.userType === "admin"          ||
     ADMIN_ROLES.has(req.user.role || "") ||
     req.user.isAdmin === true;
 
@@ -499,16 +461,26 @@ const selfOrAdmin = (paramKey = "id") => (req, res, next) => {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // EXPORTS
+// ─────────────────────────────────────────────────────────────────────────────
+// All aliases are explicit so destructuring works regardless of which name
+// a route file uses.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 module.exports = {
+  // Core middleware
   protect,
   adminOnly,
-  adminProtect,     // alias — identical to adminOnly
   optionalAuth,
   requireVerified,
   selfOrAdmin,
-  // Utilities (used by socket.io auth + adminAuth routes)
+
+  // ✅ Aliases — these fix the undefined imports in routes/packages.js
+  // and any other route file using these names
+  authenticate:  protect,       // used by: routes/packages.js, routes/users.js, etc.
+  requireAdmin:  adminOnly,     // used by: routes/packages.js, routes/admin.js, etc.
+  adminProtect:  adminOnly,     // used by: routes/admin.js, etc.
+
+  // Utilities (used by socket.io auth + admin auth routes)
   extractToken,
   verifyToken,
   isAdminDecoded,
