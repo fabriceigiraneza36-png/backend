@@ -19,22 +19,26 @@ const { validateEmail, validateName } = require("../utils/validators");
 // CONFIG
 // ═══════════════════════════════════════════════════════════════════════════
 
-const APP_NAME              = process.env.APP_NAME        || "Altuvera";
-const FRONTEND_URL          = process.env.FRONTEND_URL    || "https://altuvera.com";
-const SUPPORT_EMAIL         = process.env.SUPPORT_EMAIL   || "support@altuvera.com";
-const JWT_SECRET            = process.env.JWT_SECRET;
-const JWT_REFRESH_SECRET    = process.env.JWT_REFRESH_SECRET || JWT_SECRET;
-const JWT_EXPIRES_IN        = process.env.JWT_EXPIRES_IN        || "7d";
+const APP_NAME               = process.env.APP_NAME             || "Altuvera";
+const FRONTEND_URL           = process.env.FRONTEND_URL         || "https://altuvera.com";
+const SUPPORT_EMAIL          = process.env.SUPPORT_EMAIL        || "support@altuvera.com";
+const JWT_SECRET             = process.env.JWT_SECRET;
+const JWT_REFRESH_SECRET     = process.env.JWT_REFRESH_SECRET   || JWT_SECRET;
+const JWT_EXPIRES_IN         = process.env.JWT_EXPIRES_IN       || "7d";
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || "30d";
-const OTP_EXPIRY_MINUTES    = 10;
-const OTP_MAX_ATTEMPTS      = 5;
-const CODE_COOLDOWN_MS      = 60_000;
+const OTP_EXPIRY_MINUTES     = 10;
+const OTP_MAX_ATTEMPTS       = 5;
+const CODE_COOLDOWN_MS       = 60_000;
 const SOCIAL_HTTP_TIMEOUT_MS = parseInt(
   process.env.SOCIAL_AUTH_TIMEOUT_MS || "8000", 10,
 );
 
-// ── IPv4-only agents for all outbound HTTP/HTTPS calls ─────────────────────
-// (belt-and-suspenders alongside dns.setDefaultResultOrder in server.js)
+// ── Re-verification threshold ──────────────────────────────────────────────
+// After this many successful logins the user must re-verify via email OTP.
+// Frontend mirrors this exact value.
+const REVERIFICATION_THRESHOLD = 3;
+
+// ── IPv4-only agents ───────────────────────────────────────────────────────
 const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const ipv4HttpAgent  = new http.Agent({  family: 4, keepAlive: true });
 
@@ -43,14 +47,8 @@ const ipv4HttpAgent  = new http.Agent({  family: 4, keepAlive: true });
 // ═══════════════════════════════════════════════════════════════════════════
 
 const buildEmailTemplate = ({
-  preheader   = "",
-  title       = "",
-  subtitle    = "",
-  body        = "",
-  ctaText     = "",
-  ctaUrl      = "",
-  recipientName = "",
-  footerNote  = "",
+  preheader = "", title = "", subtitle = "", body = "",
+  ctaText = "", ctaUrl = "", recipientName = "", footerNote = "",
 }) => {
   const year = new Date().getFullYear();
   return `
@@ -150,21 +148,20 @@ const buildEmailTemplate = ({
 };
 
 const buildOtpEmail = ({
-  otp,
-  recipientName,
-  purpose       = "verify",
+  otp, recipientName, purpose = "verify",
   expiryMinutes = OTP_EXPIRY_MINUTES,
 }) => {
   const cfg = (
     {
-      verify: { title: "Verify Your Email",      sub: "Enter the code below to verify your account" },
-      login:  { title: "Your Sign-In Code",      sub: "Use this code to sign in" },
-      resend: { title: "New Verification Code",  sub: "Here's your fresh code" },
+      verify:        { title: "Verify Your Email",     sub: "Enter the code below to verify your account" },
+      login:         { title: "Your Sign-In Code",     sub: "Use this code to sign in" },
+      resend:        { title: "New Verification Code", sub: "Here's your fresh code" },
+      reverification:{ title: "Security Verification", sub: "Confirm your identity to continue" },
     }[purpose] || { title: "Verification Code", sub: "" }
   );
 
   return buildEmailTemplate({
-    preheader:     `Your code is ${otp}`,
+    preheader:     `Your ${APP_NAME} code is ${otp}`,
     title:         cfg.title,
     subtitle:      cfg.sub,
     recipientName,
@@ -213,10 +210,8 @@ const buildActivityAlertEmail = ({ recipientName, activityType }) => {
     recipientName,
     body: `<p style="margin:0;font-size:15px;color:#4b5563;">
              Time: ${new Date().toLocaleDateString("en-US", {
-               month:  "short",
-               day:    "numeric",
-               hour:   "2-digit",
-               minute: "2-digit",
+               month:  "short", day:    "numeric",
+               hour:   "2-digit", minute: "2-digit",
              })}
            </p>`,
   });
@@ -262,41 +257,43 @@ const sanitizeUser = (row) => {
     ...safe
   } = row;
   return {
-    id:           safe.id,
-    email:        safe.email,
-    username:     safe.username,
-    fullName:     safe.full_name,
-    full_name:    safe.full_name,
-    name:         safe.full_name,
-    avatar:       safe.avatar_url,
-    avatarUrl:    safe.avatar_url,
-    avatar_url:   safe.avatar_url,
-    phone:        safe.phone,
-    bio:          safe.bio,
-    role:         safe.role,
-    authProvider: safe.auth_provider,
+    id:            safe.id,
+    email:         safe.email,
+    username:      safe.username,
+    fullName:      safe.full_name,
+    full_name:     safe.full_name,
+    name:          safe.full_name,
+    avatar:        safe.avatar_url,
+    avatarUrl:     safe.avatar_url,
+    avatar_url:    safe.avatar_url,
+    phone:         safe.phone,
+    bio:           safe.bio,
+    role:          safe.role,
+    authProvider:  safe.auth_provider,
     auth_provider: safe.auth_provider,
-    isVerified:   safe.is_verified,
-    is_verified:  safe.is_verified,
+    isVerified:    safe.is_verified,
+    is_verified:   safe.is_verified,
     emailVerified: safe.is_verified,
-    isActive:     safe.is_active,
-    preferences:  safe.preferences,
-    lastLogin:    safe.last_login,
-    loginCounter: safe.login_counter ?? 0,
-    login_counter: safe.login_counter ?? 0,
-    createdAt:    safe.created_at,
-    updatedAt:    safe.updated_at,
+    isActive:      safe.is_active,
+    preferences:   safe.preferences,
+    lastLogin:     safe.last_login,
+    loginCounter:  safe.login_counter  ?? 0,
+    login_counter: safe.login_counter  ?? 0,
+    subscribed:    safe.subscribed     ?? false,
+    createdAt:     safe.created_at,
+    updatedAt:     safe.updated_at,
   };
 };
 
-const isRateLimited     = (row, ms = CODE_COOLDOWN_MS) =>
+const isRateLimited = (row, ms = CODE_COOLDOWN_MS) =>
   row.last_code_sent_at &&
   Date.now() - new Date(row.last_code_sent_at).getTime() < ms;
 
 const getRemainingCooldown = (row) => {
   if (!row.last_code_sent_at) return 0;
   return Math.ceil(
-    (CODE_COOLDOWN_MS - (Date.now() - new Date(row.last_code_sent_at).getTime())) / 1000,
+    (CODE_COOLDOWN_MS -
+      (Date.now() - new Date(row.last_code_sent_at).getTime())) / 1000,
   );
 };
 
@@ -311,9 +308,17 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
 const sendOtpEmail = (email, otp, name, purpose = "verify") =>
   sendEmail({
     to:      email,
-    subject: purpose === "login" ? `Sign In Code: ${otp}` : `Verification Code: ${otp}`,
+    subject: purpose === "login" || purpose === "reverification"
+      ? `Sign In Code: ${otp}`
+      : `Verification Code: ${otp}`,
     html:    buildOtpEmail({ otp, recipientName: name, purpose }),
   });
+
+// ── Requires re-verification? ──────────────────────────────────────────────
+// Returns true when the user's login_counter has reached the threshold.
+// The counter is reset to 0 after successful re-verification.
+const requiresReverification = (user) =>
+  (user.login_counter ?? 0) >= REVERIFICATION_THRESHOLD;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SOCIAL HELPERS
@@ -323,31 +328,23 @@ let googleOAuthClient = null;
 const getGoogleOAuthClient = () => {
   if (!googleOAuthClient) {
     const { OAuth2Client } = require("google-auth-library");
-    // google-auth-library respects global dns order set in server.js
     googleOAuthClient = new OAuth2Client(process.env.GOOGLE_CLIENT_ID);
   }
   return googleOAuthClient;
 };
 
-// ── HTTP fetch helper with explicit IPv4 agent ─────────────────────────────
-// Uses node's native fetch (Node 18+) via undici dispatcher override,
-// or falls back to a simple https.request wrapper for older Node.
 const fetchJsonOrThrow = async (url, options = {}, provider = "oauth") => {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), SOCIAL_HTTP_TIMEOUT_MS);
 
   try {
-    // Choose the right agent
     const isHttps = url.startsWith("https://");
     const agent   = isHttps ? ipv4HttpsAgent : ipv4HttpAgent;
 
-    // Native fetch (Node 18+) doesn't accept `agent` directly.
-    // We pass it via the non-standard but widely-supported override:
     const res = await fetch(url, {
       ...options,
       signal: controller.signal,
-      // For node-fetch v2/v3 compatibility:
-      agent: () => agent,
+      agent:  () => agent,
     });
 
     const raw = await res.text();
@@ -356,16 +353,16 @@ const fetchJsonOrThrow = async (url, options = {}, provider = "oauth") => {
     catch { body = { raw }; }
 
     if (!res.ok) {
-      const err     = new Error(body?.message || `${provider} failed (${res.status})`);
-      err.status    = 401;
+      const err  = new Error(body?.message || `${provider} failed (${res.status})`);
+      err.status = 401;
       throw err;
     }
 
     return body;
   } catch (err) {
     if (err.name === "AbortError") {
-      const e    = new Error(`${provider} request timed out`);
-      e.status   = 504;
+      const e  = new Error(`${provider} request timed out`);
+      e.status = 504;
       throw e;
     }
     throw err;
@@ -375,6 +372,8 @@ const fetchJsonOrThrow = async (url, options = {}, provider = "oauth") => {
 };
 
 // ── Upsert social user ─────────────────────────────────────────────────────
+// Uses a single atomic query to avoid race conditions.
+// Returns { user, isNew }.
 const upsertSocialUser = async ({
   provider, providerId, email, name, avatar, phone, bio,
 }) => {
@@ -386,60 +385,44 @@ const upsertSocialUser = async ({
   const pid = String(providerId || "").trim();
 
   if (!pid) {
-    const err    = new Error(`${provider} account ID missing`);
-    err.status   = 401;
+    const err  = new Error(`${provider} account ID missing`);
+    err.status = 401;
     throw err;
   }
   if (!e || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)) {
-    const err    = new Error("Valid email required");
-    err.status   = 400;
+    const err  = new Error("Valid email required");
+    err.status = 400;
     throw err;
   }
 
-  let result = await query(
-    `SELECT * FROM users WHERE ${col} = $1 OR email = $2`,
-    [pid, e],
+  // Single query: upsert on email, update provider id + fields if matched
+  const upsertResult = await query(
+    `INSERT INTO users (
+       email, full_name, avatar_url, ${col},
+       auth_provider, phone, bio,
+       is_verified, is_active, last_login, role,
+       login_counter
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NOW(),'user',0)
+     ON CONFLICT (email) DO UPDATE SET
+       ${col}        = EXCLUDED.${col},
+       full_name     = COALESCE(NULLIF(EXCLUDED.full_name,''),  users.full_name),
+       avatar_url    = COALESCE(NULLIF(EXCLUDED.avatar_url,''), users.avatar_url),
+       phone         = COALESCE(NULLIF(EXCLUDED.phone,''),      users.phone),
+       bio           = COALESCE(NULLIF(EXCLUDED.bio,''),        users.bio),
+       auth_provider = CASE
+                         WHEN users.auth_provider IS NULL OR users.auth_provider = 'email'
+                         THEN EXCLUDED.auth_provider
+                         ELSE users.auth_provider
+                       END,
+       is_verified   = true,
+       is_active     = true,
+       last_login    = NOW()
+     RETURNING *, (xmax = 0) AS is_new_row`,
+    [e, n, avatar || null, pid, provider, phone || null, bio || null],
   );
 
-  let user;
-  let isNew = false;
-
-  if (result.rows.length > 0) {
-    user = result.rows[0];
-    const newAuthProvider =
-      !user.auth_provider || user.auth_provider === "email"
-        ? provider
-        : user.auth_provider;
-
-    result = await query(
-      `UPDATE users SET
-         ${col}         = $1,
-         full_name      = COALESCE(NULLIF($2,''), full_name),
-         avatar_url     = COALESCE(NULLIF($3,''), avatar_url),
-         phone          = COALESCE(NULLIF($4,''), phone),
-         bio            = COALESCE(NULLIF($5,''), bio),
-         auth_provider  = $6,
-         is_verified    = true,
-         is_active      = true,
-         last_login     = NOW()
-       WHERE id = $7
-       RETURNING *`,
-      [pid, n, avatar || null, phone || null, bio || null, newAuthProvider, user.id],
-    );
-    user = result.rows[0];
-  } else {
-    result = await query(
-      `INSERT INTO users (
-         email, full_name, avatar_url, ${col},
-         auth_provider, phone, bio,
-         is_verified, is_active, last_login, role
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NOW(),'user')
-       RETURNING *`,
-      [e, n, avatar || null, pid, provider, phone || null, bio || null],
-    );
-    user  = result.rows[0];
-    isNew = true;
-  }
+  const user  = upsertResult.rows[0];
+  const isNew = Boolean(user.is_new_row);
 
   if (isNew) {
     sendEmail({
@@ -452,6 +435,31 @@ const upsertSocialUser = async ({
   return { user, isNew };
 };
 
+// ── Increment login_counter atomically and return updated user ─────────────
+const incrementLoginCounter = async (userId) => {
+  const result = await query(
+    `UPDATE users
+        SET login_counter = COALESCE(login_counter, 0) + 1,
+            last_login    = NOW()
+      WHERE id = $1
+      RETURNING *`,
+    [userId],
+  );
+  return result.rows[0];
+};
+
+// ── Reset login_counter to 0 (called after successful re-verification) ─────
+const resetLoginCounter = async (userId) => {
+  const result = await query(
+    `UPDATE users
+        SET login_counter = 0
+      WHERE id = $1
+      RETURNING *`,
+    [userId],
+  );
+  return result.rows[0];
+};
+
 const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
   res.status(statusCode).json({
     success: true,
@@ -460,6 +468,7 @@ const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
       refreshToken: generateRefreshToken(user, "user"),
       user:         sanitizeUser(user),
       isNewUser:    isNew,
+      loginCounter: user.login_counter ?? 0,
     },
   });
 
@@ -488,10 +497,11 @@ exports.register = async (req, res) => {
         return res.status(409).json({ success: false, message: "Account exists. Please sign in." });
       if (isRateLimited(existing))
         return res.status(429).json({
-          success: false,
-          message: `Wait ${getRemainingCooldown(existing)} seconds.`,
+          success:  false,
+          message:  `Wait ${getRemainingCooldown(existing)} seconds.`,
         });
 
+      // Update optional fields before sending new OTP
       await query(
         `UPDATE users SET
            full_name  = COALESCE(NULLIF($1,''), full_name),
@@ -522,8 +532,9 @@ exports.register = async (req, res) => {
     }
 
     result = await query(
-      `INSERT INTO users (email, full_name, phone, bio, avatar_url, is_verified, auth_provider)
-       VALUES ($1,$2,$3,$4,$5,false,'email')
+      `INSERT INTO users
+         (email, full_name, phone, bio, avatar_url, is_verified, auth_provider, login_counter)
+       VALUES ($1,$2,$3,$4,$5,false,'email',0)
        RETURNING *`,
       [normalizedEmail, name || null, phone || null, bio || null, avatar || null],
     );
@@ -568,9 +579,10 @@ exports.login = async (req, res) => {
     let isNew  = false;
 
     if (result.rows.length === 0) {
+      // Auto-create account for passwordless flow
       result = await query(
-        `INSERT INTO users (email, full_name, is_verified, auth_provider)
-         VALUES ($1,$2,false,'email')
+        `INSERT INTO users (email, full_name, is_verified, auth_provider, login_counter)
+         VALUES ($1,$2,false,'email',0)
          RETURNING *`,
         [normalizedEmail, name || null],
       );
@@ -586,7 +598,9 @@ exports.login = async (req, res) => {
         message: `Wait ${getRemainingCooldown(user)} seconds.`,
       });
 
-    const otp = generateOTP();
+    const otp     = generateOTP();
+    const purpose = isNew ? "verify" : requiresReverification(user) ? "reverification" : "login";
+
     await query(
       `UPDATE users SET
          verification_code = $1,
@@ -597,14 +611,16 @@ exports.login = async (req, res) => {
       [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), user.id],
     );
 
-    await sendOtpEmail(normalizedEmail, otp, user.full_name || name, isNew ? "verify" : "login");
+    await sendOtpEmail(normalizedEmail, otp, user.full_name || name, purpose);
+
     return res.json({
       success: true,
       message: "Verification code sent.",
-      data:    {
-        email:         normalizedEmail,
-        isNewUser:     isNew,
-        loginCounter:  user.login_counter || 0,
+      data: {
+        email:        normalizedEmail,
+        isNewUser:    isNew,
+        loginCounter: user.login_counter ?? 0,
+        requiresReverification: requiresReverification(user),
       },
     });
   } catch (err) {
@@ -618,9 +634,9 @@ exports.login = async (req, res) => {
 
 exports.verifyCode = async (req, res) => {
   try {
-    const { email, code, isReVerification }  = req.body;
-    const sanitizedCode    = String(code || "").replace(/\D/g, "").slice(0, 6);
-    const normalizedEmail  = (email || "").trim().toLowerCase();
+    const { email, code } = req.body;
+    const sanitizedCode   = String(code || "").replace(/\D/g, "").slice(0, 6);
+    const normalizedEmail = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail || !sanitizedCode)
       return res.status(400).json({ success: false, message: "Email and code required" });
@@ -663,31 +679,31 @@ exports.verifyCode = async (req, res) => {
       });
     }
 
-    const isFirst = !user.is_verified;
-    const currentCounter = user.login_counter || 0;
+    const isFirstVerification = !user.is_verified;
+    const wasReverification   = requiresReverification(user);
 
-    // ── Update login_counter based on server state ─────────────────────────────
-    // If counter >= 2 (3rd login), reset to 0 after successful verification.
-    // Otherwise increment by 1.
-    const needsReset = currentCounter >= 2;
-    const counterUpdate = needsReset
-      ? `login_counter = 0`
-      : `login_counter = COALESCE(login_counter, 0) + 1`;
+    // ── Atomic update: clear OTP fields + manage counter ──────────────────
+    // If this was a re-verification cycle, reset counter to 1
+    // (counts as one fresh login). Otherwise increment normally.
+    const newCounter = wasReverification ? 1 : (user.login_counter ?? 0) + 1;
 
-    await query(
+    const updated = await query(
       `UPDATE users SET
          is_verified       = true,
          verification_code = NULL,
          code_expiry       = NULL,
          code_attempts     = 0,
          last_login        = NOW(),
-         ${counterUpdate}
-        WHERE id = $1
-        RETURNING *`,
-      [user.id],
+         login_counter     = $1
+       WHERE id = $2
+       RETURNING *`,
+      [newCounter, user.id],
     );
 
-    if (isFirst) {
+    const freshUser = updated.rows[0];
+
+    // Send welcome email for first-time verified users
+    if (isFirstVerification) {
       sendEmail({
         to:      user.email,
         subject: `Welcome to ${APP_NAME}! 🎉`,
@@ -695,18 +711,16 @@ exports.verifyCode = async (req, res) => {
       }).catch(() => {});
     }
 
-    // Fetch updated user to get new counter value
-    const updated = await query("SELECT * FROM users WHERE id = $1", [user.id]);
-
     return res.json({
       success: true,
-      message: isFirst ? "Account verified!" : "Signed in!",
+      message: isFirstVerification ? "Account verified!" : "Signed in!",
       data: {
-        token:         generateToken(updated.rows[0], "user"),
-        refreshToken:  generateRefreshToken(updated.rows[0], "user"),
-        user:          sanitizeUser(updated.rows[0]),
-        isNewUser:     isFirst,
-        loginCounter:  updated.rows[0].login_counter,
+        token:        generateToken(freshUser, "user"),
+        refreshToken: generateRefreshToken(freshUser, "user"),
+        user:         sanitizeUser(freshUser),
+        isNewUser:    isFirstVerification,
+        loginCounter: freshUser.login_counter,
+        wasReverification,
       },
     });
   } catch (err) {
@@ -725,7 +739,7 @@ exports.resendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email required" });
 
     const result = await query(
-      "SELECT id, email, full_name, last_code_sent_at FROM users WHERE email = $1",
+      "SELECT id, email, full_name, last_code_sent_at, login_counter FROM users WHERE email = $1",
       [normalizedEmail],
     );
     // Always respond the same way to prevent email enumeration
@@ -739,7 +753,9 @@ exports.resendCode = async (req, res) => {
         message: `Wait ${getRemainingCooldown(user)}s.`,
       });
 
-    const otp = generateOTP();
+    const otp     = generateOTP();
+    const purpose = requiresReverification(user) ? "reverification" : "resend";
+
     await query(
       `UPDATE users SET
          verification_code = $1,
@@ -750,7 +766,7 @@ exports.resendCode = async (req, res) => {
       [otp, new Date(Date.now() + 15 * 60_000), user.id],
     );
 
-    await sendOtpEmail(user.email, otp, user.full_name, "resend");
+    await sendOtpEmail(user.email, otp, user.full_name, purpose);
     return res.json({ success: true, message: "New code sent." });
   } catch (err) {
     handleError(res, err, "Resend failed");
@@ -790,10 +806,16 @@ exports.checkEmail = async (req, res) => {
 
 exports.googleAuth = async (req, res) => {
   try {
-    const { credential, mode, phone, bio, avatar } = req.body;
+    const { credential, idToken, phone, bio, avatar } = req.body;
 
-    if (!credential || !credential.trim())
-      return res.status(400).json({ success: false, message: "Google credential is required" });
+    // Accept either field name from the frontend
+    const rawCredential = (credential || idToken || "").trim();
+
+    if (!rawCredential)
+      return res.status(400).json({
+        success: false,
+        message: "Google credential is required",
+      });
 
     if (!process.env.GOOGLE_CLIENT_ID) {
       logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
@@ -803,11 +825,12 @@ exports.googleAuth = async (req, res) => {
       });
     }
 
+    // ── Verify the id_token ────────────────────────────────────────────────
     let payload;
     try {
       const client = getGoogleOAuthClient();
       const ticket = await client.verifyIdToken({
-        idToken:  credential.trim(),
+        idToken:  rawCredential,
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
@@ -833,66 +856,65 @@ exports.googleAuth = async (req, res) => {
 
     const email      = payload.email.toLowerCase();
     const providerId = String(payload.sub).trim();
-    const name       = payload.name || email.split("@")[0] || "User";
+    const name       = (payload.name || email.split("@")[0] || "User").trim();
 
-    // ── SIGNUP-INIT MODE: Return profile only, don't create user yet ──
-    if (mode === "signup") {
-      return res.json({
-        success: true,
-        profile: {
-          email: email,
-          name: name,
-          picture: payload.picture,
-          googleId: providerId,
-        },
-      });
-    }
-
-    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    // ── Check for existing user and re-verification requirement ───────────
     const existingResult = await query(
-      `SELECT id, login_counter FROM users WHERE google_id = $1 OR email = $2`,
+      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
     );
+
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-      if ((existingUser.login_counter || 0) >= 2) {
+
+      if (requiresReverification(existingUser)) {
+        // Send OTP automatically so user can proceed immediately
+        const otp = generateOTP();
+        if (!isRateLimited(existingUser)) {
+          await query(
+            `UPDATE users SET
+               verification_code = $1,
+               code_expiry       = $2,
+               code_attempts     = 0,
+               last_code_sent_at = NOW()
+             WHERE id = $3`,
+            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
+          );
+          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
+            .catch(() => {});
+        }
+
         return res.status(403).json({
-          success: false,
-          message: "For your security, please verify your email to continue.",
-          code:           "REVERIFICATION_REQUIRED",
+          success:                false,
+          message:                "For your security, please verify your email to continue.",
+          code:                   "REVERIFICATION_REQUIRED",
           requiresReVerification: true,
-          email:          existingUser.email,
+          email:                  existingUser.email,
         });
       }
     }
 
-    // ── Proceed with OAuth ────────────────────────────────────────────────────
-    const authResult = await upsertSocialUser({
+    // ── Upsert user ────────────────────────────────────────────────────────
+    const { user, isNew } = await upsertSocialUser({
       provider:   "google",
-      providerId: providerId,
-      email:      email,
-      name:       name,
+      providerId,
+      email,
+      name,
       avatar:     avatar || payload.picture,
       phone,
       bio,
     });
 
-    // ── Increment login_counter on successful login ──────────────────────────
-    await query(
-      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
-      [authResult.user.id],
-    );
-
-    // Fetch updated user to include fresh counter
-    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+    // ── Increment counter ──────────────────────────────────────────────────
+    const freshUser = await incrementLoginCounter(user.id);
 
     logger.info("[Google Auth] Success:", {
-      email: authResult.user.email,
-      isNew: authResult.isNew,
-      loginCounter: updated.rows[0].login_counter,
+      email:       freshUser.email,
+      isNew,
+      loginCounter: freshUser.login_counter,
     });
 
-    return respondWithAuth(res, updated.rows[0], authResult.isNew);
+    return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
   }
@@ -910,7 +932,7 @@ exports.githubAuth = async (req, res) => {
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
-    // Step 1: Exchange code for access token
+    // Step 1: Exchange code → access token
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
       {
@@ -966,139 +988,175 @@ exports.githubAuth = async (req, res) => {
 
     const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
-    const name       = gh.name || gh.login || email.split("@")[0] || "User";
+    const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
 
-    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    // ── Check re-verification ──────────────────────────────────────────────
     const existingResult = await query(
-      `SELECT id, login_counter FROM users WHERE github_id = $1 OR email = $2`,
+      `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
     );
+
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-      if ((existingUser.login_counter || 0) >= 2) {
+
+      if (requiresReverification(existingUser)) {
+        const otp = generateOTP();
+        if (!isRateLimited(existingUser)) {
+          await query(
+            `UPDATE users SET
+               verification_code = $1,
+               code_expiry       = $2,
+               code_attempts     = 0,
+               last_code_sent_at = NOW()
+             WHERE id = $3`,
+            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
+          );
+          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
+            .catch(() => {});
+        }
+
         return res.status(403).json({
-          success: false,
-          message: "For your security, please verify your email to continue.",
-          code:           "REVERIFICATION_REQUIRED",
+          success:                false,
+          message:                "For your security, please verify your email to continue.",
+          code:                   "REVERIFICATION_REQUIRED",
           requiresReVerification: true,
-          email:          existingUser.email,
+          email:                  existingUser.email,
         });
       }
     }
 
-    // ── Proceed with OAuth ────────────────────────────────────────────────────
-    const authResult = await upsertSocialUser({
+    // ── Upsert user ────────────────────────────────────────────────────────
+    const { user, isNew } = await upsertSocialUser({
       provider:   "github",
-      providerId: providerId,
-      email:      email,
-      name:       name,
+      providerId,
+      email,
+      name,
       avatar:     gh.avatar_url,
       phone,
       bio:        bio || gh.bio,
     });
 
-    // ── Increment login_counter on successful login ──────────────────────────
-    await query(
-      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
-      [authResult.user.id],
-    );
-
-    // Fetch updated user to include fresh counter
-    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+    // ── Increment counter ──────────────────────────────────────────────────
+    const freshUser = await incrementLoginCounter(user.id);
 
     logger.info("[GitHub Auth] Success:", {
-      email: authResult.user.email,
-      isNew: authResult.isNew,
-      loginCounter: updated.rows[0].login_counter,
+      email:        freshUser.email,
+      isNew,
+      loginCounter: freshUser.login_counter,
     });
 
-    return respondWithAuth(res, updated.rows[0], authResult.isNew);
+    return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
   }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GOOGLE AUTH — Complete Signup (step 2 for new Google users)
+// COMPLETE GOOGLE SIGN-UP (Step 2 for new Google users)
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.completeGoogleSignUp = async (req, res) => {
   try {
-    const { credential, fullName, phone, bio } = req.body;
+    const { credential, idToken, fullName, phone, bio, avatar } = req.body;
+    const rawCredential = (credential || idToken || "").trim();
 
-    if (!credential || !credential.trim())
+    if (!rawCredential)
       return res.status(400).json({ success: false, message: "Google credential is required" });
 
     if (!process.env.GOOGLE_CLIENT_ID) {
       logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
-      return res.status(500).json({ success: false, message: "Google authentication is not configured on the server" });
+      return res.status(500).json({
+        success: false,
+        message: "Google authentication is not configured on the server",
+      });
     }
 
     let payload;
     try {
       const client = getGoogleOAuthClient();
       const ticket = await client.verifyIdToken({
-        idToken: credential.trim(),
+        idToken:  rawCredential,
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
     } catch (verifyError) {
       logger.error("[Google Auth] Token verification failed:", verifyError.message);
-      return res.status(401).json({ success: false, message: "Invalid Google credential. Please try signing in again." });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google credential. Please try signing in again.",
+      });
     }
 
     if (!payload?.sub || !payload?.email)
-      return res.status(401).json({ success: false, message: "Could not get account information from Google" });
+      return res.status(401).json({
+        success: false,
+        message: "Could not get account information from Google",
+      });
 
-    const email = payload.email.toLowerCase();
+    const email      = payload.email.toLowerCase();
     const providerId = String(payload.sub).trim();
-    const name = (fullName || payload.name || email.split("@")[0] || "User").trim();
+    const name       = (fullName || payload.name || email.split("@")[0] || "User").trim();
 
-    // ── Check if re-verification is required (existing user, login_counter >= 2) ──
+    // ── Existing user re-verification check ────────────────────────────────
     const existingResult = await query(
-      `SELECT id, login_counter FROM users WHERE google_id = $1 OR email = $2`,
+      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
     );
+
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-      if ((existingUser.login_counter || 0) >= 2) {
+
+      if (requiresReverification(existingUser)) {
+        const otp = generateOTP();
+        if (!isRateLimited(existingUser)) {
+          await query(
+            `UPDATE users SET
+               verification_code = $1,
+               code_expiry       = $2,
+               code_attempts     = 0,
+               last_code_sent_at = NOW()
+             WHERE id = $3`,
+            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
+          );
+          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
+            .catch(() => {});
+        }
+
         return res.status(403).json({
-          success: false,
-          message: "For your security, please verify your email to continue.",
-          code: "REVERIFICATION_REQUIRED",
+          success:                false,
+          message:                "For your security, please verify your email to continue.",
+          code:                   "REVERIFICATION_REQUIRED",
           requiresReVerification: true,
-          email: email,
+          email,
         });
       }
     }
 
-    const authResult = await upsertSocialUser({
-      provider: "google",
-      providerId: providerId,
-      email: email,
-      name: name,
-      avatar: payload.picture,
-      phone: phone || null,
-      bio: bio || null,
+    const { user, isNew } = await upsertSocialUser({
+      provider:   "google",
+      providerId,
+      email,
+      name,
+      avatar:     avatar || payload.picture,
+      phone:      phone  || null,
+      bio:        bio    || null,
     });
 
-    await query(
-      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
-      [authResult.user.id],
-    );
+    const freshUser = await incrementLoginCounter(user.id);
 
-    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
+    logger.info("[Google Auth] Signup complete:", {
+      email: freshUser.email,
+      isNew,
+    });
 
-    logger.info("[Google Auth] Signup complete:", { email: authResult.user.email, isNew: authResult.isNew });
-
-    return respondWithAuth(res, updated.rows[0], authResult.isNew);
+    return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
     handleError(res, err, "Google signup failed");
   }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GITHUB SIGNIN INIT — Redirect to GitHub OAuth
+// GITHUB SIGNIN INIT
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.githubSignInInit = async (req, res) => {
@@ -1106,7 +1164,7 @@ exports.githubSignInInit = async (req, res) => {
     if (!process.env.GITHUB_CLIENT_ID)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
-    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback?mode=signin`;
+    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback`;
     const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
     res.redirect(authUrl);
   } catch (err) {
@@ -1115,16 +1173,12 @@ exports.githubSignInInit = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// GITHUB SIGNUP INIT — Redirect to GitHub OAuth
-// ═══════════════════════════════════════════════════════════════════════════
-
 exports.githubSignUpInit = async (req, res) => {
   try {
     if (!process.env.GITHUB_CLIENT_ID)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
-    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback?mode=signup`;
+    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback`;
     const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
     res.redirect(authUrl);
   } catch (err) {
@@ -1134,24 +1188,25 @@ exports.githubSignUpInit = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GITHUB CALLBACK — Handle OAuth redirect with code
+// GITHUB CALLBACK
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.githubCallback = async (req, res) => {
+  const FRONTEND = process.env.FRONTEND_URL || "https://altuvera.vercel.app";
+
   try {
-    const { code, mode } = req.query;
+    const { code } = req.query;
     if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
-      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_auth_failed`);
+      return res.redirect(`${FRONTEND}/auth/github/callback?error=github_auth_failed`);
     }
 
-    // Exchange code for token
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
       {
-        method: "POST",
+        method:  "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({
-          client_id: process.env.GITHUB_CLIENT_ID,
+        body:    JSON.stringify({
+          client_id:     process.env.GITHUB_CLIENT_ID,
           client_secret: process.env.GITHUB_CLIENT_SECRET,
           code,
         }),
@@ -1160,23 +1215,21 @@ exports.githubCallback = async (req, res) => {
     );
 
     if (!tokenData.access_token) {
-      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_token_failed`);
+      return res.redirect(`${FRONTEND}/auth/github/callback?error=github_token_failed`);
     }
 
     const ghHeaders = {
       Authorization: `Bearer ${tokenData.access_token}`,
-      Accept: "application/vnd.github.v3+json",
-      "User-Agent": APP_NAME,
+      Accept:        "application/vnd.github.v3+json",
+      "User-Agent":  APP_NAME,
     };
 
-    // Fetch user profile
     const gh = await fetchJsonOrThrow(
       "https://api.github.com/user",
       { headers: ghHeaders },
       "GitHub profile",
     );
 
-    // Fetch email if not public
     let ghEmail = gh.email;
     if (!ghEmail) {
       const emails = await fetchJsonOrThrow(
@@ -1192,52 +1245,53 @@ exports.githubCallback = async (req, res) => {
     }
 
     if (!ghEmail || !gh.id) {
-      return res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_profile_failed`);
+      return res.redirect(`${FRONTEND}/auth/github/callback?error=github_profile_failed`);
     }
 
-    const email = ghEmail.toLowerCase();
+    const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
-    const name = gh.name || gh.login || email.split("@")[0] || "User";
+    const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
 
-    // Check for re-verification
+    // ── Re-verification check ──────────────────────────────────────────────
     const existingResult = await query(
-      `SELECT id, login_counter FROM users WHERE github_id = $1 OR email = $2`,
+      `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
     );
 
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-      if ((existingUser.login_counter || 0) >= 2) {
+      if (requiresReverification(existingUser)) {
         return res.redirect(
-          `${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=reverification_required&email=${encodeURIComponent(email)}`,
+          `${FRONTEND}/auth/github/callback?error=reverification_required&email=${encodeURIComponent(email)}`,
         );
       }
     }
 
-    const authResult = await upsertSocialUser({
-      provider: "github",
-      providerId: providerId,
-      email: email,
-      name: name,
-      avatar: gh.avatar_url,
-      phone: null,
-      bio: gh.bio,
+    const { user, isNew } = await upsertSocialUser({
+      provider:   "github",
+      providerId,
+      email,
+      name,
+      avatar:     gh.avatar_url,
+      phone:      null,
+      bio:        gh.bio,
     });
 
-    await query(
-      `UPDATE users SET login_counter = COALESCE(login_counter, 0) + 1 WHERE id = $1`,
-      [authResult.user.id],
-    );
+    const freshUser = await incrementLoginCounter(user.id);
+    const jwtToken  = generateToken(freshUser, "user");
+    const userData  = sanitizeUser(freshUser);
 
-    const updated = await query("SELECT * FROM users WHERE id = $1", [authResult.user.id]);
-    const token = generateToken(updated.rows[0], "user");
-    const userData = sanitizeUser(updated.rows[0]);
+    // Redirect to frontend callback page with token in URL params
+    const params = new URLSearchParams({
+      code:     jwtToken,
+      provider: "github",
+      isNew:    String(isNew),
+    });
 
-    const redirectUrl = `${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?github_token=${encodeURIComponent(token)}&user=${encodeURIComponent(JSON.stringify(userData))}`;
-    res.redirect(redirectUrl);
+    return res.redirect(`${FRONTEND}/auth/github/callback?${params}`);
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
-    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_callback_failed`);
+    return res.redirect(`${FRONTEND}/auth/github/callback?error=github_callback_failed`);
   }
 };
 
@@ -1254,10 +1308,13 @@ exports.getMe = (req, res) =>
 
 exports.updateProfile = async (req, res) => {
   try {
-    const { id }                                                   = req.user;
-    const { full_name, fullName, avatar_url, avatar, phone, bio, preferences } = req.body;
-    const resolvedName   = full_name   || fullName || null;
-    const resolvedAvatar = avatar_url  || avatar   || null;
+    const { id } = req.user;
+    const {
+      full_name, fullName, avatar_url, avatar,
+      phone, bio, preferences,
+    } = req.body;
+    const resolvedName   = full_name  || fullName || null;
+    const resolvedAvatar = avatar_url || avatar   || null;
 
     if (resolvedName && validateName && !validateName(resolvedName))
       return res.status(400).json({ success: false, message: "Name must be 2–50 characters." });
@@ -1342,7 +1399,6 @@ exports.refreshToken = async (req, res) => {
     if (!entity.is_active)
       return res.status(401).json({ success: false, message: "Account deactivated." });
 
-    // Token version check
     if (
       decoded.tokenVersion !== undefined && decoded.tokenVersion !== null &&
       entity.token_version !== undefined && entity.token_version !== null &&
@@ -1364,13 +1420,13 @@ exports.refreshToken = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// ADMIN LOGIN
+// ADMIN AUTH
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.adminLogin = async (req, res) => {
   try {
-    const { email, password } = req.body;
-    const normalizedEmail     = (email || "").trim().toLowerCase();
+    const { email, password }  = req.body;
+    const normalizedEmail      = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail || !password)
       return res.status(400).json({ success: false, message: "Email and password are required." });
@@ -1394,8 +1450,8 @@ exports.adminLogin = async (req, res) => {
     try {
       const updated = await query(
         `UPDATE admin_users
-         SET last_login     = NOW(),
-             token_version  = COALESCE(token_version, 0) + 1
+           SET last_login    = NOW(),
+               token_version = COALESCE(token_version, 0) + 1
          WHERE id = $1
          RETURNING *`,
         [admin.id],
@@ -1419,10 +1475,6 @@ exports.adminLogin = async (req, res) => {
     handleError(res, err, "Admin login failed");
   }
 };
-
-// ═══════════════════════════════════════════════════════════════════════════
-// ADMIN REGISTER
-// ═══════════════════════════════════════════════════════════════════════════
 
 exports.adminRegister = async (req, res) => {
   try {
@@ -1452,15 +1504,14 @@ exports.adminRegister = async (req, res) => {
       [normalizedEmail, normalizedUsername, passwordHash, resolvedName, role || "admin"],
     );
 
-    return res.status(201).json({ success: true, data: { user: sanitizeUser(created.rows[0]) } });
+    return res.status(201).json({
+      success: true,
+      data:    { user: sanitizeUser(created.rows[0]) },
+    });
   } catch (err) {
     handleError(res, err, "Admin registration failed");
   }
 };
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CHANGE PASSWORD
-// ═══════════════════════════════════════════════════════════════════════════
 
 exports.changePassword = async (req, res) => {
   try {
@@ -1492,7 +1543,7 @@ exports.logout = async (req, res) => {
       try {
         await query(
           `UPDATE ${table}
-           SET token_version = COALESCE(token_version, 0) + 1
+             SET token_version = COALESCE(token_version, 0) + 1
            WHERE id = $1`,
           [req.user.id],
         );
@@ -1533,10 +1584,7 @@ exports.deleteAccount = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
-// EXPORT EMAIL BUILDERS (used by tests / other modules)
-// ═══════════════════════════════════════════════════════════════════════════
-
+// ── Export email builders ──────────────────────────────────────────────────
 exports._emailBuilders = {
   buildEmailTemplate,
   buildOtpEmail,

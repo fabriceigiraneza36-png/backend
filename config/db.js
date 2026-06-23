@@ -262,6 +262,296 @@ const ensurePostsSchema = async () => {
   }
 };
 
+const ensurePackagesSchema = async () => {
+  try {
+    // ── packages ─────────────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS packages (
+        id                  SERIAL PRIMARY KEY,
+        title               VARCHAR(500)  NOT NULL,
+        slug                VARCHAR(500)  UNIQUE,
+        short_description   TEXT,
+        description         TEXT,
+        content             TEXT,
+        category            VARCHAR(100),
+        destination         VARCHAR(255),
+        country             VARCHAR(100),
+
+        -- Pricing
+        price               DECIMAL(12,2) DEFAULT 0,
+        price_label         VARCHAR(100)  DEFAULT 'per person',
+        currency            VARCHAR(10)   DEFAULT 'USD',
+        pricing_tiers       JSONB         DEFAULT '[]'::JSONB,
+        discount_percent    INTEGER       DEFAULT 0,
+        is_price_visible    BOOLEAN       DEFAULT true,
+
+        -- Duration & Capacity
+        duration_days       INTEGER,
+        duration_nights     INTEGER,
+        max_travelers       INTEGER,
+        min_travelers       INTEGER       DEFAULT 1,
+        group_size_label    VARCHAR(100),
+
+        -- Media
+        images              JSONB         DEFAULT '[]'::JSONB,
+        cover_image_url     VARCHAR(1000),
+        thumbnail_url       VARCHAR(1000),
+        video_url           VARCHAR(1000),
+        gallery             JSONB         DEFAULT '[]'::JSONB,
+
+        -- Features & Details
+        features            JSONB         DEFAULT '[]'::JSONB,
+        inclusions          JSONB         DEFAULT '[]'::JSONB,
+        exclusions          JSONB         DEFAULT '[]'::JSONB,
+        highlights          JSONB         DEFAULT '[]'::JSONB,
+        itinerary           JSONB         DEFAULT '[]'::JSONB,
+        faqs                JSONB         DEFAULT '[]'::JSONB,
+        tags                TEXT[]        DEFAULT '{}'::TEXT[],
+
+        -- Availability
+        available_months    JSONB         DEFAULT '[]'::JSONB,
+        departure_dates     JSONB         DEFAULT '[]'::JSONB,
+        availability_note   TEXT,
+
+        -- Status & Flags
+        is_published        BOOLEAN       DEFAULT false,
+        is_featured         BOOLEAN       DEFAULT false,
+        is_active           BOOLEAN       DEFAULT true,
+        is_sold_out         BOOLEAN       DEFAULT false,
+        badge_label         VARCHAR(100),
+        badge_color         VARCHAR(50)   DEFAULT '#047857',
+
+        -- SEO
+        meta_title          VARCHAR(500),
+        meta_description    TEXT,
+
+        -- Stats
+        view_count          INTEGER       DEFAULT 0,
+        booking_count       INTEGER       DEFAULT 0,
+        inquiry_count       INTEGER       DEFAULT 0,
+
+        -- Styling (admin can customize card appearance)
+        card_theme          VARCHAR(50)   DEFAULT 'default',
+        accent_color        VARCHAR(20)   DEFAULT '#047857',
+        card_bg_image       VARCHAR(1000),
+
+        -- Admin
+        author_id           INTEGER,
+        author_name         VARCHAR(255),
+        sort_order          INTEGER       DEFAULT 0,
+
+        created_at          TIMESTAMP     DEFAULT NOW(),
+        updated_at          TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── package_messages ──────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_messages (
+        id              SERIAL PRIMARY KEY,
+        package_id      INTEGER       NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+        conversation_id VARCHAR(255),
+        thread_id       INTEGER,
+
+        -- Sender
+        sender_type     VARCHAR(20)   NOT NULL CHECK (sender_type IN ('user','admin','guest')),
+        sender_id       INTEGER,
+        sender_name     VARCHAR(255),
+        sender_email    VARCHAR(255),
+        sender_avatar   VARCHAR(1000),
+
+        -- Message
+        message_type    VARCHAR(50)   DEFAULT 'inquiry'
+                        CHECK (message_type IN (
+                          'inquiry','booking_request','question',
+                          'wish','reply','info_request','info_response',
+                          'booking_confirmed','booking_cancelled','system'
+                        )),
+        subject         VARCHAR(500),
+        body            TEXT          NOT NULL,
+        metadata        JSONB         DEFAULT '{}'::JSONB,
+        attachments     JSONB         DEFAULT '[]'::JSONB,
+
+        -- Status
+        is_read         BOOLEAN       DEFAULT false,
+        is_pinned       BOOLEAN       DEFAULT false,
+        read_at         TIMESTAMP,
+        parent_id       INTEGER,
+
+        created_at      TIMESTAMP     DEFAULT NOW(),
+        updated_at      TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── package_bookings ──────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_bookings (
+        id                SERIAL PRIMARY KEY,
+        booking_ref       VARCHAR(100)  UNIQUE,
+        package_id        INTEGER       NOT NULL REFERENCES packages(id) ON DELETE SET NULL,
+        package_title     VARCHAR(500),
+        package_price     DECIMAL(12,2),
+
+        -- User / Guest
+        user_id           INTEGER,
+        guest_name        VARCHAR(255),
+        guest_email       VARCHAR(255),
+        guest_phone       VARCHAR(50),
+
+        -- Trip details
+        travelers_count   INTEGER       DEFAULT 1,
+        adults            INTEGER       DEFAULT 1,
+        children          INTEGER       DEFAULT 0,
+        travel_date       DATE,
+        end_date          DATE,
+        special_requests  TEXT,
+        dietary_needs     TEXT,
+        pickup_location   VARCHAR(500),
+
+        -- Pricing
+        total_price       DECIMAL(12,2),
+        currency          VARCHAR(10)   DEFAULT 'USD',
+        deposit_paid      DECIMAL(12,2) DEFAULT 0,
+        payment_status    VARCHAR(50)   DEFAULT 'pending',
+
+        -- Status
+        status            VARCHAR(50)   DEFAULT 'pending'
+                          CHECK (status IN (
+                            'pending','needs_info','confirmed',
+                            'cancelled','completed','no_show'
+                          )),
+        priority          VARCHAR(20)   DEFAULT 'normal',
+        admin_notes       TEXT,
+        source            VARCHAR(100)  DEFAULT 'package_page',
+
+        -- Timestamps
+        confirmed_at      TIMESTAMP,
+        cancelled_at      TIMESTAMP,
+        completed_at      TIMESTAMP,
+        created_at        TIMESTAMP     DEFAULT NOW(),
+        updated_at        TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── admin_info_requests ───────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_info_requests (
+        id              SERIAL PRIMARY KEY,
+        package_id      INTEGER       REFERENCES packages(id) ON DELETE CASCADE,
+        booking_id      INTEGER       REFERENCES package_bookings(id) ON DELETE SET NULL,
+        message_id      INTEGER       REFERENCES package_messages(id) ON DELETE SET NULL,
+
+        -- Target user/guest
+        user_id         INTEGER,
+        target_email    VARCHAR(255),
+        target_name     VARCHAR(255),
+
+        -- Form metadata
+        title           VARCHAR(500)  NOT NULL,
+        description     TEXT,
+
+        -- JSON schema for fields
+        -- [{id, label, type, required, placeholder, options, validation}]
+        fields          JSONB         DEFAULT '[]'::JSONB,
+
+        -- Design customization by admin
+        theme           VARCHAR(50)   DEFAULT 'default',
+        accent_color    VARCHAR(20)   DEFAULT '#047857',
+        header_image    VARCHAR(1000),
+        custom_css      TEXT,
+
+        -- Response
+        response        JSONB         DEFAULT '{}'::JSONB,
+        responded_at    TIMESTAMP,
+        responded_by    INTEGER,
+
+        status          VARCHAR(50)   DEFAULT 'pending'
+                        CHECK (status IN ('pending','responded','expired','cancelled')),
+        expires_at      TIMESTAMP,
+
+        created_by      INTEGER,
+        created_at      TIMESTAMP     DEFAULT NOW(),
+        updated_at      TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── package_chat_preferences (user theme/bg settings) ────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_chat_preferences (
+        id            SERIAL PRIMARY KEY,
+        user_id       INTEGER       UNIQUE NOT NULL,
+        theme         VARCHAR(50)   DEFAULT 'light',
+        accent_color  VARCHAR(20)   DEFAULT '#047857',
+        bg_image      VARCHAR(1000),
+        bg_preset     VARCHAR(100)  DEFAULT 'none',
+        font_size     VARCHAR(20)   DEFAULT 'medium',
+        bubble_style  VARCHAR(50)   DEFAULT 'rounded',
+        created_at    TIMESTAMP     DEFAULT NOW(),
+        updated_at    TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── Indexes ───────────────────────────────────────────────────────────────
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_packages_slug         ON packages(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_is_published ON packages(is_published)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_is_featured  ON packages(is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_category     ON packages(category)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_created_at   ON packages(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_sort_order   ON packages(sort_order)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_package_id   ON package_messages(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_sender_id    ON package_messages(sender_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_sender_email ON package_messages(sender_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_created_at   ON package_messages(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_msg_type     ON package_messages(message_type)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_package_id   ON package_bookings(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_user_id      ON package_bookings(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_status       ON package_bookings(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_booking_ref  ON package_bookings(booking_ref)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_email        ON package_bookings(guest_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_package_id  ON admin_info_requests(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_user_id     ON admin_info_requests(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_email       ON admin_info_requests(target_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_status      ON admin_info_requests(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_chat_prefs_user_id    ON package_chat_preferences(user_id)`,
+    ]
+
+    for (const idx of indexes) {
+      await pool.query(idx).catch(() => {})
+    }
+
+    // ── Auto booking_ref trigger ──────────────────────────────────────────────
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION gen_package_booking_ref()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.booking_ref IS NULL THEN
+          NEW.booking_ref := CONCAT(
+            'PKG-',
+            TO_CHAR(NOW(), 'YYYYMMDD'),
+            '-',
+            LPAD(NEW.id::TEXT, 5, '0')
+          );
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `).catch(() => {})
+
+    await pool.query(`
+      DROP TRIGGER IF EXISTS trg_package_booking_ref ON package_bookings;
+      CREATE TRIGGER trg_package_booking_ref
+        BEFORE INSERT ON package_bookings
+        FOR EACH ROW EXECUTE FUNCTION gen_package_booking_ref();
+    `).catch(() => {})
+
+    logger.info('[DB] ✅ Packages schema verified & ensured')
+  } catch (err) {
+    logger.warn('[DB] Packages schema ensure failed:', err.message)
+  }
+}
+
+
 const ensureBookingsSchema = async () => {
   try {
     await pool.query(`
@@ -373,6 +663,312 @@ const ensureBookingsSchema = async () => {
   }
 };
 
+const ensurePackagesSchema = async () => {
+  try {
+    // ── packages ──────────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS packages (
+        id                  SERIAL PRIMARY KEY,
+        title               VARCHAR(500)  NOT NULL,
+        slug                VARCHAR(500)  UNIQUE,
+        short_description   TEXT,
+        description         TEXT,
+        content             TEXT,
+        category            VARCHAR(100),
+        destination         VARCHAR(255),
+        country             VARCHAR(100),
+        price               DECIMAL(12,2) DEFAULT 0,
+        price_label         VARCHAR(100)  DEFAULT 'per person',
+        currency            VARCHAR(10)   DEFAULT 'USD',
+        pricing_tiers       JSONB         DEFAULT '[]'::JSONB,
+        discount_percent    INTEGER       DEFAULT 0,
+        is_price_visible    BOOLEAN       DEFAULT true,
+        duration_days       INTEGER,
+        duration_nights     INTEGER,
+        max_travelers       INTEGER,
+        min_travelers       INTEGER       DEFAULT 1,
+        group_size_label    VARCHAR(100),
+        images              JSONB         DEFAULT '[]'::JSONB,
+        cover_image_url     VARCHAR(1000),
+        thumbnail_url       VARCHAR(1000),
+        video_url           VARCHAR(1000),
+        gallery             JSONB         DEFAULT '[]'::JSONB,
+        features            JSONB         DEFAULT '[]'::JSONB,
+        inclusions          JSONB         DEFAULT '[]'::JSONB,
+        exclusions          JSONB         DEFAULT '[]'::JSONB,
+        highlights          JSONB         DEFAULT '[]'::JSONB,
+        itinerary           JSONB         DEFAULT '[]'::JSONB,
+        faqs                JSONB         DEFAULT '[]'::JSONB,
+        tags                TEXT[]        DEFAULT '{}'::TEXT[],
+        available_months    JSONB         DEFAULT '[]'::JSONB,
+        departure_dates     JSONB         DEFAULT '[]'::JSONB,
+        availability_note   TEXT,
+        is_published        BOOLEAN       DEFAULT false,
+        is_featured         BOOLEAN       DEFAULT false,
+        is_active           BOOLEAN       DEFAULT true,
+        is_sold_out         BOOLEAN       DEFAULT false,
+        badge_label         VARCHAR(100),
+        badge_color         VARCHAR(50)   DEFAULT '#047857',
+        meta_title          VARCHAR(500),
+        meta_description    TEXT,
+        view_count          INTEGER       DEFAULT 0,
+        booking_count       INTEGER       DEFAULT 0,
+        inquiry_count       INTEGER       DEFAULT 0,
+        card_theme          VARCHAR(50)   DEFAULT 'default',
+        accent_color        VARCHAR(20)   DEFAULT '#047857',
+        card_bg_image       VARCHAR(1000),
+        author_id           INTEGER,
+        author_name         VARCHAR(255),
+        sort_order          INTEGER       DEFAULT 0,
+        published_at        TIMESTAMP,
+        created_at          TIMESTAMP     DEFAULT NOW(),
+        updated_at          TIMESTAMP     DEFAULT NOW()
+      )
+    `)
+
+    // ── package_messages ──────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_messages (
+        id              SERIAL PRIMARY KEY,
+        package_id      INTEGER       NOT NULL
+                        REFERENCES packages(id) ON DELETE CASCADE,
+        conversation_id VARCHAR(255),
+        thread_id       INTEGER,
+        sender_type     VARCHAR(20)   NOT NULL
+                        CHECK (sender_type IN ('user','admin','guest')),
+        sender_id       INTEGER,
+        sender_name     VARCHAR(255),
+        sender_email    VARCHAR(255),
+        sender_avatar   VARCHAR(1000),
+        message_type    VARCHAR(50)   DEFAULT 'inquiry'
+                        CHECK (message_type IN (
+                          'inquiry','booking_request','question',
+                          'wish','reply','info_request','info_response',
+                          'booking_confirmed','booking_cancelled','system'
+                        )),
+        subject         VARCHAR(500),
+        body            TEXT          NOT NULL,
+        metadata        JSONB         DEFAULT '{}'::JSONB,
+        attachments     JSONB         DEFAULT '[]'::JSONB,
+        is_read         BOOLEAN       DEFAULT false,
+        is_pinned       BOOLEAN       DEFAULT false,
+        read_at         TIMESTAMP,
+        parent_id       INTEGER,
+        created_at      TIMESTAMP     DEFAULT NOW(),
+        updated_at      TIMESTAMP     DEFAULT NOW()
+      )
+    `)
+
+    // ── package_bookings ──────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_bookings (
+        id                SERIAL PRIMARY KEY,
+        booking_ref       VARCHAR(100)  UNIQUE,
+        package_id        INTEGER
+                          REFERENCES packages(id) ON DELETE SET NULL,
+        package_title     VARCHAR(500),
+        package_price     DECIMAL(12,2),
+        user_id           INTEGER,
+        guest_name        VARCHAR(255),
+        guest_email       VARCHAR(255),
+        guest_phone       VARCHAR(50),
+        travelers_count   INTEGER       DEFAULT 1,
+        adults            INTEGER       DEFAULT 1,
+        children          INTEGER       DEFAULT 0,
+        travel_date       DATE,
+        end_date          DATE,
+        special_requests  TEXT,
+        dietary_needs     TEXT,
+        pickup_location   VARCHAR(500),
+        total_price       DECIMAL(12,2),
+        currency          VARCHAR(10)   DEFAULT 'USD',
+        deposit_paid      DECIMAL(12,2) DEFAULT 0,
+        payment_status    VARCHAR(50)   DEFAULT 'pending',
+        status            VARCHAR(50)   DEFAULT 'pending'
+                          CHECK (status IN (
+                            'pending','needs_info','confirmed',
+                            'cancelled','completed','no_show'
+                          )),
+        priority          VARCHAR(20)   DEFAULT 'normal',
+        admin_notes       TEXT,
+        source            VARCHAR(100)  DEFAULT 'package_page',
+        confirmed_at      TIMESTAMP,
+        cancelled_at      TIMESTAMP,
+        completed_at      TIMESTAMP,
+        created_at        TIMESTAMP     DEFAULT NOW(),
+        updated_at        TIMESTAMP     DEFAULT NOW()
+      )
+    `)
+
+    // ── admin_info_requests ───────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS admin_info_requests (
+        id              SERIAL PRIMARY KEY,
+        package_id      INTEGER
+                        REFERENCES packages(id) ON DELETE CASCADE,
+        booking_id      INTEGER
+                        REFERENCES package_bookings(id) ON DELETE SET NULL,
+        message_id      INTEGER
+                        REFERENCES package_messages(id) ON DELETE SET NULL,
+        user_id         INTEGER,
+        target_email    VARCHAR(255),
+        target_name     VARCHAR(255),
+        title           VARCHAR(500)  NOT NULL,
+        description     TEXT,
+        fields          JSONB         DEFAULT '[]'::JSONB,
+        theme           VARCHAR(50)   DEFAULT 'default',
+        accent_color    VARCHAR(20)   DEFAULT '#047857',
+        header_image    VARCHAR(1000),
+        custom_css      TEXT,
+        response        JSONB         DEFAULT '{}'::JSONB,
+        responded_at    TIMESTAMP,
+        responded_by    INTEGER,
+        status          VARCHAR(50)   DEFAULT 'pending'
+                        CHECK (status IN (
+                          'pending','responded','expired','cancelled'
+                        )),
+        expires_at      TIMESTAMP,
+        created_by      INTEGER,
+        created_at      TIMESTAMP     DEFAULT NOW(),
+        updated_at      TIMESTAMP     DEFAULT NOW()
+      )
+    `)
+
+    // ── package_chat_preferences ──────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS package_chat_preferences (
+        id            SERIAL PRIMARY KEY,
+        user_id       INTEGER       UNIQUE NOT NULL,
+        theme         VARCHAR(50)   DEFAULT 'light',
+        accent_color  VARCHAR(20)   DEFAULT '#047857',
+        bg_image      VARCHAR(1000),
+        bg_preset     VARCHAR(100)  DEFAULT 'none',
+        font_size     VARCHAR(20)   DEFAULT 'medium',
+        bubble_style  VARCHAR(50)   DEFAULT 'rounded',
+        created_at    TIMESTAMP     DEFAULT NOW(),
+        updated_at    TIMESTAMP     DEFAULT NOW()
+      )
+    `)
+
+    // ── Indexes ───────────────────────────────────────────────────────────
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_packages_slug
+         ON packages(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_is_published
+         ON packages(is_published)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_is_featured
+         ON packages(is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_category
+         ON packages(category)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_is_active
+         ON packages(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_created_at
+         ON packages(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_packages_sort_order
+         ON packages(sort_order)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_package_id
+         ON package_messages(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_sender_id
+         ON package_messages(sender_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_sender_email
+         ON package_messages(sender_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_created_at
+         ON package_messages(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_msg_type
+         ON package_messages(message_type)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_is_read
+         ON package_messages(is_read)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_package_id
+         ON package_bookings(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_user_id
+         ON package_bookings(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_status
+         ON package_bookings(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_booking_ref
+         ON package_bookings(booking_ref)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_guest_email
+         ON package_bookings(guest_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_pkg_bkgs_travel_date
+         ON package_bookings(travel_date)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_package_id
+         ON admin_info_requests(package_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_user_id
+         ON admin_info_requests(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_target_email
+         ON admin_info_requests(target_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_info_reqs_status
+         ON admin_info_requests(status)`,
+      `CREATE INDEX IF NOT EXISTS idx_chat_prefs_user_id
+         ON package_chat_preferences(user_id)`,
+    ]
+
+    for (const idx of indexes) {
+      await pool.query(idx).catch(() => {})
+    }
+
+    // ── Auto booking_ref function + trigger ───────────────────────────────
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION gen_package_booking_ref()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        IF NEW.booking_ref IS NULL OR NEW.booking_ref = '' THEN
+          NEW.booking_ref := CONCAT(
+            'PKG-',
+            TO_CHAR(NOW(), 'YYYYMMDD'),
+            '-',
+            LPAD(NEW.id::TEXT, 5, '0')
+          );
+        END IF;
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `).catch(() => {})
+
+    await pool.query(`
+      DROP TRIGGER IF EXISTS trg_package_booking_ref
+        ON package_bookings;
+    `).catch(() => {})
+
+    await pool.query(`
+      CREATE TRIGGER trg_package_booking_ref
+        BEFORE INSERT ON package_bookings
+        FOR EACH ROW
+        EXECUTE FUNCTION gen_package_booking_ref();
+    `).catch(() => {})
+
+    // ── updated_at auto-update function ───────────────────────────────────
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `).catch(() => {})
+
+    for (const tbl of [
+      'packages', 'package_messages',
+      'package_bookings', 'admin_info_requests',
+      'package_chat_preferences',
+    ]) {
+      await pool.query(`
+        DROP TRIGGER IF EXISTS trg_${tbl}_updated_at ON ${tbl};
+      `).catch(() => {})
+
+      await pool.query(`
+        CREATE TRIGGER trg_${tbl}_updated_at
+          BEFORE UPDATE ON ${tbl}
+          FOR EACH ROW
+          EXECUTE FUNCTION update_updated_at_column();
+      `).catch(() => {})
+    }
+
+    logger.info('[DB] ✅ Packages schema verified & ensured')
+  } catch (err) {
+    logger.warn('[DB] Packages schema ensure failed:', err.message)
+  }
+}
 
 const ensureSubscribersSchema = async () => {
   try {
@@ -693,6 +1289,9 @@ const closeConnections = async () => {
 
 // ── Exports ──────────────────────────────────────────────────────────────────
 
+// config/db.js — update the module.exports at the bottom
+// Add ensurePackagesSchema to the existing exports:
+
 module.exports = {
   query,
   pool,
@@ -705,7 +1304,8 @@ module.exports = {
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
-  ensureSubscribersSchema, // ← ADD
+  ensureSubscribersSchema,
   ensurePostsSchema,
   ensureBookingsSchema,
-};
+  ensurePackagesSchema,        // ← ADD
+}

@@ -347,7 +347,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
           Thank you for subscribing to our newsletter.
         </p>
         <p style="margin:0;font-size:16px;color:${sharedStyles.textSecondary};line-height:1.75;">
-          You've joined <strong style="color:${sharedStyles.greenMid};">25,000+ adventurers</strong> who receive exclusive travel inspiration, insider tips, and members-only offers.
+          You've joined <strong style="color:${sharedStyles.greenMid};">10+ adventurers</strong> who receive exclusive travel inspiration, insider tips, and members-only offers.
         </p>
       </td>
     </tr>

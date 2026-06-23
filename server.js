@@ -57,6 +57,7 @@ const usersRouter = require("./routes/users");
 const reviewsRouter = require("./routes/reviews");
 const bookingsRouter = require("./routes/bookings");
 const countriesRouter = require("./routes/countries");
+const packagesRouter = require('./routes/packages')
 const destinationsRouter = require("./routes/destinations");
 const postsRouter = require("./routes/posts");
 const contactRouter = require("./routes/contact");
@@ -445,6 +446,7 @@ app.use("/api/users", usersRouter);
 app.use("/api/bookings", bookingsRouter);
 app.use("/api/reviews", reviewsRouter);
 app.use("/api/countries", countriesRouter);
+app.use('/api/packages', packagesRouter)
 app.use("/api/destinations", destinationsRouter);
 app.use("/api/posts", postsRouter);
 app.use("/api/contact", contactRouter);
@@ -1352,6 +1354,9 @@ async function initializeServer() {
 
     await ensurePostsSchema();
     logger.info("✅ Posts schema ready");
+
+    await ensurePackagesSchema();
+    logger.info("✅ Packages schema ready");
 
     await ensureBookingsSchema();
     logger.info("✅ Bookings schema ready");
