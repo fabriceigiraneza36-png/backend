@@ -1,24 +1,24 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL - ENTERPRISE BACKEND SERVER v6.3
+ * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.4
  * "True Adventures In High Places & Deep Culture"
- * ═══════════════════════════════════════════════════════════════════════════════
  *
- * Fixes in this version:
- *   - Socket.io: allowEIO3 + upgraded pingTimeout for Render cold starts
- *   - Socket.io: polling transport kept — required for initial handshake
- *   - ensurePackagesSchema called at startup
- *   - pkg:join / pkg:leave room events for PackageDetail real-time
- *   - All existing msg:* and chat:* events preserved unchanged
+ * Socket.io fixes v6.4:
+ *   - Single persistent connection per client (no double-connect)
+ *   - allowEIO3 + extended pingTimeout for Render cold starts
+ *   - polling + websocket transports (required for initial handshake)
+ *   - Conversation rooms joined once, persisted across reconnects
+ *   - msg:register is idempotent — safe to call on reconnect
+ *   - Typing indicator cleanup on disconnect
+ *   - Admin online/offline broadcast on connect/disconnect
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 
-// ── IPv4 DNS — MUST be absolute first lines ───────────────────────────────────
+// ── IPv4 DNS — MUST be first ──────────────────────────────────────────────────
 const dns = require('dns')
 dns.setDefaultResultOrder('ipv4first')
 
-require('dotenv').config({
-  path: require('path').resolve(process.cwd(), '.env'),
-})
+require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') })
 
 const path        = require('path')
 const http        = require('http')
@@ -48,9 +48,8 @@ const socketBus = require('./utils/socketBus')
 
 const { verifyEmailConnection }              = require('./utils/emailService')
 const { verifyTransporter: verifyAuthEmail } = require('./utils/email')
-
-const { errorHandler, notFoundHandler } = require('./middleware/errorHandler')
-const { cacheMiddleware }               = require('./middleware/cache')
+const { errorHandler, notFoundHandler }      = require('./middleware/errorHandler')
+const { cacheMiddleware }                    = require('./middleware/cache')
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 const usersRouter               = require('./routes/users')
@@ -96,9 +95,7 @@ const IS_PROD  = NODE_ENV === 'production'
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const envOrigins = (process.env.CORS_ORIGINS || '')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean)
+  .split(',').map(o => o.trim()).filter(Boolean)
 
 const ALLOWED_ORIGINS = [
   ...new Set([
@@ -124,11 +121,10 @@ const isOriginAllowed = (origin) => {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PACKAGES SCHEMA BOOTSTRAP
+// PACKAGES SCHEMA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ensurePackagesSchema = async () => {
-  // packages
   await query(`
     CREATE TABLE IF NOT EXISTS packages (
       id                 SERIAL PRIMARY KEY,
@@ -171,9 +167,9 @@ const ensurePackagesSchema = async () => {
       is_sold_out        BOOLEAN       DEFAULT false,
       is_active          BOOLEAN       DEFAULT true,
       badge_label        VARCHAR(100),
-      badge_color        VARCHAR(20)   DEFAULT '#047857',
+      badge_color        VARCHAR(20)   DEFAULT '#16a34a',
       card_theme         VARCHAR(50)   DEFAULT 'default',
-      accent_color       VARCHAR(20)   DEFAULT '#047857',
+      accent_color       VARCHAR(20)   DEFAULT '#16a34a',
       card_bg_image      VARCHAR(500),
       meta_title         VARCHAR(255),
       meta_description   TEXT,
@@ -189,43 +185,41 @@ const ensurePackagesSchema = async () => {
     )
   `)
 
-  // package_bookings
   await query(`
     CREATE TABLE IF NOT EXISTS package_bookings (
       id               SERIAL PRIMARY KEY,
-      booking_ref      VARCHAR(50)  UNIQUE,
-      package_id       INTEGER      REFERENCES packages(id) ON DELETE SET NULL,
+      booking_ref      VARCHAR(50)   UNIQUE,
+      package_id       INTEGER       REFERENCES packages(id) ON DELETE SET NULL,
       package_title    VARCHAR(255),
       package_price    NUMERIC(12,2),
       user_id          INTEGER,
-      guest_name       VARCHAR(255) NOT NULL,
-      guest_email      VARCHAR(255) NOT NULL,
+      guest_name       VARCHAR(255)  NOT NULL,
+      guest_email      VARCHAR(255)  NOT NULL,
       guest_phone      VARCHAR(50),
-      travelers_count  INTEGER      DEFAULT 1,
-      adults           INTEGER      DEFAULT 1,
-      children         INTEGER      DEFAULT 0,
+      travelers_count  INTEGER       DEFAULT 1,
+      adults           INTEGER       DEFAULT 1,
+      children         INTEGER       DEFAULT 0,
       travel_date      DATE,
       end_date         DATE,
       special_requests TEXT,
       dietary_needs    TEXT,
       pickup_location  VARCHAR(255),
       total_price      NUMERIC(12,2),
-      currency         VARCHAR(10)  DEFAULT 'USD',
+      currency         VARCHAR(10)   DEFAULT 'USD',
       deposit_paid     NUMERIC(12,2) DEFAULT 0,
-      payment_status   VARCHAR(30)  DEFAULT 'unpaid',
-      status           VARCHAR(30)  DEFAULT 'pending',
-      priority         VARCHAR(20)  DEFAULT 'normal',
+      payment_status   VARCHAR(30)   DEFAULT 'unpaid',
+      status           VARCHAR(30)   DEFAULT 'pending',
+      priority         VARCHAR(20)   DEFAULT 'normal',
       admin_notes      TEXT,
-      source           VARCHAR(100) DEFAULT 'package_page',
+      source           VARCHAR(100)  DEFAULT 'package_page',
       confirmed_at     TIMESTAMP,
       cancelled_at     TIMESTAMP,
       completed_at     TIMESTAMP,
-      created_at       TIMESTAMP    DEFAULT NOW(),
-      updated_at       TIMESTAMP    DEFAULT NOW()
+      created_at       TIMESTAMP     DEFAULT NOW(),
+      updated_at       TIMESTAMP     DEFAULT NOW()
     )
   `)
 
-  // package_messages
   await query(`
     CREATE TABLE IF NOT EXISTS package_messages (
       id            SERIAL PRIMARY KEY,
@@ -245,7 +239,6 @@ const ensurePackagesSchema = async () => {
     )
   `)
 
-  // admin_info_requests
   await query(`
     CREATE TABLE IF NOT EXISTS admin_info_requests (
       id             SERIAL PRIMARY KEY,
@@ -259,7 +252,7 @@ const ensurePackagesSchema = async () => {
       description    TEXT,
       fields         JSONB        DEFAULT '[]'::JSONB,
       theme          VARCHAR(50)  DEFAULT 'default',
-      accent_color   VARCHAR(20)  DEFAULT '#047857',
+      accent_color   VARCHAR(20)  DEFAULT '#16a34a',
       header_image   VARCHAR(500),
       custom_css     TEXT,
       status         VARCHAR(20)  DEFAULT 'pending',
@@ -273,13 +266,12 @@ const ensurePackagesSchema = async () => {
     )
   `)
 
-  // package_chat_preferences
   await query(`
     CREATE TABLE IF NOT EXISTS package_chat_preferences (
       id           SERIAL PRIMARY KEY,
       user_id      INTEGER     UNIQUE NOT NULL,
       theme        VARCHAR(30) DEFAULT 'light',
-      accent_color VARCHAR(20) DEFAULT '#047857',
+      accent_color VARCHAR(20) DEFAULT '#16a34a',
       bg_image     VARCHAR(500),
       bg_preset    VARCHAR(50) DEFAULT 'none',
       font_size    VARCHAR(20) DEFAULT 'medium',
@@ -289,7 +281,6 @@ const ensurePackagesSchema = async () => {
     )
   `)
 
-  // Indexes
   const indexes = [
     `CREATE INDEX IF NOT EXISTS idx_packages_slug       ON packages(slug)`,
     `CREATE INDEX IF NOT EXISTS idx_packages_published  ON packages(is_published, is_active)`,
@@ -305,9 +296,7 @@ const ensurePackagesSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_info_reqs_user      ON admin_info_requests(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_pkg_chat_prefs_user ON package_chat_preferences(user_id)`,
   ]
-  for (const idx of indexes) {
-    await query(idx).catch(() => {})
-  }
+  for (const idx of indexes) await query(idx).catch(() => {})
 
   logger.info('✅ Packages schema ready')
 }
@@ -319,7 +308,6 @@ const ensurePackagesSchema = async () => {
 const app = express()
 app.set('trust proxy', 1)
 
-// Security headers
 app.use(
   helmet({
     contentSecurityPolicy:     false,
@@ -329,7 +317,6 @@ app.use(
   }),
 )
 
-// COOP/COEP/CORP
 app.use((_req, res, next) => {
   res.setHeader('Cross-Origin-Opener-Policy',   'same-origin-allow-popups')
   res.setHeader('Cross-Origin-Embedder-Policy', 'unsafe-none')
@@ -338,7 +325,6 @@ app.use((_req, res, next) => {
   next()
 })
 
-// CORS
 const corsOptions = {
   origin: (origin, callback) => {
     if (isOriginAllowed(origin)) return callback(null, true)
@@ -358,22 +344,18 @@ const corsOptions = {
 }
 
 app.use(cors(corsOptions))
-
 app.options('*', (req, res) => {
   const origin = req.headers.origin
   if (isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin',      origin || '*')
     res.setHeader('Access-Control-Allow-Credentials', 'true')
   }
-  res.setHeader('Access-Control-Allow-Methods',
-    'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD')
-  res.setHeader('Access-Control-Allow-Headers',
-    corsOptions.allowedHeaders.join(','))
-  res.setHeader('Access-Control-Max-Age', '86400')
+  res.setHeader('Access-Control-Allow-Methods',  'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD')
+  res.setHeader('Access-Control-Allow-Headers',  corsOptions.allowedHeaders.join(','))
+  res.setHeader('Access-Control-Max-Age',        '86400')
   return res.sendStatus(200)
 })
 
-// Global middleware
 app.use(compression())
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
@@ -381,32 +363,21 @@ app.use(cacheMiddleware(120))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 if (IS_PROD) {
-  app.use(
-    morgan('combined', {
-      stream: { write: (msg) => logger.http(msg.trim()) },
-      skip:   (req) => req.url === '/health' || req.url === '/api/health',
-    }),
-  )
+  app.use(morgan('combined', {
+    stream: { write: (msg) => logger.http(msg.trim()) },
+    skip:   (req) => req.url === '/health' || req.url === '/api/health',
+  }))
 } else {
   app.use(morgan('dev', { skip: (req) => req.url === '/health' }))
 }
 
-// Request ID tracing
-app.use((req, _res, next) => {
-  req.id = uuidv4()
-  next()
-})
+app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
-// ── Expose socket.io to all route handlers ────────────────────────────────────
-// NOTE: io is defined below after httpServer creation.
-// We use a lazy reference so route handlers always get the live io instance.
-app.use((req, _res, next) => {
-  req.app.set('io', io)
-  next()
-})
+// ── Expose io to route handlers (lazy ref — io defined after httpServer) ──────
+app.use((req, _res, next) => { req.app.set('io', io); next() })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HEALTH & META ROUTES
+// HEALTH & META
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.get('/health', (_req, res) =>
@@ -414,7 +385,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '6.3',
+    version:     '6.4',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -423,7 +394,7 @@ app.get('/health', (_req, res) =>
       total: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB`,
     },
     network: { dnsOrder: 'ipv4first' },
-    headers: { coop: 'same-origin-allow-popups', coep: 'unsafe-none' },
+    theme:   { primary: '#16a34a', name: 'green-white' },
   }),
 )
 
@@ -435,18 +406,15 @@ app.get('/api', (_req, res) =>
   res.json({
     success:  true,
     name:     'Altuvera Travel API',
-    version:  '6.3',
+    version:  '6.4',
     tagline:  'True Adventures In High Places & Deep Culture',
     health:   '/health',
     routes:   '/api/routes',
   }),
 )
 
-// Email test
 app.get('/api/debug/email-test', async (req, res) => {
-  if (req.query.secret !== 'altuvera-test') {
-    return res.status(403).json({ error: 'forbidden' })
-  }
+  if (req.query.secret !== 'altuvera-test') return res.status(403).json({ error: 'forbidden' })
   const { sendEmail } = require('./utils/email')
   const to = req.query.to || process.env.ADMIN_EMAIL || process.env.SMTP_USER
   try {
@@ -461,11 +429,9 @@ app.get('/api/debug/email-test', async (req, res) => {
   }
 })
 
-// Table inspector
 app.get('/api/debug/tables', async (req, res) => {
-  if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0, 8)) {
+  if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0, 8))
     return res.status(403).json({ error: 'forbidden' })
-  }
   try {
     const tables = await query(`
       SELECT table_name FROM information_schema.tables
@@ -486,7 +452,6 @@ app.get('/api/debug/tables', async (req, res) => {
   }
 })
 
-// Route inspector
 const cleanPath = (p = '') =>
   p.replace(/\\/g, '').replace(/\/+$/, '').replace(/\/\//g, '/')
    .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, ':param')
@@ -511,9 +476,7 @@ const collectRoutes = (stack, prefix = '') => {
 
 app.get('/api/routes', (req, res) => {
   const routes   = collectRoutes(app._router?.stack || [])
-  const byMethod = routes.reduce((acc, r) => {
-    acc[r.method] = (acc[r.method] || 0) + 1; return acc
-  }, {})
+  const byMethod = routes.reduce((acc, r) => { acc[r.method] = (acc[r.method] || 0) + 1; return acc }, {})
   res.json({ success: true, total: routes.length, byMethod, routes })
 })
 
@@ -553,10 +516,14 @@ app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTTP SERVER + SOCKET.IO
+// HTTP SERVER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const httpServer = http.createServer(app)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SOCKET.IO — configured for stable persistent connections
+// ═══════════════════════════════════════════════════════════════════════════════
 
 const io = new Server(httpServer, {
   cors: {
@@ -564,16 +531,22 @@ const io = new Server(httpServer, {
     methods:     ['GET', 'POST'],
     credentials: true,
   },
-  // ── Transport config — fixes 400 errors on Render ─────────────────────────
-  // Keep polling first: Socket.io uses it for the initial handshake,
-  // then upgrades to websocket. Removing polling causes the 400 errors.
-  transports:     ['polling', 'websocket'],
-  allowEIO3:      true,          // accept Socket.io v3 clients connecting to v4 server
-  pingTimeout:    60000,         // 60s — handles Render cold-start delays
-  pingInterval:   25000,
-  upgradeTimeout: 30000,
-  // ── Prevent double /api/api in socket path ─────────────────────────────────
-  path:           '/socket.io', // explicit — never inherits /api prefix
+  // ── Keep polling FIRST — required for Socket.io handshake ─────────────────
+  // Socket.io v4 opens with HTTP polling, then upgrades to WebSocket.
+  // Removing polling causes HTTP 400 "Bad Request" errors on Render/Vercel.
+  transports:        ['polling', 'websocket'],
+  allowEIO3:         true,    // accept EIO v3 clients (older browsers, some CDNs)
+  pingTimeout:       60000,   // 60s — handles Render cold-start delays
+  pingInterval:      25000,   // standard interval
+  upgradeTimeout:    30000,   // time allowed to upgrade from polling → ws
+  maxHttpBufferSize: 1e6,     // 1MB message limit
+  // ── Explicit path — prevents /api/socket.io double-prefix bugs ────────────
+  path: '/socket.io',
+  // ── Connection state recovery — clients rejoin rooms after reconnect ───────
+  connectionStateRecovery: {
+    maxDisconnectionDuration: 2 * 60 * 1000, // 2 minutes
+    skipMiddlewares: true,
+  },
 })
 
 socketBus.setIO(io)
@@ -589,7 +562,7 @@ const verifySocketToken = (token) => {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// NEW MESSAGING SYSTEM — DB HELPERS
+// CONVERSATION HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const getOrCreateConversation = async ({
@@ -598,6 +571,7 @@ const getOrCreateConversation = async ({
   const sid = String(sessionId || '').trim()
   if (!sid) throw new Error('sessionId required')
 
+  // Always try to find existing first (idempotent — safe on reconnect)
   let res = await query(
     `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
             u.avatar_url AS user_avatar
@@ -607,6 +581,7 @@ const getOrCreateConversation = async ({
   )
 
   if (res.rows.length > 0) {
+    // Update user info if provided
     if (userId || guestName || guestEmail) {
       await query(
         `UPDATE conversations SET
@@ -621,13 +596,16 @@ const getOrCreateConversation = async ({
     return res.rows[0]
   }
 
+  // Create new
   const inserted = await query(
     `INSERT INTO conversations
        (session_id, user_id, guest_name, guest_email,
         channel, source, ip_address, status, priority)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal') RETURNING *`,
-    [sid, userId || null, guestName || null, guestEmail || null,
-     channel || 'live_chat', source || 'website', ipAddress || null],
+    [
+      sid, userId || null, guestName || null, guestEmail || null,
+      channel || 'live_chat', source || 'website', ipAddress || null,
+    ],
   )
   return inserted.rows[0]
 }
@@ -704,7 +682,7 @@ const serializeConvMessage = (row) => ({
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// LEGACY CHAT — DB HELPERS
+// LEGACY CHAT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const getOrCreateChatSession = async ({
@@ -744,8 +722,7 @@ const saveChatMessage = async ({
     ],
   )
   await query(
-    `UPDATE chat_sessions SET last_active = NOW(), updated_at = NOW()
-      WHERE session_id = $1`,
+    `UPDATE chat_sessions SET last_active = NOW(), updated_at = NOW() WHERE session_id = $1`,
     [sessionId],
   )
   return rows[0]
@@ -788,43 +765,52 @@ const serializeChatMsg = (row) => ({
 io.use((socket, next) => {
   const token =
     socket.handshake.auth?.token ||
-    socket.handshake.headers?.authorization
-      ?.replace?.(/^Bearer\s+/i, '')
-      ?.trim()
+    socket.handshake.headers?.authorization?.replace?.(/^Bearer\s+/i, '')?.trim()
 
-  const decoded          = verifySocketToken(token)
-  socket.data.user       = decoded || null
-  socket.data.isAdmin    = decoded?.type === 'admin' || decoded?.role === 'admin'
-  socket.data.userId     = decoded?.id   || null
+  const decoded       = verifySocketToken(token)
+  socket.data.user    = decoded || null
+  socket.data.isAdmin = decoded?.type === 'admin' || decoded?.role === 'admin'
+  socket.data.userId  = decoded?.id || null
 
   if (socket.data.isAdmin) {
     socket.join('admins')
     socket.join('admin-room')
-    logger.info(`[Socket] Admin joined: ${socket.id} (id=${decoded?.id})`)
+    logger.info(`[Socket] Admin connected: ${socket.id} (id=${decoded?.id})`)
   }
 
   next()
 })
 
-// Typing indicator cleanup
+// ── Typing indicator cleanup interval ─────────────────────────────────────────
 setInterval(async () => {
   try { await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`) }
   catch { /* silent */ }
 }, 15_000)
 
+// ── Track connected admins for adminOnline broadcasts ─────────────────────────
+const connectedAdmins = new Map() // socketId → adminId
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO — CONNECTION + EVENTS
+// SOCKET.IO — CONNECTION HANDLER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 io.on('connection', (socket) => {
   logger.info(
-    `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`
+    `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`,
   )
 
-  // User room — emitToUser() in route handlers uses this
+  // ── User personal room ───────────────────────────────────────────────────
   if (socket.data.userId) socket.join(`user-${socket.data.userId}`)
 
-  // ── Package real-time rooms ───────────────────────────────────────────────
+  // ── Admin online tracking ────────────────────────────────────────────────
+  if (socket.data.isAdmin) {
+    connectedAdmins.set(socket.id, socket.data.userId)
+    // Broadcast admin-online to all user sessions
+    io.emit('msg:admin-online', { online: true })
+    logger.info(`[Socket] Admin online. Total admins: ${connectedAdmins.size}`)
+  }
+
+  // ── Package rooms ────────────────────────────────────────────────────────
   socket.on('pkg:join', ({ packageId, userId } = {}) => {
     if (packageId) socket.join(`package-${packageId}`)
     if (userId)    socket.join(`user-${userId}`)
@@ -834,7 +820,18 @@ io.on('connection', (socket) => {
     if (packageId) socket.leave(`package-${packageId}`)
   })
 
-  // ── NEW MESSAGING SYSTEM ──────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════
+  // NEW MESSAGING SYSTEM
+  //
+  // Flow:
+  //   1. Client calls msg:register with sessionId (stored in localStorage)
+  //   2. Server returns msg:session with conversationId + message history
+  //   3. Client joins conv:${conversationId} room automatically
+  //   4. Client sends msg:send — server broadcasts to conv room + notifies admins
+  //   5. Admin calls msg:admin-join to enter conversation room
+  //   6. Admin sends msg:admin-send — server broadcasts to conv room + user session
+  //   7. On reconnect, client calls msg:register again (idempotent)
+  // ════════════════════════════════════════════════════════════════════════
 
   socket.on('msg:register', async (payload = {}, cb) => {
     try {
@@ -847,17 +844,24 @@ io.on('connection', (socket) => {
         userId:     socket.data.userId || null,
         guestName:  name  || null,
         guestEmail: email || null,
-        channel:    payload.channel || 'live_chat',
+        channel:    payload.channel  || 'live_chat',
         source:     socket.data.userId ? 'frontend-auth' : 'frontend-guest',
         ipAddress:  socket.handshake.address,
       })
 
+      // Persist IDs on socket — survive reconnects
       socket.data.sessionId      = conv.session_id
       socket.data.conversationId = conv.id
+
+      // Join rooms — idempotent (Socket.io ignores duplicate joins)
       socket.join(`session:${conv.session_id}`)
       socket.join(`conv:${conv.id}`)
 
-      const messages    = await fetchConversationMessages(conv.id)
+      const messages = await fetchConversationMessages(conv.id)
+
+      // Tell client if any admin is online
+      const adminOnline = connectedAdmins.size > 0
+
       const sessionData = {
         conversationId: conv.id,
         sessionId:      conv.session_id,
@@ -865,11 +869,23 @@ io.on('connection', (socket) => {
         guestName:      conv.guest_name,
         guestEmail:     conv.guest_email,
         status:         conv.status,
+        adminOnline,
         messages:       messages.map(serializeConvMessage),
       }
 
       socket.emit('msg:session', sessionData)
       if (typeof cb === 'function') cb({ success: true, ...sessionData })
+
+      // Notify admins of new/returning user session
+      io.to('admins').emit('msg:user-registered', {
+        conversationId: conv.id,
+        sessionId:      conv.session_id,
+        guestName:      conv.guest_name || name || 'Guest',
+        guestEmail:     conv.guest_email || email || null,
+        status:         conv.status,
+        lastMessage:    conv.last_message,
+      })
+
     } catch (err) {
       logger.error('[Socket] msg:register error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -883,6 +899,7 @@ io.on('connection', (socket) => {
       const body = String(payload.body || payload.message || '').trim()
       if (!body) throw new Error('Message body is required')
 
+      // Recover conversationId from socket.data or re-register
       let convId = socket.data.conversationId
       let sid    = socket.data.sessionId
 
@@ -911,20 +928,27 @@ io.on('connection', (socket) => {
         senderEmail:    payload.email || socket.data.user?.email     || null,
         senderAvatar:   socket.data.user?.avatar_url || null,
         body,
-        metadata:       payload.metadata || { source: 'socket' },
+        metadata: payload.metadata || { source: 'socket' },
       })
 
       const serialized  = serializeConvMessage(msg)
       const unreadAdmin = await countUnreadAdmin(convId)
 
+      // Broadcast to all sockets in this conversation (user + any admin viewing)
       io.to(`conv:${convId}`).emit('msg:message', serialized)
+
+      // Notify all admin panels
       io.to('admins').emit('msg:new-from-user', {
-        conversationId: convId, sessionId: sid,
-        message: serialized, senderName: msg.sender_name || 'Guest',
-        senderEmail: msg.sender_email || '', unreadCount: unreadAdmin,
+        conversationId: convId,
+        sessionId:      sid,
+        message:        serialized,
+        senderName:     msg.sender_name  || 'Guest',
+        senderEmail:    msg.sender_email || '',
+        unreadCount:    unreadAdmin,
       })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
+
     } catch (err) {
       logger.error('[Socket] msg:send error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -940,6 +964,7 @@ io.on('connection', (socket) => {
       socket.join(`conv:${convId}`)
       socket.data.activeConversation = convId
 
+      // Mark all user messages as read
       await query(
         `UPDATE messages SET is_read = true, read_at = NOW()
           WHERE conversation_id = $1 AND sender_type != 'admin' AND is_read = false`,
@@ -948,9 +973,12 @@ io.on('connection', (socket) => {
       await query(`UPDATE conversations SET unread_admin = 0 WHERE id = $1`, [convId])
 
       const messages = await fetchConversationMessages(convId)
+
+      // Tell the user their messages were read
       io.to(`conv:${convId}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
 
       if (typeof cb === 'function') cb({ success: true, messages: messages.map(serializeConvMessage) })
+
     } catch (err) {
       logger.error('[Socket] msg:admin-join error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -960,6 +988,7 @@ io.on('connection', (socket) => {
   socket.on('msg:admin-send', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin authentication required')
+
       const body   = String(payload.body || '').trim()
       const convId = parseInt(payload.conversationId)
       if (!body)   throw new Error('Message body required')
@@ -970,22 +999,31 @@ io.on('connection', (socket) => {
       const conv = convRes.rows[0]
 
       const msg = await saveConversationMessage({
-        conversationId: convId, senderType: 'admin',
-        senderId:    socket.data.user?.id,
-        senderName:  socket.data.user?.full_name || socket.data.user?.name || 'Support',
-        senderEmail: socket.data.user?.email || null,
-        senderAvatar: null, body,
+        conversationId: convId,
+        senderType:     'admin',
+        senderId:       socket.data.user?.id,
+        senderName:     socket.data.user?.full_name || socket.data.user?.name || 'Support',
+        senderEmail:    socket.data.user?.email || null,
+        senderAvatar:   null,
+        body,
         metadata: { source: 'admin-socket' },
       })
 
       const serialized = serializeConvMessage(msg)
+
+      // Send to all sockets in conversation room
       io.to(`conv:${convId}`).emit('msg:message', serialized)
+
+      // Also send to user's session room (in case they reconnected with new socket)
       if (conv.session_id) {
         io.to(`session:${conv.session_id}`).emit('msg:message', serialized)
       }
+
+      // Notify other admins
       socket.to('admins').emit('msg:admin-sent', { conversationId: convId, message: serialized })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
+
     } catch (err) {
       logger.error('[Socket] msg:admin-send error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -1005,8 +1043,11 @@ io.on('connection', (socket) => {
              (conversation_id, sender_type, sender_id, sender_name, socket_id, expires_at)
            VALUES ($1,$2,$3,$4,$5, NOW() + INTERVAL '10 seconds')
            ON CONFLICT DO NOTHING`,
-          [convId, senderType, socket.data.userId || null,
-           payload.senderName || socket.data.user?.full_name || 'Guest', socket.id],
+          [
+            convId, senderType, socket.data.userId || null,
+            payload.senderName || socket.data.user?.full_name || 'Guest',
+            socket.id,
+          ],
         )
       } else {
         await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [socket.id])
@@ -1014,12 +1055,46 @@ io.on('connection', (socket) => {
     } catch { /* non-fatal */ }
 
     socket.to(`conv:${convId}`).emit('msg:typing', {
-      conversationId: parseInt(convId), senderType,
+      conversationId: parseInt(convId),
+      senderType,
       senderName:
-        payload.senderName || socket.data.user?.full_name ||
+        payload.senderName ||
+        socket.data.user?.full_name ||
         (socket.data.isAdmin ? 'Support' : 'Guest'),
       isTyping,
     })
+  })
+
+  socket.on('msg:mark-read', async (payload = {}, cb) => {
+    try {
+      const convId = payload.conversationId || socket.data.conversationId
+      if (!convId) throw new Error('conversationId required')
+
+      if (socket.data.isAdmin) {
+        await query(
+          `UPDATE messages SET is_read = true, read_at = NOW()
+            WHERE conversation_id = $1 AND sender_type != 'admin' AND is_read = false`,
+          [convId],
+        )
+        await query(`UPDATE conversations SET unread_admin = 0 WHERE id = $1`, [convId])
+      } else {
+        await query(
+          `UPDATE messages SET is_read = true, read_at = NOW()
+            WHERE conversation_id = $1 AND sender_type = 'admin' AND is_read = false`,
+          [convId],
+        )
+        await query(`UPDATE conversations SET unread_user = 0 WHERE id = $1`, [convId])
+      }
+
+      io.to(`conv:${convId}`).emit('msg:read', {
+        conversationId: parseInt(convId),
+        readBy: socket.data.isAdmin ? 'admin' : 'user',
+      })
+
+      if (typeof cb === 'function') cb({ success: true })
+    } catch (err) {
+      if (typeof cb === 'function') cb({ success: false, error: err.message })
+    }
   })
 
   socket.on('msg:admin-status', async (payload = {}, cb) => {
@@ -1032,8 +1107,8 @@ io.on('connection', (socket) => {
       const params = []
       let   p      = 1
 
-      if (status)   { fields.push(`status   = $${p++}`); params.push(status)   }
-      if (priority) { fields.push(`priority = $${p++}`); params.push(priority) }
+      if (status)              { fields.push(`status   = $${p++}`); params.push(status)   }
+      if (priority)            { fields.push(`priority = $${p++}`); params.push(priority) }
       if (status === 'closed') fields.push('closed_at = NOW()')
       fields.push('updated_at = NOW()')
       params.push(conversationId)
@@ -1048,6 +1123,7 @@ io.on('connection', (socket) => {
         status:   result.rows[0]?.status,
         priority: result.rows[0]?.priority,
       }
+
       io.to(`conv:${conversationId}`).emit('msg:conversation-updated', updated)
       io.to('admins').emit('msg:conversation-updated', updated)
 
@@ -1074,20 +1150,20 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ── LEGACY CHAT SYSTEM ────────────────────────────────────────────────────
+  // ════════════════════════════════════════════════════════════════════════
+  // LEGACY CHAT SYSTEM (preserved unchanged)
+  // ════════════════════════════════════════════════════════════════════════
 
   socket.on('chat:register', async (payload = {}, cb) => {
     try {
-      const sid    = String(payload.sessionId || socket.data.sessionId || `guest-${uuidv4()}`).trim()
-      const name   = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name  || '').trim()
-      const email  = String(payload.email || socket.data.user?.email    || '').trim()
+      const sid   = String(payload.sessionId || socket.data.sessionId || `guest-${uuidv4()}`).trim()
+      const name  = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name  || '').trim()
+      const email = String(payload.email || socket.data.user?.email    || '').trim()
 
       const session = await getOrCreateChatSession({
-        sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        sessionId: sid, userId: socket.data.user?.id,
+        email: email || null, fullName: name || null,
+        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
       })
 
       socket.data.sessionId = session.session_id
@@ -1219,6 +1295,18 @@ io.on('connection', (socket) => {
   // ── Disconnect ────────────────────────────────────────────────────────────
   socket.on('disconnect', async (reason) => {
     logger.info(`[Socket] Disconnected: ${socket.id} | reason=${reason}`)
+
+    // Admin offline tracking
+    if (socket.data.isAdmin) {
+      connectedAdmins.delete(socket.id)
+      logger.info(`[Socket] Admin offline. Remaining admins: ${connectedAdmins.size}`)
+      // Only broadcast offline if NO admins remain
+      if (connectedAdmins.size === 0) {
+        io.emit('msg:admin-online', { online: false })
+      }
+    }
+
+    // Clean typing indicators
     try {
       await query(`DELETE FROM typing_indicators WHERE socket_id = $1`, [socket.id])
     } catch { /* silent */ }
@@ -1242,7 +1330,6 @@ async function initializeServer() {
     await query('SELECT NOW()')
     logger.info('✅ Database connected')
 
-    // Destination schema
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
@@ -1251,34 +1338,16 @@ async function initializeServer() {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
-    // Core schemas
-    await ensureSubscribersSchema()
-    logger.info('✅ Subscribers schema ready')
+    await ensureSubscribersSchema(); logger.info('✅ Subscribers schema ready')
+    await ensureUserSchema();        logger.info('✅ User schema ready')
+    await ensureContactSchema();     logger.info('✅ Contact schema ready')
+    await ensureGallerySchema();     logger.info('✅ Gallery schema ready')
+    await ensureChatSchema();        logger.info('✅ Chat schema ready')
+    await ensurePostsSchema();       logger.info('✅ Posts schema ready')
+    await ensurePackagesSchema()     // logs internally
+    await ensureBookingsSchema();    logger.info('✅ Bookings schema ready')
 
-    await ensureUserSchema()
-    logger.info('✅ User schema ready')
-
-    await ensureContactSchema()
-    logger.info('✅ Contact schema ready')
-
-    await ensureGallerySchema()
-    logger.info('✅ Gallery schema ready')
-
-    await ensureChatSchema()
-    logger.info('✅ Chat schema ready')
-
-    await ensurePostsSchema()
-    logger.info('✅ Posts schema ready')
-
-    // Packages schema
-    await ensurePackagesSchema()
-    // logger.info already called inside ensurePackagesSchema
-
-    // Bookings schema
-    await ensureBookingsSchema()
-    logger.info('✅ Bookings schema ready')
-
-    // Messaging schema (conversations + messages)
+    // Messaging schema
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS conversations (
@@ -1357,21 +1426,22 @@ async function initializeServer() {
       logger.warn('⚠️  Messaging schema (non-fatal):', err.message)
     }
 
-    // Start server
     httpServer.listen(PORT, () => {
       const div = '═'.repeat(67)
       logger.info(`\n${div}`)
-      logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.3')
+      logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.4')
       logger.info('     "True Adventures In High Places & Deep Culture"')
       logger.info(div)
-      logger.info(`  Env        : ${NODE_ENV}`)
-      logger.info(`  Port       : ${PORT}`)
-      logger.info(`  Backend    : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`)
-      logger.info(`  Frontend   : ${process.env.FRONTEND_URL || '—'}`)
-      logger.info(`  DNS        : ipv4first ✅`)
-      logger.info(`  COOP       : same-origin-allow-popups ✅`)
-      logger.info(`  Socket.io  : polling + websocket + allowEIO3 ✅`)
-      logger.info(`  Packages   : packages + bookings + messages ✅`)
+      logger.info(`  Env          : ${NODE_ENV}`)
+      logger.info(`  Port         : ${PORT}`)
+      logger.info(`  Backend      : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`)
+      logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
+      logger.info(`  Theme        : green-white (#16a34a) 🟢`)
+      logger.info(`  DNS          : ipv4first ✅`)
+      logger.info(`  COOP         : same-origin-allow-popups ✅`)
+      logger.info(`  Socket.io    : polling + websocket + allowEIO3 ✅`)
+      logger.info(`  Conn.Recovery: 2 min window ✅`)
+      logger.info(`  Admin Track  : connectedAdmins map ✅`)
       logger.info(`${div}\n`)
     })
 
