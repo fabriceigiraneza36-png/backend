@@ -264,112 +264,185 @@ const ensurePostsSchema = async () => {
 
 
 
+// config/db.js  — replace ensureBookingsSchema
+
 const ensureBookingsSchema = async () => {
   try {
+    // ── 1. Create table with ALL columns the controller expects ──────────────
     await pool.query(`
       CREATE TABLE IF NOT EXISTS bookings (
-        id                SERIAL PRIMARY KEY,
-        booking_ref       VARCHAR(50) UNIQUE,
-        user_id           INTEGER,
-        destination_id    INTEGER,
-        country_id        INTEGER,
-        service_id        INTEGER,
-        full_name         VARCHAR(255) NOT NULL,
-        email             VARCHAR(255) NOT NULL,
-        phone             VARCHAR(50),
-        whatsapp          VARCHAR(50),
-        nationality       VARCHAR(100),
-        travelers         INTEGER      DEFAULT 1,
-        adults            INTEGER      DEFAULT 1,
-        children          INTEGER      DEFAULT 0,
-        infants           INTEGER      DEFAULT 0,
-        travel_date       DATE,
-        end_date          DATE,
-        duration_days     INTEGER,
-        trip_type         VARCHAR(100),
-        accommodation     VARCHAR(100),
-        budget            DECIMAL(12,2),
-        currency          VARCHAR(10)  DEFAULT 'USD',
-        total_price       DECIMAL(12,2),
-        deposit_paid      DECIMAL(12,2) DEFAULT 0,
-        payment_status    VARCHAR(50)  DEFAULT 'pending',
-        payment_method    VARCHAR(100),
-        status            VARCHAR(50)  DEFAULT 'pending',
-        priority          VARCHAR(20)  DEFAULT 'normal',
-        special_requests  TEXT,
-        dietary_needs     TEXT,
-        medical_notes     TEXT,
-        pickup_location   VARCHAR(500),
-        notes             TEXT,
-        admin_notes       TEXT,
-        source            VARCHAR(100) DEFAULT 'website',
-        ip_address        VARCHAR(50),
-        user_agent        TEXT,
-        assigned_to       INTEGER,
-        confirmed_at      TIMESTAMP,
-        cancelled_at      TIMESTAMP,
-        completed_at      TIMESTAMP,
-        created_at        TIMESTAMP    DEFAULT NOW(),
-        updated_at        TIMESTAMP    DEFAULT NOW()
+        id                   SERIAL PRIMARY KEY,
+        booking_number       VARCHAR(50)  UNIQUE,
+        user_id              INTEGER,
+        destination_id       INTEGER,
+        service_id           INTEGER,
+        booking_type         VARCHAR(100) DEFAULT 'destination',
+
+        -- Guest info
+        full_name            VARCHAR(255) NOT NULL,
+        email                VARCHAR(255) NOT NULL,
+        phone                VARCHAR(50),
+        whatsapp             VARCHAR(50),
+        nationality          VARCHAR(100),
+        country              VARCHAR(100),
+
+        -- Travel
+        travel_date          DATE,
+        return_date          DATE,
+        flexible_dates       BOOLEAN      DEFAULT false,
+        number_of_travelers  INTEGER      DEFAULT 1,
+        number_of_adults     INTEGER      DEFAULT 1,
+        number_of_children   INTEGER      DEFAULT 0,
+        children_ages        JSONB,
+
+        -- Accommodation
+        accommodation_type   VARCHAR(100),
+        room_type            VARCHAR(100),
+
+        -- Requirements
+        dietary_requirements TEXT,
+        special_requests     TEXT,
+        accessibility_needs  TEXT,
+
+        -- JSON blobs
+        travelers_details    JSONB,
+        emergency_contact    JSONB,
+
+        -- Notes
+        customer_notes       TEXT,
+        admin_notes          TEXT,
+        internal_notes       TEXT,
+
+        -- Tracking
+        source               VARCHAR(100) DEFAULT 'website',
+        utm_source           VARCHAR(255),
+        utm_medium           VARCHAR(255),
+        utm_campaign         VARCHAR(255),
+        referrer_url         TEXT,
+
+        -- Status
+        status               VARCHAR(50)  DEFAULT 'pending',
+        payment_status       VARCHAR(50)  DEFAULT 'pending',
+
+        -- Timestamps
+        confirmed_at         TIMESTAMP,
+        cancelled_at         TIMESTAMP,
+        completed_at         TIMESTAMP,
+        confirmation_code    VARCHAR(100),
+        cancellation_reason  TEXT,
+
+        created_at           TIMESTAMP    DEFAULT NOW(),
+        updated_at           TIMESTAMP    DEFAULT NOW()
       )
     `);
 
-    // Add missing columns to existing table
-    const bookingColumns = [
-      { name: 'booking_ref',    type: "VARCHAR(50) DEFAULT CONCAT('BK-', TO_CHAR(NOW(), 'YYYYMMDD'), '-', LPAD(NEXTVAL(\'booking_ref_seq\')::TEXT, 4, \'0\'))" },
-      { name: 'country_id',     type: 'INTEGER' },
-      { name: 'service_id',     type: 'INTEGER' },
-      { name: 'whatsapp',       type: 'VARCHAR(50)' },
-      { name: 'nationality',    type: 'VARCHAR(100)' },
-      { name: 'adults',         type: 'INTEGER DEFAULT 1' },
-      { name: 'children',       type: 'INTEGER DEFAULT 0' },
-      { name: 'infants',        type: 'INTEGER DEFAULT 0' },
-      { name: 'end_date',       type: 'DATE' },
-      { name: 'duration_days',  type: 'INTEGER' },
-      { name: 'accommodation',  type: 'VARCHAR(100)' },
-      { name: 'currency',       type: "VARCHAR(10) DEFAULT 'USD'" },
-      { name: 'total_price',    type: 'DECIMAL(12,2)' },
-      { name: 'deposit_paid',   type: 'DECIMAL(12,2) DEFAULT 0' },
-      { name: 'payment_status', type: "VARCHAR(50) DEFAULT 'pending'" },
-      { name: 'payment_method', type: 'VARCHAR(100)' },
-      { name: 'priority',       type: "VARCHAR(20) DEFAULT 'normal'" },
-      { name: 'dietary_needs',  type: 'TEXT' },
-      { name: 'medical_notes',  type: 'TEXT' },
-      { name: 'pickup_location',type: 'VARCHAR(500)' },
-      { name: 'admin_notes',    type: 'TEXT' },
-      { name: 'source',         type: "VARCHAR(100) DEFAULT 'website'" },
-      { name: 'ip_address',     type: 'VARCHAR(50)' },
-      { name: 'user_agent',     type: 'TEXT' },
-      { name: 'assigned_to',    type: 'INTEGER' },
-      { name: 'confirmed_at',   type: 'TIMESTAMP' },
-      { name: 'cancelled_at',   type: 'TIMESTAMP' },
-      { name: 'completed_at',   type: 'TIMESTAMP' },
-      { name: 'updated_at',     type: 'TIMESTAMP DEFAULT NOW()' },
+    // ── 2. Add any columns missing from an older table ───────────────────────
+    const columns = [
+      // New names (controller uses these)
+      ['booking_number',      'VARCHAR(50)'],
+      ['booking_type',        "VARCHAR(100) DEFAULT 'destination'"],
+      ['return_date',         'DATE'],
+      ['flexible_dates',      'BOOLEAN DEFAULT false'],
+      ['number_of_travelers', 'INTEGER DEFAULT 1'],
+      ['number_of_adults',    'INTEGER DEFAULT 1'],
+      ['number_of_children',  'INTEGER DEFAULT 0'],
+      ['children_ages',       'JSONB'],
+      ['accommodation_type',  'VARCHAR(100)'],
+      ['room_type',           'VARCHAR(100)'],
+      ['dietary_requirements','TEXT'],
+      ['accessibility_needs', 'TEXT'],
+      ['travelers_details',   'JSONB'],
+      ['emergency_contact',   'JSONB'],
+      ['customer_notes',      'TEXT'],
+      ['admin_notes',         'TEXT'],
+      ['internal_notes',      'TEXT'],
+      ['whatsapp',            'VARCHAR(50)'],
+      ['nationality',         'VARCHAR(100)'],
+      ['country',             'VARCHAR(100)'],
+      ['utm_source',          'VARCHAR(255)'],
+      ['utm_medium',          'VARCHAR(255)'],
+      ['utm_campaign',        'VARCHAR(255)'],
+      ['referrer_url',        'TEXT'],
+      ['payment_status',      "VARCHAR(50) DEFAULT 'pending'"],
+      ['confirmation_code',   'VARCHAR(100)'],
+      ['cancellation_reason', 'TEXT'],
+      ['confirmed_at',        'TIMESTAMP'],
+      ['cancelled_at',        'TIMESTAMP'],
+      ['completed_at',        'TIMESTAMP'],
+      ['updated_at',          'TIMESTAMP DEFAULT NOW()'],
     ];
 
-    for (const col of bookingColumns) {
+    for (const [name, type] of columns) {
       await pool
-        .query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}`)
-        .catch(() => {});
+        .query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${name} ${type}`)
+        .catch(() => {}); // ignore "already exists"
     }
 
-    // Auto-generate booking_ref if empty
+    // ── 3. Migrate old column names → new names (one-time, safe) ────────────
+    // booking_ref  → booking_number
     await pool.query(`
-      UPDATE bookings 
-      SET booking_ref = CONCAT('BK-', TO_CHAR(created_at, 'YYYYMMDD'), '-', LPAD(id::TEXT, 4, '0'))
-      WHERE booking_ref IS NULL
+      UPDATE bookings
+      SET booking_number = booking_ref
+      WHERE booking_number IS NULL AND booking_ref IS NOT NULL
     `).catch(() => {});
 
-    // Indexes
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_status      ON bookings(status)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_email       ON bookings(email)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_user_id     ON bookings(user_id)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_created_at  ON bookings(created_at DESC)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_travel_date ON bookings(travel_date)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_booking_ref ON bookings(booking_ref)`).catch(() => {});
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_bookings_payment     ON bookings(payment_status)`).catch(() => {});
+    // travelers → number_of_travelers
+    await pool.query(`
+      UPDATE bookings
+      SET number_of_travelers = travelers
+      WHERE number_of_travelers IS NULL AND travelers IS NOT NULL
+    `).catch(() => {});
 
-    logger.info('[DB] ✅ Bookings schema verified & ensured');
+    // adults → number_of_adults
+    await pool.query(`
+      UPDATE bookings
+      SET number_of_adults = adults
+      WHERE number_of_adults IS NULL AND adults IS NOT NULL
+    `).catch(() => {});
+
+    // children → number_of_children
+    await pool.query(`
+      UPDATE bookings
+      SET number_of_children = children
+      WHERE number_of_children IS NULL AND children IS NOT NULL
+    `).catch(() => {});
+
+    // end_date → return_date
+    await pool.query(`
+      UPDATE bookings
+      SET return_date = end_date
+      WHERE return_date IS NULL AND end_date IS NOT NULL
+    `).catch(() => {});
+
+    // accommodation → accommodation_type
+    await pool.query(`
+      UPDATE bookings
+      SET accommodation_type = accommodation
+      WHERE accommodation_type IS NULL AND accommodation IS NOT NULL
+    `).catch(() => {});
+
+    // Auto-fill booking_number for old rows
+    await pool.query(`
+      UPDATE bookings
+      SET booking_number = CONCAT('BK-', TO_CHAR(created_at, 'YYYYMMDD'), '-', LPAD(id::TEXT, 6, '0'))
+      WHERE booking_number IS NULL
+    `).catch(() => {});
+
+    // ── 4. Indexes ────────────────────────────────────────────────────────────
+    const indexes = [
+      'CREATE INDEX IF NOT EXISTS idx_bookings_status         ON bookings(status)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_email          ON bookings(email)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_user_id        ON bookings(user_id)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_created_at     ON bookings(created_at DESC)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_travel_date    ON bookings(travel_date)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_booking_number ON bookings(booking_number)',
+      'CREATE INDEX IF NOT EXISTS idx_bookings_payment_status ON bookings(payment_status)',
+    ];
+    for (const idx of indexes) {
+      await pool.query(idx).catch(() => {});
+    }
+
+    logger.info('[DB] ✅ Bookings schema verified');
   } catch (err) {
     logger.warn('[DB] Bookings schema ensure failed:', err.message);
   }
