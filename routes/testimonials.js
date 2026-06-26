@@ -1,158 +1,159 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * TESTIMONIALS ROUTES v2.2
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * CRITICAL RULE: In Express, routes are matched in DECLARATION ORDER.
- * Any named path segment (/submit, /featured, /stats) MUST be declared
- * before wildcard segments (/:id) or Express will match /:id first.
- *
- * Verified route order:
- *   GET  /                   → getAll
- *   GET  /featured           → getFeatured
- *   GET  /stats              → getStats
- *   GET  /admin/all          → adminGetAll
- *   POST /                   → create (admin)
- *   POST /submit             → submitPublic  ← MUST be before /:id
- *   PATCH /reorder           → reorder
- *   PATCH /:id/toggle-*      → toggles
- *   PATCH /:id               → update
- *   DELETE /                 → bulkDelete
- *   DELETE /:id              → remove
- *   GET  /:id                → getOne  ← wildcard LAST
- *   PUT  /:id                → update  ← wildcard LAST
- *
- * Debug endpoint:
- *   GET /api/testimonials/_routes  → lists all registered routes (dev only)
- * ═══════════════════════════════════════════════════════════════════════════════
+ * ═══════════════════════════════════════════════════════════════════════════
+ * TESTIMONIALS ROUTES v3.0
+ * ═══════════════════════════════════════════════════════════════════════════
+ * Route order (CRITICAL — Express matches top-to-bottom):
+ *   Named segments (/featured, /stats, /submit, /admin/all)
+ *   MUST come before wildcard segments (/:id)
+ * ═══════════════════════════════════════════════════════════════════════════
  */
 
-'use strict'
+"use strict";
 
-const express = require('express')
-const router  = express.Router()
-const ctrl    = require('../controllers/testimonials')
+const express = require("express");
+const router  = express.Router();
+const ctrl    = require("../controllers/testimonials");
 
-// ── Import middleware with safe fallbacks ─────────────────────────────────────
-let protect, adminOnly, authLimiter
-
-try {
-  const auth = require('../middleware/auth')
-  protect   = auth.protect   || auth.authenticate || auth.verifyToken
-  adminOnly = auth.adminOnly || auth.isAdmin      || auth.requireAdmin
-} catch (err) {
-  console.warn('[testimonials routes] auth middleware not found:', err.message)
-  // No-op fallbacks so the file loads even if middleware is missing
-  protect   = (req, res, next) => next()
-  adminOnly = (req, res, next) => next()
-}
+// ── Middleware — safe imports with no-op fallbacks ────────────────────────
+let protect, adminOnly, adminProtect, authLimiter;
 
 try {
-  const rl  = require('../middleware/rateLimiter')
-  authLimiter = rl.authLimiter || rl.limiter || rl.default
-} catch (err) {
-  console.warn('[testimonials routes] rateLimiter not found:', err.message)
-  authLimiter = (req, res, next) => next()
-}
+  const auth = require("../middleware/auth");
+  // Your auth middleware exports: protect, adminOnly, adminProtect
+  protect      = typeof auth.protect      === "function" ? auth.protect      : null;
+  adminOnly    = typeof auth.adminOnly    === "function" ? auth.adminOnly    : null;
+  adminProtect = typeof auth.adminProtect === "function" ? auth.adminProtect : null;
 
-// Ensure all middleware are callable
-if (typeof protect    !== 'function') protect    = (req, res, next) => next()
-if (typeof adminOnly  !== 'function') adminOnly  = (req, res, next) => next()
-if (typeof authLimiter !== 'function') authLimiter = (req, res, next) => next()
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// DEBUG — lists all routes on this router (remove in production if desired)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get('/_routes', (req, res) => {
-  const IS_PROD = process.env.NODE_ENV === 'production'
-  // Allow in production only with secret
-  if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0, 8)) {
-    return res.status(403).json({ error: 'forbidden' })
+  // If no separate adminProtect, compose protect + adminOnly
+  if (!adminProtect && protect && adminOnly) {
+    adminProtect = [protect, adminOnly];
   }
-  const routes = []
+} catch (err) {
+  console.warn("[testimonials routes] auth middleware not found:", err.message);
+}
+
+try {
+  const rl    = require("../middleware/rateLimiter");
+  authLimiter = typeof rl.authLimiter === "function" ? rl.authLimiter
+              : typeof rl.limiter     === "function" ? rl.limiter
+              : null;
+} catch (err) {
+  console.warn("[testimonials routes] rateLimiter not found:", err.message);
+}
+
+// No-op fallback — never blocks if middleware failed to load
+const noop = (req, res, next) => next();
+
+const mProtect      = protect      || noop;
+const mAdminProtect = Array.isArray(adminProtect) ? adminProtect
+                    : (adminProtect || noop);
+const mAuthLimiter  = authLimiter  || noop;
+
+// ── Flatten middleware arrays for use with router.method() ────────────────
+const admin = Array.isArray(mAdminProtect)
+  ? mAdminProtect               // [protect, adminOnly]
+  : [mAdminProtect];            // [adminProtect]
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ① DEBUG (optional — keep in production behind a secret)
+// ═══════════════════════════════════════════════════════════════════════════
+
+router.get("/_routes", (req, res) => {
+  const IS_PROD = process.env.NODE_ENV === "production";
+  if (IS_PROD && req.query.secret !== process.env.JWT_SECRET?.slice(0, 8)) {
+    return res.status(403).json({ error: "forbidden" });
+  }
+  const routes = [];
   router.stack.forEach((layer) => {
     if (layer.route) {
-      const methods = Object.keys(layer.route.methods).map(m => m.toUpperCase())
-      routes.push({ methods, path: layer.route.path })
+      routes.push({
+        methods: Object.keys(layer.route.methods).map((m) => m.toUpperCase()),
+        path:    layer.route.path,
+      });
     }
-  })
-  res.json({ success: true, routes, total: routes.length })
-})
+  });
+  res.json({ success: true, count: routes.length, routes });
+});
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ① NAMED GET ROUTES  (no path params — before /:id)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// ② NAMED GET ROUTES — before /:id wildcard
+// ═══════════════════════════════════════════════════════════════════════════
 
 /** GET /api/testimonials/featured */
-router.get('/featured', ctrl.getFeatured)
+router.get("/featured", ctrl.getFeatured);
 
 /** GET /api/testimonials/stats */
-router.get('/stats', ctrl.getStats)
+router.get("/stats", ctrl.getStats);
 
 /** GET /api/testimonials/admin/all */
-router.get('/admin/all', protect, adminOnly, ctrl.adminGetAll)
+router.get("/admin/all", ...admin, ctrl.adminGetAll);
 
 /** GET /api/testimonials */
-router.get('/', ctrl.getAll)
+router.get("/", ctrl.getAll);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ② NAMED POST ROUTES  (before /:id)
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// ③ PUBLIC SUBMIT — before /:id wildcard
+// ═══════════════════════════════════════════════════════════════════════════
 
 /**
  * POST /api/testimonials/submit
  *
- * Public-facing — authenticated users submit their own review.
- * Saved as is_active=false, pending admin approval.
+ * ⚠️  MUST be declared before `router.post("/:id", …)` or Express will
+ *     match /:id = "submit" and call the wrong handler.
  *
- * IMPORTANT: This MUST be declared before `router.post('/:id', ...)` or any
- * wildcard, otherwise Express matches /:id = "submit" and returns 404/400.
+ * Flow:
+ *   1. authLimiter  — 5 req / 15 min per IP (prevents spam)
+ *   2. mProtect     — JWT verification (must be logged in)
+ *   3. submitPublic — validate, rate-limit by user_id, insert pending
  */
 router.post(
-  '/submit',
-  authLimiter,  // rate limit: 5 req / 15 min per IP
-  protect,      // must be logged in
+  "/submit",
+  mAuthLimiter,
+  mProtect,
   ctrl.submitPublic,
-)
+);
 
-/** POST /api/testimonials — admin creates directly */
-router.post('/', protect, adminOnly, ctrl.create)
+// ═══════════════════════════════════════════════════════════════════════════
+// ④ ADMIN CREATE
+// ═══════════════════════════════════════════════════════════════════════════
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ③ NAMED PATCH ROUTES  (before /:id)
-// ═══════════════════════════════════════════════════════════════════════════════
+/** POST /api/testimonials — admin creates (active immediately) */
+router.post("/", ...admin, ctrl.create);
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ⑤ NAMED PATCH ROUTES — before /:id wildcard
+// ═══════════════════════════════════════════════════════════════════════════
 
 /** PATCH /api/testimonials/reorder */
-router.patch('/reorder', protect, adminOnly, ctrl.reorder)
+router.patch("/reorder", ...admin, ctrl.reorder);
 
 /** PATCH /api/testimonials/:id/toggle-featured */
-router.patch('/:id/toggle-featured', protect, adminOnly, ctrl.toggleFeatured)
+router.patch("/:id/toggle-featured", ...admin, ctrl.toggleFeatured);
 
 /** PATCH /api/testimonials/:id/toggle-active */
-router.patch('/:id/toggle-active', protect, adminOnly, ctrl.toggleActive)
+router.patch("/:id/toggle-active", ...admin, ctrl.toggleActive);
 
 /** PATCH /api/testimonials/:id */
-router.patch('/:id', protect, adminOnly, ctrl.update)
+router.patch("/:id", ...admin, ctrl.update);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ④ DELETE ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// ⑥ DELETE ROUTES
+// ═══════════════════════════════════════════════════════════════════════════
 
-/** DELETE /api/testimonials — bulk delete */
-router.delete('/', protect, adminOnly, ctrl.bulkDelete)
+/** DELETE /api/testimonials — bulk */
+router.delete("/", ...admin, ctrl.bulkDelete);
 
 /** DELETE /api/testimonials/:id */
-router.delete('/:id', protect, adminOnly, ctrl.remove)
+router.delete("/:id", ...admin, ctrl.remove);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ⑤ WILDCARD ROUTES  — MUST be absolutely last
-// ═══════════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+// ⑦ WILDCARD ROUTES — absolutely last
+// ═══════════════════════════════════════════════════════════════════════════
 
 /** GET /api/testimonials/:id */
-router.get('/:id', ctrl.getOne)
+router.get("/:id", ctrl.getOne);
 
 /** PUT /api/testimonials/:id */
-router.put('/:id', protect, adminOnly, ctrl.update)
+router.put("/:id", ...admin, ctrl.update);
 
-module.exports = router
+module.exports = router;
