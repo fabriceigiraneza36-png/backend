@@ -1,20 +1,14 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.5
- * "True Adventures In High Places & Deep Culture"
+ * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.6
+ * ═══════════════════════════════════════════════════════════════════════════════
  *
- * Changes from v6.4:
- *   - Socket.io 400 fix: transports order corrected, cookie disabled globally
- *   - connectionStateRecovery: skipMiddlewares true, extended duration
- *   - io reference hoisted — no circular reference bug on first request
- *   - Schema boot: parallel where safe, sequential where order matters
- *   - ensureBookingsSchema: non-blocking, won't crash server if it fails
- *   - Countries controller: safeQuery wrapper prevents 500 on includeRelated
- *   - Global error handler improvements: stack hidden in production
- *   - Health endpoint: includes Socket.io transport status
- *   - Typing indicator cleanup: moved to dedicated setInterval (no socket leak)
- *   - Admin online map: corrected to broadcast only when last admin leaves
- *   - All socket handlers: consistent error pattern with logger
+ * Changes from v6.5:
+ *   - cacheMiddleware: POST/authenticated requests excluded (was caching 404s)
+ *   - connectedAdmins declared before /health endpoint (was ReferenceError)
+ *   - Cache debug endpoint: GET /api/debug/cache
+ *   - testimonials route mount verified: /api/testimonials (with 's')
+ *   - Socket.io: no changes (v6.5 config was correct)
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -57,7 +51,14 @@ const socketBus = require('./utils/socketBus')
 const { verifyEmailConnection }              = require('./utils/emailService')
 const { verifyTransporter: verifyAuthEmail } = require('./utils/email')
 const { errorHandler, notFoundHandler }      = require('./middleware/errorHandler')
-const { cacheMiddleware }                    = require('./middleware/cache')
+
+// ── Import cache with invalidation support ────────────────────────────────────
+const {
+  cacheMiddleware,
+  invalidateCache,
+  clearCache,
+  getCacheStats,
+} = require('./middleware/cache')
 
 // ── Route modules ─────────────────────────────────────────────────────────────
 const usersRouter               = require('./routes/users')
@@ -98,6 +99,9 @@ const PORT     = parseInt(process.env.PORT || '3000', 10)
 const NODE_ENV = process.env.NODE_ENV || 'development'
 const IS_PROD  = NODE_ENV === 'production'
 
+// ─── Track connected admins (declared here so /health can reference it) ───────
+const connectedAdmins = new Map()
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ALLOWED ORIGINS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -121,25 +125,20 @@ const ALLOWED_ORIGINS = [
   ].filter(Boolean)),
 ]
 
-/**
- * Returns true if the origin is explicitly allowed or is localhost.
- * In development, all origins are permitted.
- */
 const isOriginAllowed = (origin) => {
-  if (!origin) return true                                    // server-to-server
-  if (!IS_PROD) return true                                   // dev: allow all
+  if (!origin) return true
+  if (!IS_PROD) return true
   if (ALLOWED_ORIGINS.includes(origin)) return true
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   return false
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PACKAGES SCHEMA — isolated so errors don't block boot
+// PACKAGES SCHEMA
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const ensurePackagesSchema = async () => {
   const tables = [
-    /* packages */
     `CREATE TABLE IF NOT EXISTS packages (
       id                 SERIAL PRIMARY KEY,
       title              VARCHAR(255) NOT NULL,
@@ -197,8 +196,6 @@ const ensurePackagesSchema = async () => {
       created_at         TIMESTAMP     DEFAULT NOW(),
       updated_at         TIMESTAMP     DEFAULT NOW()
     )`,
-
-    /* package_bookings */
     `CREATE TABLE IF NOT EXISTS package_bookings (
       id               SERIAL PRIMARY KEY,
       booking_ref      VARCHAR(50)   UNIQUE,
@@ -231,8 +228,6 @@ const ensurePackagesSchema = async () => {
       created_at       TIMESTAMP     DEFAULT NOW(),
       updated_at       TIMESTAMP     DEFAULT NOW()
     )`,
-
-    /* package_messages */
     `CREATE TABLE IF NOT EXISTS package_messages (
       id            SERIAL PRIMARY KEY,
       package_id    INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
@@ -249,8 +244,6 @@ const ensurePackagesSchema = async () => {
       read_at       TIMESTAMP,
       created_at    TIMESTAMP   DEFAULT NOW()
     )`,
-
-    /* admin_info_requests */
     `CREATE TABLE IF NOT EXISTS admin_info_requests (
       id             SERIAL PRIMARY KEY,
       package_id     INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
@@ -275,8 +268,6 @@ const ensurePackagesSchema = async () => {
       created_at     TIMESTAMP    DEFAULT NOW(),
       updated_at     TIMESTAMP    DEFAULT NOW()
     )`,
-
-    /* package_chat_preferences */
     `CREATE TABLE IF NOT EXISTS package_chat_preferences (
       id           SERIAL PRIMARY KEY,
       user_id      INTEGER     UNIQUE NOT NULL,
@@ -293,7 +284,7 @@ const ensurePackagesSchema = async () => {
 
   for (const sql of tables) {
     await query(sql).catch(err =>
-      logger.warn('[PackagesSchema] Table creation non-fatal:', err.message),
+      logger.warn('[PackagesSchema] Table non-fatal:', err.message),
     )
   }
 
@@ -312,11 +303,7 @@ const ensurePackagesSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_info_reqs_user      ON admin_info_requests(user_id)`,
     `CREATE INDEX IF NOT EXISTS idx_pkg_chat_prefs_user ON package_chat_preferences(user_id)`,
   ]
-
-  for (const idx of indexes) {
-    await query(idx).catch(() => {})
-  }
-
+  for (const idx of indexes) await query(idx).catch(() => {})
   logger.info('✅ Packages schema ready')
 }
 
@@ -350,7 +337,6 @@ const ensureMessagingSchema = async () => {
       created_at      TIMESTAMP    DEFAULT NOW(),
       updated_at      TIMESTAMP    DEFAULT NOW()
     )`,
-
     `CREATE TABLE IF NOT EXISTS messages (
       id               SERIAL PRIMARY KEY,
       conversation_id  INTEGER     NOT NULL,
@@ -370,7 +356,6 @@ const ensureMessagingSchema = async () => {
       metadata         JSONB       DEFAULT '{}'::JSONB,
       created_at       TIMESTAMP   DEFAULT NOW()
     )`,
-
     `CREATE TABLE IF NOT EXISTS typing_indicators (
       id              SERIAL PRIMARY KEY,
       conversation_id INTEGER     NOT NULL,
@@ -397,11 +382,7 @@ const ensureMessagingSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`,
     `CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`,
   ]
-
-  for (const idx of indexes) {
-    await query(idx).catch(() => {})
-  }
-
+  for (const idx of indexes) await query(idx).catch(() => {})
   logger.info('✅ Messaging schema ready')
 }
 
@@ -443,14 +424,13 @@ const corsOptions = {
     'Content-Type', 'Authorization', 'X-Requested-With',
     'Accept', 'Origin', 'X-CSRF-Token', 'Cache-Control',
   ],
-  exposedHeaders:       ['X-Total-Count', 'X-Page', 'X-Per-Page'],
+  exposedHeaders:       ['X-Total-Count', 'X-Page', 'X-Per-Page', 'X-Cache'],
   optionsSuccessStatus: 200,
   maxAge:               86400,
 }
 
 app.use(cors(corsOptions))
 
-// Pre-flight handler
 app.options('*', (req, res) => {
   const origin = req.headers.origin
   if (isOriginAllowed(origin)) {
@@ -467,7 +447,6 @@ app.options('*', (req, res) => {
 app.use(compression())
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
-app.use(cacheMiddleware(120))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
 // ── Logging ───────────────────────────────────────────────────────────────────
@@ -486,34 +465,18 @@ if (IS_PROD) {
 // ── Request ID ────────────────────────────────────────────────────────────────
 app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
+// ── Cache middleware — applied AFTER body parsing, BEFORE routes ──────────────
+// The fixed cacheMiddleware now correctly skips POST and authenticated requests.
+app.use(cacheMiddleware(120))
+
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTTP SERVER (create BEFORE Socket.io so io can reference httpServer)
+// HTTP SERVER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const httpServer = http.createServer(app)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SOCKET.IO
-//
-// Key settings for Render / Vercel free tier:
-//   transports: ['polling','websocket']
-//     → polling MUST come first. Socket.io v4 always starts with HTTP polling,
-//       then upgrades to WebSocket. Without polling first, the initial
-//       HTTP handshake returns 400 "Bad Request".
-//
-//   allowEIO3: true
-//     → Accepts Engine.IO v3 clients (older browsers, some proxy setups).
-//
-//   pingTimeout: 60000, pingInterval: 25000
-//     → Render cold starts can take 30–50 s. Long ping timeout prevents
-//       premature disconnects during server wake-up.
-//
-//   cookie: false
-//     → Prevents duplicate session issues on load-balanced deployments.
-//
-//   connectionStateRecovery
-//     → After a brief network blip, clients automatically re-join rooms
-//       without calling register again.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const io = new Server(httpServer, {
@@ -522,26 +485,22 @@ const io = new Server(httpServer, {
     methods:     ['GET', 'POST'],
     credentials: true,
   },
-  transports:        ['polling', 'websocket'],   // polling FIRST — required for handshake
+  transports:        ['polling', 'websocket'],
   allowEIO3:         true,
-  pingTimeout:       60_000,                      // 60 s — handles cold starts
+  pingTimeout:       60_000,
   pingInterval:      25_000,
   upgradeTimeout:    30_000,
-  maxHttpBufferSize: 1e6,                         // 1 MB
+  maxHttpBufferSize: 1e6,
   path:              '/socket.io',
-  cookie:            false,                       // avoid sticky-session issues
+  cookie:            false,
   connectionStateRecovery: {
-    maxDisconnectionDuration: 2 * 60 * 1000,      // 2-min recovery window
+    maxDisconnectionDuration: 2 * 60 * 1000,
     skipMiddlewares: true,
   },
 })
 
-// Attach io to socketBus and app BEFORE any route that needs it
 socketBus.setIO(io)
 app.set('io', io)
-
-// Expose io to every request handler via req.app.get('io')
-// (No middleware needed — already set on app above)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // HEALTH & META ENDPOINTS
@@ -552,7 +511,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '6.5',
+    version:     '6.6',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -561,9 +520,10 @@ app.get('/health', (_req, res) =>
       total: `${Math.round(process.memoryUsage().heapTotal / 1024 / 1024)}MB`,
     },
     socket: {
-      transports:    ['polling', 'websocket'],
+      transports:      ['polling', 'websocket'],
       connectedAdmins: connectedAdmins.size,
     },
+    cache:   getCacheStats(),
     network: { dnsOrder: 'ipv4first' },
     theme:   { primary: '#16a34a', name: 'green-white' },
   }),
@@ -575,12 +535,12 @@ app.get('/api/health', (_req, res) =>
 
 app.get('/api', (_req, res) =>
   res.json({
-    success:  true,
-    name:     'Altuvera Travel API',
-    version:  '6.5',
-    tagline:  'True Adventures In High Places & Deep Culture',
-    health:   '/health',
-    routes:   '/api/routes',
+    success: true,
+    name:    'Altuvera Travel API',
+    version: '6.6',
+    tagline: 'True Adventures In High Places & Deep Culture',
+    health:  '/health',
+    routes:  '/api/routes',
   }),
 )
 
@@ -588,10 +548,8 @@ app.get('/api', (_req, res) =>
 app.get('/api/debug/email-test', async (req, res) => {
   if (req.query.secret !== 'altuvera-test')
     return res.status(403).json({ error: 'forbidden' })
-
   const { sendEmail } = require('./utils/email')
   const to = req.query.to || process.env.ADMIN_EMAIL || process.env.SMTP_USER
-
   try {
     const result = await sendEmail({
       to,
@@ -609,7 +567,6 @@ app.get('/api/debug/tables', async (req, res) => {
   const secret = IS_PROD ? process.env.JWT_SECRET?.slice(0, 8) : 'dev'
   if (req.query.secret !== secret)
     return res.status(403).json({ error: 'forbidden' })
-
   try {
     const { rows: tableRows } = await query(`
       SELECT table_name FROM information_schema.tables
@@ -628,6 +585,25 @@ app.get('/api/debug/tables', async (req, res) => {
   } catch (err) {
     res.status(500).json({ success: false, error: err.message })
   }
+})
+
+// ── Debug: cache control ──────────────────────────────────────────────────────
+app.get('/api/debug/cache', (req, res) => {
+  const secret = IS_PROD ? process.env.JWT_SECRET?.slice(0, 8) : 'dev'
+  if (req.query.secret !== secret)
+    return res.status(403).json({ error: 'forbidden' })
+
+  if (req.query.clear === 'true') {
+    const cleared = clearCache()
+    return res.json({ success: true, message: `Cleared ${cleared} cache entries` })
+  }
+
+  if (req.query.invalidate) {
+    const count = invalidateCache(req.query.invalidate)
+    return res.json({ success: true, message: `Invalidated ${count} entries for prefix: ${req.query.invalidate}` })
+  }
+
+  res.json({ success: true, ...getCacheStats() })
 })
 
 // ── Route inspector ───────────────────────────────────────────────────────────
@@ -658,7 +634,15 @@ app.get('/api/routes', (req, res) => {
   const byMethod = routes.reduce((acc, r) => {
     acc[r.method] = (acc[r.method] || 0) + 1; return acc
   }, {})
-  res.json({ success: true, total: routes.length, byMethod, routes })
+  // Highlight testimonials routes for easy verification
+  const testimonialRoutes = routes.filter(r => r.path.includes('testimonial'))
+  res.json({
+    success: true,
+    total:   routes.length,
+    byMethod,
+    testimonialRoutes, // ← easy to spot-check
+    routes,
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -682,7 +666,7 @@ app.use('/api/tips',                 tipsRouter)
 app.use('/api/subscribers',          subscribersRouter)
 app.use('/api/settings',             settingsRouter)
 app.use('/api/pages',                pagesRouter)
-app.use('/api/testimonials',         testimonialsRouter)
+app.use('/api/testimonials',         testimonialsRouter)   // ← verified: includes /submit
 app.use('/api/messages',             messageRouter)
 app.use('/api/message',              messageRouter)
 app.use('/api/chat',                 chatRouter)
@@ -709,17 +693,12 @@ const verifySocketToken = (token) => {
 // CONVERSATION HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Get or create a conversation by sessionId.
- * Idempotent — safe to call on every reconnect.
- */
 const getOrCreateConversation = async ({
   sessionId, userId, guestName, guestEmail, channel, source, ipAddress,
 }) => {
   const sid = String(sessionId || '').trim()
   if (!sid) throw new Error('sessionId is required')
 
-  // Try existing first
   const existing = await query(
     `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
             u.avatar_url AS user_avatar
@@ -730,7 +709,6 @@ const getOrCreateConversation = async ({
   )
 
   if (existing.rows[0]) {
-    // Update guest info if newly provided
     if (userId || guestName || guestEmail) {
       await query(
         `UPDATE conversations SET
@@ -751,15 +729,8 @@ const getOrCreateConversation = async ({
         channel, source, ip_address, status, priority)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal')
      RETURNING *`,
-    [
-      sid,
-      userId    || null,
-      guestName || null,
-      guestEmail || null,
-      channel   || 'live_chat',
-      source    || 'website',
-      ipAddress || null,
-    ],
+    [sid, userId || null, guestName || null, guestEmail || null,
+     channel || 'live_chat', source || 'website', ipAddress || null],
   )
   return inserted.rows[0]
 }
@@ -776,16 +747,9 @@ const saveConversationMessage = async ({
         sender_email, sender_avatar, body, metadata, is_read)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)
      RETURNING *`,
-    [
-      conversationId,
-      senderType,
-      senderId    || null,
-      senderName  || null,
-      senderEmail || null,
-      senderAvatar || null,
-      String(body).trim(),
-      JSON.stringify(metadata || {}),
-    ],
+    [conversationId, senderType, senderId || null, senderName || null,
+     senderEmail || null, senderAvatar || null,
+     String(body).trim(), JSON.stringify(metadata || {})],
   )
 
   const msg    = rows[0]
@@ -819,9 +783,7 @@ const fetchConversationMessages = async (conversationId, limit = 80) => {
 const countUnreadAdmin = async (conversationId) => {
   const { rows } = await query(
     `SELECT COUNT(*) AS n FROM messages
-      WHERE conversation_id = $1
-        AND sender_type != 'admin'
-        AND is_read = false`,
+      WHERE conversation_id = $1 AND sender_type != 'admin' AND is_read = false`,
     [conversationId],
   )
   return parseInt(rows[0]?.n || 0, 10)
@@ -880,15 +842,8 @@ const saveChatMessage = async ({
         sender_email, body, metadata, is_read)
      VALUES ($1,$2,$3,$4,$5,$6,$7,false)
      RETURNING *`,
-    [
-      sessionId,
-      senderType,
-      senderId    || null,
-      senderName  || null,
-      senderEmail || null,
-      body,
-      JSON.stringify(metadata || {}),
-    ],
+    [sessionId, senderType, senderId || null, senderName || null,
+     senderEmail || null, body, JSON.stringify(metadata || {})],
   )
   await query(
     `UPDATE chat_sessions SET last_active=NOW(), updated_at=NOW() WHERE session_id=$1`,
@@ -937,11 +892,11 @@ io.use((socket, next) => {
       socket.handshake.auth?.token ||
       socket.handshake.headers?.authorization?.replace?.(/^Bearer\s+/i, '')?.trim()
 
-    const decoded          = verifySocketToken(raw)
-    socket.data.user       = decoded || null
-    socket.data.isAdmin    = decoded?.type === 'admin' || decoded?.role === 'admin'
-    socket.data.userId     = decoded?.id  || null
-    socket.data.sessionId  = null
+    const decoded              = verifySocketToken(raw)
+    socket.data.user           = decoded || null
+    socket.data.isAdmin        = decoded?.type === 'admin' || decoded?.role === 'admin'
+    socket.data.userId         = decoded?.id  || null
+    socket.data.sessionId      = null
     socket.data.conversationId = null
 
     if (socket.data.isAdmin) {
@@ -952,19 +907,15 @@ io.use((socket, next) => {
     next()
   } catch (err) {
     logger.error('[Socket] Auth middleware error:', err.message)
-    next() // allow connection even on auth error
+    next()
   }
 })
 
-// ── Track connected admins ────────────────────────────────────────────────────
-// Map<socketId, adminId>
-const connectedAdmins = new Map()
-
-// ── Typing indicator cleanup — runs every 15 s ────────────────────────────────
+// ── Typing indicator cleanup ──────────────────────────────────────────────────
 setInterval(async () => {
   try {
     await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`)
-  } catch { /* silent — typing_indicators may not exist yet */ }
+  } catch { /* silent */ }
 }, 15_000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -976,17 +927,14 @@ io.on('connection', (socket) => {
     `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`,
   )
 
-  // Join personal room immediately
   if (socket.data.userId) socket.join(`user-${socket.data.userId}`)
 
-  // Track admin presence
   if (socket.data.isAdmin) {
     connectedAdmins.set(socket.id, socket.data.userId)
     io.emit('msg:admin-online', { online: true })
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
-  // ── Package rooms ────────────────────────────────────────────────────────
   socket.on('pkg:join', ({ packageId, userId } = {}) => {
     if (packageId) socket.join(`package-${packageId}`)
     if (userId)    socket.join(`user-${userId}`)
@@ -996,26 +944,11 @@ io.on('connection', (socket) => {
     if (packageId) socket.leave(`package-${packageId}`)
   })
 
-  // ════════════════════════════════════════════════════════════════════════
-  // NEW MESSAGING SYSTEM
-  // ════════════════════════════════════════════════════════════════════════
-
-  /**
-   * msg:register
-   * Called by client on connect AND reconnect (idempotent).
-   * Returns conversation state + message history.
-   */
   socket.on('msg:register', async (payload = {}, cb) => {
     try {
       const sid   = String(payload.sessionId || `guest-${socket.id}`).trim()
-      const name  = String(
-        payload.name  || payload.guestName  ||
-        socket.data.user?.full_name || '',
-      ).trim()
-      const email = String(
-        payload.email || payload.guestEmail ||
-        socket.data.user?.email || '',
-      ).trim()
+      const name  = String(payload.name  || payload.guestName  || socket.data.user?.full_name || '').trim()
+      const email = String(payload.email || payload.guestEmail || socket.data.user?.email     || '').trim()
 
       const conv = await getOrCreateConversation({
         sessionId:  sid,
@@ -1030,14 +963,10 @@ io.on('connection', (socket) => {
       socket.data.sessionId      = conv.session_id
       socket.data.conversationId = conv.id
 
-      // Join rooms — Socket.io ignores duplicate joins
       socket.join(`session:${conv.session_id}`)
       socket.join(`conv:${conv.id}`)
 
-      const [messages] = await Promise.all([
-        fetchConversationMessages(conv.id),
-      ])
-
+      const messages    = await fetchConversationMessages(conv.id)
       const adminOnline = connectedAdmins.size > 0
 
       const sessionData = {
@@ -1062,16 +991,12 @@ io.on('connection', (socket) => {
         status:         conv.status,
         lastMessage:    conv.last_message,
       })
-
     } catch (err) {
       logger.error('[Socket] msg:register error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
     }
   })
 
-  /**
-   * msg:send — user sends a message
-   */
   socket.on('msg:send', async (payload = {}, cb) => {
     try {
       if (socket.data.isAdmin) throw new Error('Admins must use msg:admin-send')
@@ -1079,7 +1004,6 @@ io.on('connection', (socket) => {
       const body = String(payload.body || payload.message || '').trim()
       if (!body) throw new Error('Message body is required')
 
-      // Recover or create conversation
       let convId = socket.data.conversationId
       let sid    = socket.data.sessionId
 
@@ -1088,12 +1012,9 @@ io.on('connection', (socket) => {
         const name  = String(payload.name  || socket.data.user?.full_name || '').trim()
         const email = String(payload.email || socket.data.user?.email     || '').trim()
         const conv  = await getOrCreateConversation({
-          sessionId:  sid,
-          userId:     socket.data.userId || null,
-          guestName:  name  || null,
-          guestEmail: email || null,
-          source:     'frontend-guest',
-          ipAddress:  socket.handshake.address,
+          sessionId: sid, userId: socket.data.userId || null,
+          guestName: name || null, guestEmail: email || null,
+          source: 'frontend-guest', ipAddress: socket.handshake.address,
         })
         convId = conv.id
         sid    = conv.session_id
@@ -1119,25 +1040,20 @@ io.on('connection', (socket) => {
 
       io.to(`conv:${convId}`).emit('msg:message', serialized)
       io.to('admins').emit('msg:new-from-user', {
-        conversationId: convId,
-        sessionId:      sid,
-        message:        serialized,
-        senderName:     msg.sender_name  || 'Guest',
-        senderEmail:    msg.sender_email || '',
-        unreadCount:    unreadAdmin,
+        conversationId: convId, sessionId: sid,
+        message: serialized,
+        senderName:  msg.sender_name  || 'Guest',
+        senderEmail: msg.sender_email || '',
+        unreadCount: unreadAdmin,
       })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
-
     } catch (err) {
       logger.error('[Socket] msg:send error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
     }
   })
 
-  /**
-   * msg:admin-join — admin joins a conversation room
-   */
   socket.on('msg:admin-join', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin only')
@@ -1147,7 +1063,6 @@ io.on('connection', (socket) => {
       socket.join(`conv:${convId}`)
       socket.data.activeConversation = convId
 
-      // Mark user messages as read
       await Promise.all([
         query(
           `UPDATE messages SET is_read=true, read_at=NOW()
@@ -1158,24 +1073,16 @@ io.on('connection', (socket) => {
       ]).catch(() => {})
 
       const messages = await fetchConversationMessages(convId)
-
-      io.to(`conv:${convId}`).emit('msg:read', {
-        conversationId: convId,
-        readBy:         'admin',
-      })
+      io.to(`conv:${convId}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
 
       if (typeof cb === 'function')
         cb({ success: true, messages: messages.map(serializeConvMessage) })
-
     } catch (err) {
       logger.error('[Socket] msg:admin-join error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
     }
   })
 
-  /**
-   * msg:admin-send — admin sends a reply
-   */
   socket.on('msg:admin-send', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin authentication required')
@@ -1201,32 +1108,19 @@ io.on('connection', (socket) => {
       })
 
       const serialized = serializeConvMessage(msg)
-
-      // Broadcast to conversation room
       io.to(`conv:${convId}`).emit('msg:message', serialized)
-
-      // Also send to user session room (covers reconnects)
       if (conv.session_id) {
         io.to(`session:${conv.session_id}`).emit('msg:message', serialized)
       }
-
-      // Notify other admins
-      socket.to('admins').emit('msg:admin-sent', {
-        conversationId: convId,
-        message:        serialized,
-      })
+      socket.to('admins').emit('msg:admin-sent', { conversationId: convId, message: serialized })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
-
     } catch (err) {
       logger.error('[Socket] msg:admin-send error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
     }
   })
 
-  /**
-   * msg:typing — broadcast typing indicator
-   */
   socket.on('msg:typing', async (payload = {}) => {
     const convId     = payload.conversationId || socket.data.conversationId
     const isTyping   = !!payload.isTyping
@@ -1237,38 +1131,26 @@ io.on('connection', (socket) => {
       if (isTyping) {
         await query(
           `INSERT INTO typing_indicators
-             (conversation_id, sender_type, sender_id, sender_name,
-              socket_id, expires_at)
+             (conversation_id, sender_type, sender_id, sender_name, socket_id, expires_at)
            VALUES ($1,$2,$3,$4,$5, NOW() + INTERVAL '10 seconds')
            ON CONFLICT DO NOTHING`,
-          [
-            convId, senderType, socket.data.userId || null,
-            payload.senderName || socket.data.user?.full_name || 'Guest',
-            socket.id,
-          ],
+          [convId, senderType, socket.data.userId || null,
+           payload.senderName || socket.data.user?.full_name || 'Guest', socket.id],
         )
       } else {
-        await query(
-          `DELETE FROM typing_indicators WHERE socket_id=$1`,
-          [socket.id],
-        )
+        await query(`DELETE FROM typing_indicators WHERE socket_id=$1`, [socket.id])
       }
     } catch { /* non-fatal */ }
 
     socket.to(`conv:${convId}`).emit('msg:typing', {
       conversationId: parseInt(convId, 10),
       senderType,
-      senderName:
-        payload.senderName      ||
-        socket.data.user?.full_name ||
+      senderName: payload.senderName || socket.data.user?.full_name ||
         (socket.data.isAdmin ? 'Support' : 'Guest'),
       isTyping,
     })
   })
 
-  /**
-   * msg:mark-read — mark messages as read
-   */
   socket.on('msg:mark-read', async (payload = {}, cb) => {
     try {
       const convId = payload.conversationId || socket.data.conversationId
@@ -1306,9 +1188,6 @@ io.on('connection', (socket) => {
     }
   })
 
-  /**
-   * msg:admin-status — update conversation status/priority
-   */
   socket.on('msg:admin-status', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin only')
@@ -1346,13 +1225,9 @@ io.on('connection', (socket) => {
     }
   })
 
-  /**
-   * msg:admin-conversations — get open conversation list
-   */
   socket.on('msg:admin-conversations', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin only')
-
       const { rows } = await query(`
         SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
                u.avatar_url AS user_avatar
@@ -1362,7 +1237,6 @@ io.on('connection', (socket) => {
          ORDER BY c.updated_at DESC
          LIMIT 50
       `)
-
       if (typeof cb === 'function') cb({ success: true, conversations: rows })
     } catch (err) {
       logger.error('[Socket] msg:admin-conversations error:', err.message)
@@ -1370,9 +1244,7 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ════════════════════════════════════════════════════════════════════════
-  // LEGACY CHAT SYSTEM
-  // ════════════════════════════════════════════════════════════════════════
+  // ── Legacy chat ────────────────────────────────────────────────────────────
 
   socket.on('chat:register', async (payload = {}, cb) => {
     try {
@@ -1381,30 +1253,23 @@ io.on('connection', (socket) => {
       const email = String(payload.email || socket.data.user?.email    || '').trim()
 
       const session = await getOrCreateChatSession({
-        sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        sessionId: sid, userId: socket.data.user?.id,
+        email: email || null, fullName: name || null,
+        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
       })
 
       socket.data.sessionId = session.session_id
       socket.join(`chat:${session.session_id}`)
 
       const history = await fetchSessionMessages(session.session_id)
-
       socket.emit('chat:session', {
-        sessionId: session.session_id,
-        userId:    session.user_id,
-        email:     session.email,
-        fullName:  session.full_name,
-        source:    session.source,
-        messages:  history.map(serializeChatMsg),
+        sessionId: session.session_id, userId: session.user_id,
+        email: session.email, fullName: session.full_name, source: session.source,
+        messages: history.map(serializeChatMsg),
       })
 
       if (typeof cb === 'function')
         cb({ success: true, sessionId: session.session_id, messages: history.map(serializeChatMsg) })
-
     } catch (err) {
       logger.error('[Socket] chat:register error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -1424,24 +1289,18 @@ io.on('connection', (socket) => {
       const email = String(payload.email || socket.data.user?.email    || '')
 
       const session = await getOrCreateChatSession({
-        sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        sessionId: sid, userId: socket.data.user?.id,
+        email: email || null, fullName: name || null,
+        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
       })
 
       socket.data.sessionId = session.session_id
       socket.join(`chat:${session.session_id}`)
 
       const row    = await saveChatMessage({
-        sessionId:   session.session_id,
-        senderType:  'user',
-        senderId:    socket.data.user?.id,
-        senderName:  name,
-        senderEmail: email,
-        body,
-        metadata:    payload.metadata || { source: 'frontend-chat' },
+        sessionId: session.session_id, senderType: 'user',
+        senderId: socket.data.user?.id, senderName: name,
+        senderEmail: email, body, metadata: payload.metadata || { source: 'frontend-chat' },
       })
 
       const message = serializeChatMsg(row)
@@ -1449,17 +1308,12 @@ io.on('connection', (socket) => {
 
       io.to(`chat:${session.session_id}`).emit('chat:message', message)
       io.to('admins').emit('new-chat-message', {
-        sessionId:  session.session_id,
-        userId:     session.user_id,
-        email:      session.email,
-        fullName:   session.full_name,
-        body:       message.body,
-        senderName: message.senderName,
-        unreadCount: unread,
+        sessionId: session.session_id, userId: session.user_id,
+        email: session.email, fullName: session.full_name,
+        body: message.body, senderName: message.senderName, unreadCount: unread,
       })
 
       if (typeof cb === 'function') cb({ success: true, message })
-
     } catch (err) {
       logger.error('[Socket] chat:message error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -1476,13 +1330,11 @@ io.on('connection', (socket) => {
       if (!body) throw new Error('Message body is required')
 
       const row = await saveChatMessage({
-        sessionId:   sid,
-        senderType:  'admin',
+        sessionId: sid, senderType: 'admin',
         senderId:    socket.data.user?.id,
         senderName:  socket.data.user?.full_name || socket.data.user?.name || 'Admin',
         senderEmail: socket.data.user?.email     || null,
-        body,
-        metadata:    { source: 'admin-panel' },
+        body, metadata: { source: 'admin-panel' },
       })
 
       const message = serializeChatMsg(row)
@@ -1490,7 +1342,6 @@ io.on('connection', (socket) => {
       socket.to('admins').emit('admin:message-sent', { sessionId: sid, message })
 
       if (typeof cb === 'function') cb({ success: true, message })
-
     } catch (err) {
       logger.error('[Socket] admin:send-message error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -1504,7 +1355,6 @@ io.on('connection', (socket) => {
       if (!sid) throw new Error('sessionId required')
 
       socket.join(`chat:${sid}`)
-
       await query(
         `UPDATE chat_messages SET is_read=true
           WHERE session_id=$1 AND sender_type!='admin' AND is_read=false`,
@@ -1513,7 +1363,6 @@ io.on('connection', (socket) => {
 
       const messages = await fetchSessionMessages(sid)
       if (typeof cb === 'function') cb({ success: true, messages: messages.map(serializeChatMsg) })
-
     } catch (err) {
       logger.error('[Socket] admin:join-session error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
@@ -1530,21 +1379,17 @@ io.on('connection', (socket) => {
     })
   })
 
-  // ── Disconnect ────────────────────────────────────────────────────────────
   socket.on('disconnect', async (reason) => {
     logger.info(`[Socket] Disconnected: ${socket.id} | reason=${reason}`)
 
     if (socket.data.isAdmin) {
       connectedAdmins.delete(socket.id)
       logger.info(`[Socket] Admin offline (remaining: ${connectedAdmins.size})`)
-
-      // Only broadcast offline if NO admins remain
       if (connectedAdmins.size === 0) {
         io.emit('msg:admin-online', { online: false })
       }
     }
 
-    // Clean typing indicators for this socket
     query(
       `DELETE FROM typing_indicators WHERE socket_id=$1`,
       [socket.id],
@@ -1553,7 +1398,7 @@ io.on('connection', (socket) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS  (must be last, after all routes)
+// ERROR HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.use(notFoundHandler)
@@ -1569,7 +1414,6 @@ async function initializeServer() {
     await query('SELECT NOW()')
     logger.info('✅ Database connected')
 
-    // ── Destination extended schema (optional) ───────────────────────────
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
@@ -1578,7 +1422,6 @@ async function initializeServer() {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
-    // ── Core schemas (sequential — some have FK dependencies) ───────────
     const schemas = [
       { fn: ensureSubscribersSchema, name: 'Subscribers' },
       { fn: ensureUserSchema,        name: 'Users'        },
@@ -1594,7 +1437,6 @@ async function initializeServer() {
     for (const { fn, name } of schemas) {
       try {
         await fn()
-        // ensurePackagesSchema and ensureMessagingSchema log internally
         if (!['Packages', 'Messaging'].includes(name))
           logger.info(`✅ ${name} schema ready`)
       } catch (err) {
@@ -1602,12 +1444,11 @@ async function initializeServer() {
       }
     }
 
-    // ── Start HTTP server ────────────────────────────────────────────────
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.5')
+        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.6')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
@@ -1616,10 +1457,9 @@ async function initializeServer() {
         logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
         logger.info(`  Theme        : green-white (#16a34a) 🟢`)
         logger.info(`  DNS          : ipv4first ✅`)
-        logger.info(`  COOP         : same-origin-allow-popups ✅`)
+        logger.info(`  Cache        : POST/auth excluded ✅`)
         logger.info(`  Socket.io    : polling → websocket | allowEIO3 | cookie=false ✅`)
         logger.info(`  Conn.Recovery: 2-min window ✅`)
-        logger.info(`  Admin Track  : connectedAdmins Map ✅`)
         logger.info(`${line}\n`)
         resolve()
       })
@@ -1633,7 +1473,6 @@ async function initializeServer() {
     process.exit(1)
   }
 
-  // ── Background checks (non-blocking) ────────────────────────────────────
   verifyEmailConnection().catch(e =>
     logger.warn('Email connection check (non-fatal):', e.message),
   )
