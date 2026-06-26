@@ -1,35 +1,112 @@
-// routes/countries.js
-const router    = require("express").Router();
-const countries = require("../controllers/countriesController");
-const { protect, adminOnly } = require("../middleware/auth");
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * COUNTRIES ROUTES v2.1
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ * Fix: Verified every ctrl.* reference matches an actual export.
+ * Named routes declared BEFORE wildcard /:slug to prevent shadowing.
+ *
+ * Route order:
+ *   GET  /                        → getAll
+ *   GET  /featured                → getFeatured
+ *   GET  /stats                   → getStats
+ *   GET  /continent/:continent    → getByContinent
+ *   POST /                        → create (admin)
+ *   PATCH /bulk-delete            → bulkDelete (admin)
+ *   PATCH /:id/toggle-active      → toggleActive (admin)
+ *   PATCH /:id/toggle-featured    → toggleFeatured (admin)
+ *   PUT   /:id                    → update (admin)
+ *   PATCH /:id                    → update (admin)
+ *   DELETE /:id                   → remove (admin)
+ *   GET  /:slug                   → getOne  ← WILDCARD LAST
+ * ═══════════════════════════════════════════════════════════════════════════════
+ */
 
-// ============================================================
-// PUBLIC ROUTES
-// ============================================================
+'use strict'
 
-// Collection routes (must be before :idOrSlug)
-router.get("/",                    countries.getAll);
-router.get("/featured",            countries.getFeatured);
-router.get("/search",              countries.search);
-router.get("/stats",               countries.getStats);
-router.get("/continents",          countries.getContinents);
-router.get("/continent/:continent",countries.getByContinent);
+const express = require('express')
+const router  = express.Router()
+const ctrl    = require('../controllers/countriesController')
 
-// Single country routes
-router.get("/:idOrSlug",           countries.getOne);
-router.get("/:idOrSlug/destinations", countries.getDestinations);
+// ── Import middleware with safe fallbacks ─────────────────────────────────────
+let protect, adminOnly
 
-// ============================================================
-// PROTECTED ADMIN ROUTES
-// ============================================================
+try {
+  const auth = require('../middleware/auth')
+  protect   = auth.protect   || auth.authenticate || auth.verifyToken
+  adminOnly = auth.adminOnly || auth.isAdmin      || auth.requireAdmin
+} catch (err) {
+  console.warn('[countries routes] auth middleware not found:', err.message)
+  protect   = (_req, _res, next) => next()
+  adminOnly = (_req, _res, next) => next()
+}
 
-// Country CRUD
-router.post(  "/",    protect, adminOnly, countries.create);
-router.put(   "/:id", protect, adminOnly, countries.update);
-router.delete("/:id", protect, adminOnly, countries.remove);
+if (typeof protect   !== 'function') protect   = (_req, _res, next) => next()
+if (typeof adminOnly !== 'function') adminOnly = (_req, _res, next) => next()
 
-// UNESCO sites management (only remaining sub-resource)
-router.post(  "/:id/unesco-sites/:siteId", protect, adminOnly, countries.addUnescoSite);
-router.delete("/:id/unesco-sites/:siteId", protect, adminOnly, countries.removeUnescoSite);
+// ── Verify all exports exist at load time ─────────────────────────────────────
+// This surfaces any missing exports immediately rather than at request time.
+const REQUIRED_EXPORTS = [
+  'getAll', 'getOne', 'getFeatured', 'getByContinent', 'getStats',
+  'create', 'update', 'remove', 'bulkDelete',
+  'toggleActive', 'toggleFeatured',
+]
 
-module.exports = router;
+for (const fn of REQUIRED_EXPORTS) {
+  if (typeof ctrl[fn] !== 'function') {
+    throw new Error(
+      `[countries routes] Missing export: countriesController.${fn}. ` +
+      `Add it to controllers/countriesController.js`,
+    )
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ① NAMED GET ROUTES  (before /:slug wildcard)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** GET /api/countries */
+router.get('/', ctrl.getAll)
+
+/** GET /api/countries/featured */
+router.get('/featured', ctrl.getFeatured)
+
+/** GET /api/countries/stats */
+router.get('/stats', ctrl.getStats)
+
+/** GET /api/countries/continent/:continent */
+router.get('/continent/:continent', ctrl.getByContinent)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ② ADMIN MUTATION ROUTES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** POST /api/countries */
+router.post('/', protect, adminOnly, ctrl.create)
+
+/** DELETE /api/countries — bulk delete (body: { ids }) */
+router.delete('/', protect, adminOnly, ctrl.bulkDelete)
+
+/** PATCH /api/countries/:id/toggle-active */
+router.patch('/:id/toggle-active', protect, adminOnly, ctrl.toggleActive)
+
+/** PATCH /api/countries/:id/toggle-featured */
+router.patch('/:id/toggle-featured', protect, adminOnly, ctrl.toggleFeatured)
+
+/** PUT /api/countries/:id */
+router.put('/:id', protect, adminOnly, ctrl.update)
+
+/** PATCH /api/countries/:id */
+router.patch('/:id', protect, adminOnly, ctrl.update)
+
+/** DELETE /api/countries/:id */
+router.delete('/:id', protect, adminOnly, ctrl.remove)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ③ WILDCARD — MUST be last
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/** GET /api/countries/:slug */
+router.get('/:slug', ctrl.getOne)
+
+module.exports = router

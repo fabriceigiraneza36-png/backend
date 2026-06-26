@@ -1,42 +1,104 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES CONTROLLER — getOne fix for includeRelated=true 500 error
+ * COUNTRIES CONTROLLER v3.0
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * Replace your existing getOne export with this entire fixed version.
- * The key fixes:
- *   1. Every sub-query is wrapped in try/catch so one failure ≠ 500
- *   2. Column existence is not assumed — safe fallbacks on all JOINs
- *   3. `slug` lookup is case-insensitive
- *   4. `includeRelated` sub-queries run in parallel via Promise.allSettled
+ * Fix: All exports verified — no undefined controller functions.
+ * Every function referenced in routes/countries.js is exported here.
+ *
+ * Exports:
+ *   getAll, getOne, create, update, remove,
+ *   getStats, getFeatured, getByContinent,
+ *   toggleActive, toggleFeatured, bulkDelete
  */
 
-"use strict";
+'use strict'
 
-const { query } = require("../config/db");
-const logger    = require("../utils/logger");
+const { query } = require('../config/db')
+const logger    = require('../utils/logger')
 
 /* ─── Helpers ────────────────────────────────────────────────────────────── */
 
-const safeInt = (v, def, min = 1, max = 500) => {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def;
-};
+const safeInt = (v, def = 0, min = 0, max = 99999) => {
+  const n = parseInt(v, 10)
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
+}
 
-/** Run a query and return rows, or [] on error — never throws. */
+/**
+ * Run a query and return rows, or [] on error — never throws.
+ */
 const safeQuery = async (sql, params = []) => {
   try {
-    const { rows } = await query(sql, params);
-    return rows;
+    const { rows } = await query(sql, params)
+    return rows
   } catch (err) {
-    logger.warn("[Countries] safeQuery non-fatal:", err.message, "| SQL:", sql.slice(0, 120));
-    return [];
+    logger.warn('[Countries] safeQuery non-fatal:', err.message)
+    return []
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/**
+ * Build a URL-friendly slug from a string.
+ */
+const toSlug = (str = '') =>
+  String(str)
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^\w-]/g, '')
+    .replace(/--+/g, '-')
+
+/* ─── Schema guard ───────────────────────────────────────────────────────── */
+
+const ensureCountriesSchema = async () => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS countries (
+        id                SERIAL PRIMARY KEY,
+        name              VARCHAR(255) NOT NULL,
+        slug              VARCHAR(255) UNIQUE NOT NULL,
+        continent         VARCHAR(100),
+        description       TEXT,
+        short_description TEXT,
+        image_url         VARCHAR(500),
+        flag_url          VARCHAR(500),
+        capital           VARCHAR(255),
+        currency          VARCHAR(100),
+        language          VARCHAR(255),
+        timezone          VARCHAR(100),
+        visa_info         TEXT,
+        best_time_to_visit TEXT,
+        climate           TEXT,
+        latitude          NUMERIC(10,6),
+        longitude         NUMERIC(10,6),
+        is_active         BOOLEAN   DEFAULT true,
+        is_featured       BOOLEAN   DEFAULT false,
+        view_count        INTEGER   DEFAULT 0,
+        meta_title        VARCHAR(255),
+        meta_description  TEXT,
+        created_at        TIMESTAMP DEFAULT NOW(),
+        updated_at        TIMESTAMP DEFAULT NOW()
+      )
+    `)
+
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug      ON countries(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_active    ON countries(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_featured  ON countries(is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_continent ON countries(continent)`,
+    ]
+    for (const idx of indexes) await query(idx).catch(() => {})
+  } catch (err) {
+    logger.warn('[Countries] Schema ensure non-fatal:', err.message)
+  }
+}
+
+// Run once on module load (non-blocking)
+ensureCountriesSchema()
+
+/* ═══════════════════════════════════════════════════════════════════════════
    GET ALL   GET /api/countries
-═══════════════════════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════════ */
 
 exports.getAll = async (req, res, next) => {
   try {
@@ -46,33 +108,51 @@ exports.getAll = async (req, res, next) => {
       continent,
       search,
       is_active,
-      sortBy    = "name",
-      order     = "asc",
-    } = req.query;
+      is_featured,
+      sortBy    = 'name',
+      order     = 'asc',
+    } = req.query
 
-    const ALLOWED_SORT = new Set(["name","continent","created_at","destination_count"]);
+    const ALLOWED_SORT = new Set([
+      'name', 'continent', 'created_at', 'view_count',
+    ])
 
-    const params = [];
-    const conds  = ["1=1"];
-    let   pi     = 1;
+    const params  = []
+    const conds   = ['1=1']
+    let   pi      = 1
 
-    if (continent)              { conds.push(`c.continent ILIKE $${pi++}`);          params.push(`%${continent}%`); }
-    if (is_active !== undefined){ conds.push(`c.is_active = $${pi++}`);              params.push(is_active === "true"); }
-    if (search)                 { conds.push(`(c.name ILIKE $${pi} OR c.description ILIKE $${pi})`); params.push(`%${search}%`); pi++; }
+    if (continent) {
+      conds.push(`c.continent ILIKE $${pi++}`)
+      params.push(`%${continent}%`)
+    }
+    if (is_active !== undefined) {
+      conds.push(`c.is_active = $${pi++}`)
+      params.push(is_active === 'true' || is_active === true)
+    }
+    if (is_featured !== undefined) {
+      conds.push(`c.is_featured = $${pi++}`)
+      params.push(is_featured === 'true' || is_featured === true)
+    }
+    if (search) {
+      conds.push(`(c.name ILIKE $${pi} OR c.description ILIKE $${pi} OR c.continent ILIKE $${pi})`)
+      params.push(`%${search.trim()}%`)
+      pi++
+    }
 
-    const where   = conds.join(" AND ");
-    const sortCol = ALLOWED_SORT.has(sortBy) ? sortBy : "name";
-    const sortDir = order.toUpperCase() === "DESC" ? "DESC" : "ASC";
-    const lim     = safeInt(limit, 50, 1, 200);
-    const pg      = safeInt(page,  1,  1, 9999);
-    const offset  = (pg - 1) * lim;
+    const where   = conds.join(' AND ')
+    const sortCol = ALLOWED_SORT.has(sortBy) ? sortBy : 'name'
+    const sortDir = order.toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+    const lim     = safeInt(limit, 50, 1, 200)
+    const pg      = safeInt(page,  1,  1, 9999)
+    const offset  = (pg - 1) * lim
 
     const [countRes, dataRes] = await Promise.all([
       query(`SELECT COUNT(*) FROM countries c WHERE ${where}`, params),
       query(
         `SELECT
             c.*,
-            COUNT(DISTINCT d.id) FILTER (WHERE d.is_active = true)::INTEGER AS destination_count
+            COUNT(DISTINCT d.id) FILTER (WHERE d.is_active = true)::INTEGER
+              AS destination_count
            FROM countries c
            LEFT JOIN destinations d ON d.country_id = c.id
            WHERE ${where}
@@ -81,10 +161,10 @@ exports.getAll = async (req, res, next) => {
            LIMIT $${pi} OFFSET $${pi + 1}`,
         [...params, lim, offset],
       ),
-    ]);
+    ])
 
-    const total      = parseInt(countRes.rows[0].count, 10);
-    const totalPages = Math.ceil(total / lim);
+    const total      = parseInt(countRes.rows[0].count, 10)
+    const totalPages = Math.ceil(total / lim)
 
     return res.json({
       success: true,
@@ -97,47 +177,44 @@ exports.getAll = async (req, res, next) => {
         has_next:    pg < totalPages,
         has_prev:    pg > 1,
       },
-    });
+    })
   } catch (err) {
-    logger.error("[Countries] getAll failed:", err.message);
-    next(err);
+    logger.error('[Countries] getAll failed:', err.message)
+    next(err)
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
    GET ONE   GET /api/countries/:slug
-   ─── THIS IS THE FIX for the 500 on includeRelated=true ────────────────────
-═══════════════════════════════════════════════════════════════════════════════ */
+═══════════════════════════════════════════════════════════════════════════ */
 
 exports.getOne = async (req, res, next) => {
   try {
-    const rawSlug       = req.params.slug || req.params.id || "";
-    const includeRelated = ["true","1","yes"].includes(
-      String(req.query.includeRelated || "").toLowerCase(),
-    );
+    const rawSlug        = req.params.slug || req.params.id || ''
+    const includeRelated = ['true', '1', 'yes'].includes(
+      String(req.query.includeRelated || '').toLowerCase(),
+    )
 
     if (!rawSlug.trim()) {
-      return res.status(400).json({ success: false, error: "Country identifier required" });
+      return res.status(400).json({ success: false, error: 'Country identifier required' })
     }
 
-    /* ── Lookup: try slug first, then id, then name ── */
-    let country = null;
-    const slugLower = rawSlug.toLowerCase().trim();
+    const slugLower = rawSlug.toLowerCase().trim()
 
-    // 1. By slug
+    // Try by slug, then name, then numeric id
+    let country = null
+
     const bySlug = await safeQuery(
       `SELECT c.*,
               COUNT(DISTINCT d.id) FILTER (WHERE d.is_active = true)::INTEGER AS destination_count
          FROM countries c
          LEFT JOIN destinations d ON d.country_id = c.id
          WHERE LOWER(c.slug) = $1
-         GROUP BY c.id
-         LIMIT 1`,
+         GROUP BY c.id LIMIT 1`,
       [slugLower],
-    );
-    if (bySlug[0]) country = bySlug[0];
+    )
+    if (bySlug[0]) country = bySlug[0]
 
-    // 2. By name (case-insensitive)
     if (!country) {
       const byName = await safeQuery(
         `SELECT c.*,
@@ -145,16 +222,14 @@ exports.getOne = async (req, res, next) => {
            FROM countries c
            LEFT JOIN destinations d ON d.country_id = c.id
            WHERE LOWER(c.name) = $1
-           GROUP BY c.id
-           LIMIT 1`,
+           GROUP BY c.id LIMIT 1`,
         [slugLower],
-      );
-      if (byName[0]) country = byName[0];
+      )
+      if (byName[0]) country = byName[0]
     }
 
-    // 3. By numeric ID
     if (!country) {
-      const numId = parseInt(rawSlug, 10);
+      const numId = parseInt(rawSlug, 10)
       if (Number.isFinite(numId) && numId > 0) {
         const byId = await safeQuery(
           `SELECT c.*,
@@ -162,28 +237,25 @@ exports.getOne = async (req, res, next) => {
              FROM countries c
              LEFT JOIN destinations d ON d.country_id = c.id
              WHERE c.id = $1
-             GROUP BY c.id
-             LIMIT 1`,
+             GROUP BY c.id LIMIT 1`,
           [numId],
-        );
-        if (byId[0]) country = byId[0];
+        )
+        if (byId[0]) country = byId[0]
       }
     }
 
     if (!country) {
-      return res.status(404).json({ success: false, error: "Country not found" });
+      return res.status(404).json({ success: false, error: 'Country not found' })
     }
 
-    /* ── Increment view count (non-blocking, non-fatal) ── */
+    // Increment view count (non-blocking)
     query(
-      "UPDATE countries SET view_count = COALESCE(view_count,0) + 1 WHERE id = $1",
+      'UPDATE countries SET view_count = COALESCE(view_count,0) + 1 WHERE id = $1',
       [country.id],
-    ).catch(() => {});
+    ).catch(() => {})
 
-    /* ── Build base response ── */
-    const response = { success: true, data: { ...country } };
+    const response = { success: true, data: { ...country } }
 
-    /* ── includeRelated: run all sub-queries in parallel, none can crash ── */
     if (includeRelated) {
       const [
         destinationsResult,
@@ -192,8 +264,6 @@ exports.getOne = async (req, res, next) => {
         similarCountriesResult,
         highlightsResult,
       ] = await Promise.allSettled([
-
-        /* Active destinations for this country */
         safeQuery(
           `SELECT
               d.id, d.name, d.slug, d.short_description, d.description,
@@ -205,11 +275,11 @@ exports.getOne = async (req, res, next) => {
               COALESCE(d.booking_count, 0)::INTEGER AS total_bookings
              FROM destinations d
              WHERE d.country_id = $1 AND d.is_active = true
-             ORDER BY d.is_featured DESC NULLS LAST, d.booking_count DESC NULLS LAST, d.name ASC`,
+             ORDER BY d.is_featured DESC NULLS LAST,
+                      d.booking_count DESC NULLS LAST,
+                      d.name ASC`,
           [country.id],
         ),
-
-        /* Services linked to this country */
         safeQuery(
           `SELECT
               s.id, s.title, s.slug, s.description, s.short_description,
@@ -222,8 +292,6 @@ exports.getOne = async (req, res, next) => {
              LIMIT 20`,
           [country.id],
         ),
-
-        /* Booking stats */
         safeQuery(
           `SELECT
               COUNT(DISTINCT b.id)::INTEGER                   AS total_bookings,
@@ -236,8 +304,6 @@ exports.getOne = async (req, res, next) => {
              WHERE d.country_id = $1`,
           [country.id],
         ),
-
-        /* Similar countries (same continent, excluding self) */
         safeQuery(
           `SELECT
               c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent,
@@ -252,191 +318,105 @@ exports.getOne = async (req, res, next) => {
                       c.continent, c.short_description
              ORDER BY destination_count DESC
              LIMIT 4`,
-          [country.continent || "", country.id],
+          [country.continent || '', country.id],
         ),
-
-        /* Country highlights / featured destinations */
         safeQuery(
           `SELECT
               d.id, d.name, d.slug, d.image_url, d.short_description,
               d.difficulty, d.duration, d.price_from, d.rating
              FROM destinations d
              WHERE d.country_id = $1
-               AND d.is_active  = true
+               AND d.is_active   = true
                AND d.is_featured = true
              ORDER BY d.rating DESC NULLS LAST
              LIMIT 6`,
           [country.id],
         ),
-      ]);
+      ])
 
-      // Safely unwrap Promise.allSettled results
       const unwrap = (result, fallback = []) =>
-        result.status === "fulfilled" ? (result.value || fallback) : fallback;
+        result.status === 'fulfilled' ? (result.value || fallback) : fallback
 
-      response.data.destinations    = unwrap(destinationsResult);
-      response.data.services        = unwrap(servicesResult);
-      response.data.booking_stats   = unwrap(bookingStatsResult)[0] || {
+      response.data.destinations     = unwrap(destinationsResult)
+      response.data.services         = unwrap(servicesResult)
+      response.data.booking_stats    = unwrap(bookingStatsResult)[0] || {
         total_bookings: 0, total_travelers: 0, bookings_last_30_days: 0,
-      };
-      response.data.similar_countries = unwrap(similarCountriesResult);
-      response.data.highlights        = unwrap(highlightsResult);
-
-      // Computed convenience fields
-      response.data.destination_count = response.data.destinations.length;
-      response.data.featured_count    = response.data.highlights.length;
+      }
+      response.data.similar_countries = unwrap(similarCountriesResult)
+      response.data.highlights        = unwrap(highlightsResult)
+      response.data.destination_count = response.data.destinations.length
+      response.data.featured_count    = response.data.highlights.length
     }
 
-    return res.json(response);
+    return res.json(response)
   } catch (err) {
-    logger.error("[Countries] getOne failed:", err.message, err.stack);
-    next(err);
+    logger.error('[Countries] getOne failed:', err.message)
+    next(err)
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
-   CREATE   POST /api/countries
-═══════════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET FEATURED   GET /api/countries/featured
+═══════════════════════════════════════════════════════════════════════════ */
 
-exports.create = async (req, res, next) => {
+exports.getFeatured = async (req, res, next) => {
   try {
-    const {
-      name, slug, continent, description, short_description,
-      image_url, flag_url, capital, currency, language,
-      timezone, visa_info, best_time_to_visit, climate,
-      latitude, longitude, is_active = true, is_featured = false,
-      meta_title, meta_description,
-    } = req.body;
+    const limit = Math.min(safeInt(req.query.limit, 6, 1, 50), 50)
 
-    if (!name?.trim())
-      return res.status(400).json({ success: false, error: "Country name is required" });
+    const rows = await safeQuery(
+      `SELECT
+          c.*,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_active = true)::INTEGER AS destination_count
+         FROM countries c
+         LEFT JOIN destinations d ON d.country_id = c.id
+         WHERE c.is_active = true AND c.is_featured = true
+         GROUP BY c.id
+         ORDER BY c.name ASC
+         LIMIT $1`,
+      [limit],
+    )
 
-    const computedSlug = slug?.trim() ||
-      name.toLowerCase().trim().replace(/\s+/g, "-").replace(/[^\w-]/g, "");
-
-    // Check slug uniqueness
-    const { rows: existing } = await query(
-      "SELECT id FROM countries WHERE slug = $1",
-      [computedSlug],
-    );
-    if (existing[0])
-      return res.status(409).json({ success: false, error: "A country with this slug already exists" });
-
-    const { rows } = await query(
-      `INSERT INTO countries (
-          name, slug, continent, description, short_description,
-          image_url, flag_url, capital, currency, language,
-          timezone, visa_info, best_time_to_visit, climate,
-          latitude, longitude, is_active, is_featured,
-          meta_title, meta_description, created_at, updated_at
-        ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
-          $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-          NOW(),NOW()
-        ) RETURNING *`,
-      [
-        name.trim(), computedSlug, continent || null, description || null,
-        short_description || null, image_url || null, flag_url || null,
-        capital || null, currency || null, language || null,
-        timezone || null, visa_info || null, best_time_to_visit || null,
-        climate || null, latitude || null, longitude || null,
-        Boolean(is_active), Boolean(is_featured),
-        meta_title || null, meta_description || null,
-      ],
-    );
-
-    return res.status(201).json({ success: true, message: "Country created", data: rows[0] });
+    return res.json({ success: true, data: rows, count: rows.length })
   } catch (err) {
-    logger.error("[Countries] create failed:", err.message);
-    next(err);
+    logger.error('[Countries] getFeatured failed:', err.message)
+    next(err)
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
-   UPDATE   PUT /api/countries/:id
-═══════════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET BY CONTINENT   GET /api/countries/continent/:continent
+═══════════════════════════════════════════════════════════════════════════ */
 
-exports.update = async (req, res, next) => {
+exports.getByContinent = async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!id || id < 1)
-      return res.status(400).json({ success: false, error: "Invalid country ID" });
-
-    const ALLOWED = [
-      "name","slug","continent","description","short_description",
-      "image_url","flag_url","capital","currency","language",
-      "timezone","visa_info","best_time_to_visit","climate",
-      "latitude","longitude","is_active","is_featured",
-      "meta_title","meta_description",
-    ];
-
-    const updates = {};
-    for (const f of ALLOWED) {
-      if (req.body[f] !== undefined) updates[f] = req.body[f];
+    const continent = String(req.params.continent || '').trim()
+    if (!continent) {
+      return res.status(400).json({ success: false, error: 'Continent name required' })
     }
 
-    if (!Object.keys(updates).length)
-      return res.status(400).json({ success: false, error: "No valid fields to update" });
+    const rows = await safeQuery(
+      `SELECT
+          c.*,
+          COUNT(DISTINCT d.id) FILTER (WHERE d.is_active = true)::INTEGER AS destination_count
+         FROM countries c
+         LEFT JOIN destinations d ON d.country_id = c.id
+         WHERE c.is_active = true
+           AND c.continent ILIKE $1
+         GROUP BY c.id
+         ORDER BY c.name ASC`,
+      [`%${continent}%`],
+    )
 
-    if (!updates.name?.trim && updates.name !== undefined && !String(updates.name).trim())
-      return res.status(400).json({ success: false, error: "Name cannot be empty" });
-
-    const fields    = Object.keys(updates);
-    const values    = Object.values(updates);
-    const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(", ");
-
-    const { rows } = await query(
-      `UPDATE countries SET ${setClause}, updated_at=NOW() WHERE id=$${fields.length + 1} RETURNING *`,
-      [...values, id],
-    );
-
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Country not found" });
-
-    return res.json({ success: true, message: "Country updated", data: rows[0] });
+    return res.json({ success: true, data: rows, count: rows.length, continent })
   } catch (err) {
-    logger.error("[Countries] update failed:", err.message);
-    next(err);
+    logger.error('[Countries] getByContinent failed:', err.message)
+    next(err)
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
-   DELETE   DELETE /api/countries/:id
-═══════════════════════════════════════════════════════════════════════════════ */
-
-exports.remove = async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    if (!id || id < 1)
-      return res.status(400).json({ success: false, error: "Invalid country ID" });
-
-    // Check for linked destinations
-    const { rows: linked } = await query(
-      "SELECT COUNT(*) FROM destinations WHERE country_id=$1",
-      [id],
-    );
-    if (parseInt(linked[0].count, 10) > 0) {
-      return res.status(409).json({
-        success: false,
-        error:   "Cannot delete country with existing destinations. Remove destinations first.",
-        destination_count: parseInt(linked[0].count, 10),
-      });
-    }
-
-    const { rows } = await query("DELETE FROM countries WHERE id=$1 RETURNING id,name", [id]);
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Country not found" });
-
-    return res.json({ success: true, message: `Country "${rows[0].name}" deleted` });
-  } catch (err) {
-    logger.error("[Countries] remove failed:", err.message);
-    next(err);
-  }
-};
-
-/* ═══════════════════════════════════════════════════════════════════════════════
-   STATS   GET /api/countries/stats
-═══════════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET STATS   GET /api/countries/stats
+═══════════════════════════════════════════════════════════════════════════ */
 
 exports.getStats = async (req, res, next) => {
   try {
@@ -445,6 +425,7 @@ exports.getStats = async (req, res, next) => {
         SELECT
           COUNT(*)::INTEGER                              AS total_countries,
           COUNT(*) FILTER (WHERE is_active=true)::INTEGER AS active_countries,
+          COUNT(*) FILTER (WHERE is_featured=true)::INTEGER AS featured_countries,
           COUNT(DISTINCT continent)::INTEGER             AS continents
         FROM countries
       `),
@@ -463,14 +444,14 @@ exports.getStats = async (req, res, next) => {
           COUNT(DISTINCT d.id)::INTEGER AS destination_count,
           COUNT(DISTINCT b.id)::INTEGER AS booking_count
         FROM countries c
-        LEFT JOIN destinations d ON d.country_id=c.id AND d.is_active=true
-        LEFT JOIN bookings b ON b.destination_id=d.id
-        WHERE c.is_active=true
-        GROUP BY c.id,c.name,c.slug,c.flag_url
+        LEFT JOIN destinations d ON d.country_id = c.id AND d.is_active = true
+        LEFT JOIN bookings b     ON b.destination_id = d.id
+        WHERE c.is_active = true
+        GROUP BY c.id, c.name, c.slug, c.flag_url
         ORDER BY booking_count DESC, destination_count DESC
         LIMIT 10
       `),
-    ]);
+    ])
 
     return res.json({
       success: true,
@@ -479,39 +460,298 @@ exports.getStats = async (req, res, next) => {
         by_continent:  byCont,
         top_countries: topCountries,
       },
-    });
+    })
   } catch (err) {
-    logger.error("[Countries] getStats failed:", err.message);
-    next(err);
+    logger.error('[Countries] getStats failed:', err.message)
+    next(err)
   }
-};
+}
 
-/* ═══════════════════════════════════════════════════════════════════════════════
-   FEATURED   GET /api/countries/featured
-═══════════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   CREATE   POST /api/countries
+═══════════════════════════════════════════════════════════════════════════ */
 
-exports.getFeatured = async (req, res, next) => {
+exports.create = async (req, res, next) => {
   try {
-    const limit = safeInt(req.query.limit, 6, 1, 50);
+    const {
+      name, slug, continent, description, short_description,
+      image_url, flag_url, capital, currency, language,
+      timezone, visa_info, best_time_to_visit, climate,
+      latitude, longitude,
+      is_active   = true,
+      is_featured = false,
+      meta_title, meta_description,
+    } = req.body
 
-    const rows = await safeQuery(
-      `SELECT
-          c.*,
-          COUNT(DISTINCT d.id) FILTER (WHERE d.is_active=true)::INTEGER AS destination_count
-         FROM countries c
-         LEFT JOIN destinations d ON d.country_id=c.id
-         WHERE c.is_active=true AND c.is_featured=true
-         GROUP BY c.id
-         ORDER BY c.name ASC
-         LIMIT $1`,
-      [limit],
-    );
+    if (!String(name || '').trim()) {
+      return res.status(400).json({ success: false, error: 'Country name is required' })
+    }
 
-    return res.json({ success: true, data: rows });
+    const computedSlug = String(slug || '').trim() || toSlug(name)
+
+    // Check slug uniqueness
+    const existing = await safeQuery(
+      'SELECT id FROM countries WHERE slug = $1',
+      [computedSlug],
+    )
+    if (existing[0]) {
+      return res.status(409).json({
+        success: false,
+        error:   `A country with slug "${computedSlug}" already exists`,
+      })
+    }
+
+    const { rows } = await query(
+      `INSERT INTO countries (
+          name, slug, continent, description, short_description,
+          image_url, flag_url, capital, currency, language,
+          timezone, visa_info, best_time_to_visit, climate,
+          latitude, longitude, is_active, is_featured,
+          meta_title, meta_description, created_at, updated_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,
+          $11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+          NOW(),NOW()
+        ) RETURNING *`,
+      [
+        String(name).trim(),
+        computedSlug,
+        continent          || null,
+        description        || null,
+        short_description  || null,
+        image_url          || null,
+        flag_url           || null,
+        capital            || null,
+        currency           || null,
+        language           || null,
+        timezone           || null,
+        visa_info          || null,
+        best_time_to_visit || null,
+        climate            || null,
+        latitude           || null,
+        longitude          || null,
+        Boolean(is_active),
+        Boolean(is_featured),
+        meta_title         || null,
+        meta_description   || null,
+      ],
+    )
+
+    return res.status(201).json({
+      success: true,
+      message: 'Country created successfully',
+      data:    rows[0],
+    })
   } catch (err) {
-    logger.error("[Countries] getFeatured failed:", err.message);
-    next(err);
+    logger.error('[Countries] create failed:', err.message)
+    next(err)
   }
-};
+}
 
-module.exports = exports;
+/* ═══════════════════════════════════════════════════════════════════════════
+   UPDATE   PUT/PATCH /api/countries/:id
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.update = async (req, res, next) => {
+  try {
+    const id = safeInt(req.params.id, 0, 1)
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Invalid country ID' })
+    }
+
+    const ALLOWED = [
+      'name', 'slug', 'continent', 'description', 'short_description',
+      'image_url', 'flag_url', 'capital', 'currency', 'language',
+      'timezone', 'visa_info', 'best_time_to_visit', 'climate',
+      'latitude', 'longitude', 'is_active', 'is_featured',
+      'meta_title', 'meta_description',
+    ]
+
+    const updates = {}
+    for (const f of ALLOWED) {
+      if (req.body[f] !== undefined) updates[f] = req.body[f]
+    }
+
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({ success: false, error: 'No valid fields to update' })
+    }
+
+    if (updates.name !== undefined && !String(updates.name).trim()) {
+      return res.status(400).json({ success: false, error: 'Name cannot be empty' })
+    }
+
+    const fields    = Object.keys(updates)
+    const values    = Object.values(updates)
+    const setClause = fields.map((f, i) => `${f} = $${i + 1}`).join(', ')
+
+    const { rows } = await query(
+      `UPDATE countries SET ${setClause}, updated_at=NOW()
+       WHERE id=$${fields.length + 1} RETURNING *`,
+      [...values, id],
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Country not found' })
+    }
+
+    return res.json({
+      success: true,
+      message: 'Country updated successfully',
+      data:    rows[0],
+    })
+  } catch (err) {
+    logger.error('[Countries] update failed:', err.message)
+    next(err)
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOGGLE ACTIVE   PATCH /api/countries/:id/toggle-active
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.toggleActive = async (req, res, next) => {
+  try {
+    const id = safeInt(req.params.id, 0, 1)
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Invalid country ID' })
+    }
+
+    const { rows } = await query(
+      `UPDATE countries SET is_active=NOT is_active, updated_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [id],
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Country not found' })
+    }
+
+    return res.json({
+      success: true,
+      message: rows[0].is_active ? 'Country activated' : 'Country deactivated',
+      data:    rows[0],
+    })
+  } catch (err) {
+    logger.error('[Countries] toggleActive failed:', err.message)
+    next(err)
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TOGGLE FEATURED   PATCH /api/countries/:id/toggle-featured
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.toggleFeatured = async (req, res, next) => {
+  try {
+    const id = safeInt(req.params.id, 0, 1)
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Invalid country ID' })
+    }
+
+    const { rows } = await query(
+      `UPDATE countries SET is_featured=NOT is_featured, updated_at=NOW()
+       WHERE id=$1 RETURNING *`,
+      [id],
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Country not found' })
+    }
+
+    return res.json({
+      success: true,
+      message: rows[0].is_featured ? 'Marked as featured' : 'Removed from featured',
+      data:    rows[0],
+    })
+  } catch (err) {
+    logger.error('[Countries] toggleFeatured failed:', err.message)
+    next(err)
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   DELETE   DELETE /api/countries/:id
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.remove = async (req, res, next) => {
+  try {
+    const id = safeInt(req.params.id, 0, 1)
+    if (!id) {
+      return res.status(400).json({ success: false, error: 'Invalid country ID' })
+    }
+
+    // Check for linked destinations
+    const linked = await safeQuery(
+      'SELECT COUNT(*) AS count FROM destinations WHERE country_id=$1',
+      [id],
+    )
+    const destCount = parseInt(linked[0]?.count || 0, 10)
+
+    if (destCount > 0) {
+      return res.status(409).json({
+        success:           false,
+        error:             `Cannot delete: this country has ${destCount} destination(s). Remove them first.`,
+        destination_count: destCount,
+      })
+    }
+
+    const { rows } = await query(
+      'DELETE FROM countries WHERE id=$1 RETURNING id, name',
+      [id],
+    )
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, error: 'Country not found' })
+    }
+
+    return res.json({
+      success: true,
+      message: `Country "${rows[0].name}" deleted`,
+      data:    { id: rows[0].id },
+    })
+  } catch (err) {
+    logger.error('[Countries] remove failed:', err.message)
+    next(err)
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   BULK DELETE   DELETE /api/countries (body: { ids: [] })
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.bulkDelete = async (req, res, next) => {
+  try {
+    const { ids } = req.body
+
+    if (!Array.isArray(ids) || !ids.length) {
+      return res.status(400).json({ success: false, error: 'ids array is required' })
+    }
+
+    const validIds = ids.map(id => parseInt(id, 10)).filter(id => Number.isFinite(id) && id > 0)
+    if (!validIds.length) {
+      return res.status(400).json({ success: false, error: 'No valid IDs provided' })
+    }
+
+    const { rows } = await query(
+      `DELETE FROM countries WHERE id=ANY($1::INTEGER[])
+         AND id NOT IN (
+           SELECT DISTINCT country_id FROM destinations WHERE country_id IS NOT NULL
+         )
+       RETURNING id, name`,
+      [validIds],
+    )
+
+    const skipped = validIds.length - rows.length
+
+    return res.json({
+      success: true,
+      message: `${rows.length} country/countries deleted${skipped ? `, ${skipped} skipped (have destinations)` : ''}`,
+      data:    { deleted: rows.map(r => r.id), skipped },
+    })
+  } catch (err) {
+    logger.error('[Countries] bulkDelete failed:', err.message)
+    next(err)
+  }
+}
+
+module.exports = exports
