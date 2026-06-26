@@ -1,14 +1,12 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.6
- * ═══════════════════════════════════════════════════════════════════════════════
+ * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.7
+ * "True Adventures In High Places & Deep Culture"
  *
- * Changes from v6.5:
- *   - cacheMiddleware: POST/authenticated requests excluded (was caching 404s)
- *   - connectedAdmins declared before /health endpoint (was ReferenceError)
- *   - Cache debug endpoint: GET /api/debug/cache
- *   - testimonials route mount verified: /api/testimonials (with 's')
- *   - Socket.io: no changes (v6.5 config was correct)
+ * Changes from v6.6:
+ *   - Email imports: safe dynamic resolution — never crashes on missing export
+ *   - verifyEmailConnection / verifyAuthEmail guarded before call
+ *   - All other logic preserved from v6.6
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -32,7 +30,7 @@ const jwt         = require('jsonwebtoken')
 const { v4: uuidv4 } = require('uuid')
 const { Server }  = require('socket.io')
 
-// ── Internal modules ──────────────────────────────────────────────────────────
+// ── Internal DB ───────────────────────────────────────────────────────────────
 const {
   query,
   ensureUserSchema,
@@ -48,11 +46,34 @@ const logger    = require('./utils/logger')
 const shutdown  = require('./utils/shutdown')
 const socketBus = require('./utils/socketBus')
 
-const { verifyEmailConnection }              = require('./utils/emailService')
-const { verifyTransporter: verifyAuthEmail } = require('./utils/email')
-const { errorHandler, notFoundHandler }      = require('./middleware/errorHandler')
+// ── Email helpers — safe imports ──────────────────────────────────────────────
+// Different projects export these under different names.
+// We try every common name and fall back to null — never crash on import.
+let verifyEmailConnection = null
+let verifyAuthEmail       = null
 
-// ── Import cache with invalidation support ────────────────────────────────────
+try {
+  const svc = require('./utils/emailService')
+  verifyEmailConnection =
+    typeof svc.verifyEmailConnection === 'function' ? svc.verifyEmailConnection :
+    typeof svc.verifyConnection       === 'function' ? svc.verifyConnection       :
+    typeof svc.verify                 === 'function' ? svc.verify                 :
+    typeof svc.default                === 'function' ? svc.default                :
+    null
+} catch { /* emailService.js not present — non-fatal */ }
+
+try {
+  const eu = require('./utils/email')
+  verifyAuthEmail =
+    typeof eu.verifyTransporter    === 'function' ? eu.verifyTransporter    :
+    typeof eu.verifyEmailConnection === 'function' ? eu.verifyEmailConnection :
+    typeof eu.verifyConnection      === 'function' ? eu.verifyConnection      :
+    typeof eu.verify                === 'function' ? eu.verify                :
+    null
+} catch { /* email.js not present — non-fatal */ }
+
+// ── Middleware / error handlers ───────────────────────────────────────────────
+const { errorHandler, notFoundHandler } = require('./middleware/errorHandler')
 const {
   cacheMiddleware,
   invalidateCache,
@@ -99,7 +120,7 @@ const PORT     = parseInt(process.env.PORT || '3000', 10)
 const NODE_ENV = process.env.NODE_ENV || 'development'
 const IS_PROD  = NODE_ENV === 'production'
 
-// ─── Track connected admins (declared here so /health can reference it) ───────
+// ── Connected admins map — declared early so /health can reference it ─────────
 const connectedAdmins = new Map()
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -126,8 +147,8 @@ const ALLOWED_ORIGINS = [
 ]
 
 const isOriginAllowed = (origin) => {
-  if (!origin) return true
-  if (!IS_PROD) return true
+  if (!origin)   return true   // server-to-server
+  if (!IS_PROD)  return true   // dev: allow all
   if (ALLOWED_ORIGINS.includes(origin)) return true
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   return false
@@ -465,12 +486,11 @@ if (IS_PROD) {
 // ── Request ID ────────────────────────────────────────────────────────────────
 app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
-// ── Cache middleware — applied AFTER body parsing, BEFORE routes ──────────────
-// The fixed cacheMiddleware now correctly skips POST and authenticated requests.
+// ── Cache — skips POST / authenticated / known mutation paths ─────────────────
 app.use(cacheMiddleware(120))
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTTP SERVER
+// HTTP SERVER  (created before Socket.io)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const httpServer = http.createServer(app)
@@ -485,7 +505,7 @@ const io = new Server(httpServer, {
     methods:     ['GET', 'POST'],
     credentials: true,
   },
-  transports:        ['polling', 'websocket'],
+  transports:        ['polling', 'websocket'],   // polling FIRST — required for handshake
   allowEIO3:         true,
   pingTimeout:       60_000,
   pingInterval:      25_000,
@@ -511,7 +531,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '6.6',
+    version:     '6.7',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -524,6 +544,10 @@ app.get('/health', (_req, res) =>
       connectedAdmins: connectedAdmins.size,
     },
     cache:   getCacheStats(),
+    email: {
+      verifyEmailConnection: typeof verifyEmailConnection === 'function' ? 'available' : 'unavailable',
+      verifyAuthEmail:       typeof verifyAuthEmail       === 'function' ? 'available' : 'unavailable',
+    },
     network: { dnsOrder: 'ipv4first' },
     theme:   { primary: '#16a34a', name: 'green-white' },
   }),
@@ -537,7 +561,7 @@ app.get('/api', (_req, res) =>
   res.json({
     success: true,
     name:    'Altuvera Travel API',
-    version: '6.6',
+    version: '6.7',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
     routes:  '/api/routes',
@@ -548,7 +572,17 @@ app.get('/api', (_req, res) =>
 app.get('/api/debug/email-test', async (req, res) => {
   if (req.query.secret !== 'altuvera-test')
     return res.status(403).json({ error: 'forbidden' })
-  const { sendEmail } = require('./utils/email')
+
+  let sendEmail = null
+  try {
+    const eu = require('./utils/email')
+    sendEmail = typeof eu.sendEmail === 'function' ? eu.sendEmail : null
+  } catch { /* non-fatal */ }
+
+  if (!sendEmail) {
+    return res.status(503).json({ success: false, error: 'sendEmail not available' })
+  }
+
   const to = req.query.to || process.env.ADMIN_EMAIL || process.env.SMTP_USER
   try {
     const result = await sendEmail({
@@ -556,7 +590,7 @@ app.get('/api/debug/email-test', async (req, res) => {
       subject: '✅ Altuvera Email Test',
       html:    `<p>Email delivery works! Sent at ${new Date().toISOString()}</p>`,
     })
-    res.json({ success: true, delivered: result.delivered, sentTo: to })
+    res.json({ success: true, delivered: result?.delivered, sentTo: to })
   } catch (err) {
     res.status(500).json({ success: false, error: err.message, sentTo: to })
   }
@@ -567,6 +601,7 @@ app.get('/api/debug/tables', async (req, res) => {
   const secret = IS_PROD ? process.env.JWT_SECRET?.slice(0, 8) : 'dev'
   if (req.query.secret !== secret)
     return res.status(403).json({ error: 'forbidden' })
+
   try {
     const { rows: tableRows } = await query(`
       SELECT table_name FROM information_schema.tables
@@ -600,7 +635,10 @@ app.get('/api/debug/cache', (req, res) => {
 
   if (req.query.invalidate) {
     const count = invalidateCache(req.query.invalidate)
-    return res.json({ success: true, message: `Invalidated ${count} entries for prefix: ${req.query.invalidate}` })
+    return res.json({
+      success: true,
+      message: `Invalidated ${count} entries for prefix: ${req.query.invalidate}`,
+    })
   }
 
   res.json({ success: true, ...getCacheStats() })
@@ -630,19 +668,12 @@ const collectRoutes = (stack, prefix = '') => {
 }
 
 app.get('/api/routes', (req, res) => {
-  const routes   = collectRoutes(app._router?.stack || [])
-  const byMethod = routes.reduce((acc, r) => {
+  const routes            = collectRoutes(app._router?.stack || [])
+  const byMethod          = routes.reduce((acc, r) => {
     acc[r.method] = (acc[r.method] || 0) + 1; return acc
   }, {})
-  // Highlight testimonials routes for easy verification
   const testimonialRoutes = routes.filter(r => r.path.includes('testimonial'))
-  res.json({
-    success: true,
-    total:   routes.length,
-    byMethod,
-    testimonialRoutes, // ← easy to spot-check
-    routes,
-  })
+  res.json({ success: true, total: routes.length, byMethod, testimonialRoutes, routes })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -666,7 +697,7 @@ app.use('/api/tips',                 tipsRouter)
 app.use('/api/subscribers',          subscribersRouter)
 app.use('/api/settings',             settingsRouter)
 app.use('/api/pages',                pagesRouter)
-app.use('/api/testimonials',         testimonialsRouter)   // ← verified: includes /submit
+app.use('/api/testimonials',         testimonialsRouter)
 app.use('/api/messages',             messageRouter)
 app.use('/api/message',              messageRouter)
 app.use('/api/chat',                 chatRouter)
@@ -729,8 +760,15 @@ const getOrCreateConversation = async ({
         channel, source, ip_address, status, priority)
      VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal')
      RETURNING *`,
-    [sid, userId || null, guestName || null, guestEmail || null,
-     channel || 'live_chat', source || 'website', ipAddress || null],
+    [
+      sid,
+      userId     || null,
+      guestName  || null,
+      guestEmail || null,
+      channel    || 'live_chat',
+      source     || 'website',
+      ipAddress  || null,
+    ],
   )
   return inserted.rows[0]
 }
@@ -747,9 +785,16 @@ const saveConversationMessage = async ({
         sender_email, sender_avatar, body, metadata, is_read)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)
      RETURNING *`,
-    [conversationId, senderType, senderId || null, senderName || null,
-     senderEmail || null, senderAvatar || null,
-     String(body).trim(), JSON.stringify(metadata || {})],
+    [
+      conversationId,
+      senderType,
+      senderId     || null,
+      senderName   || null,
+      senderEmail  || null,
+      senderAvatar || null,
+      String(body).trim(),
+      JSON.stringify(metadata || {}),
+    ],
   )
 
   const msg    = rows[0]
@@ -842,8 +887,15 @@ const saveChatMessage = async ({
         sender_email, body, metadata, is_read)
      VALUES ($1,$2,$3,$4,$5,$6,$7,false)
      RETURNING *`,
-    [sessionId, senderType, senderId || null, senderName || null,
-     senderEmail || null, body, JSON.stringify(metadata || {})],
+    [
+      sessionId,
+      senderType,
+      senderId    || null,
+      senderName  || null,
+      senderEmail || null,
+      body,
+      JSON.stringify(metadata || {}),
+    ],
   )
   await query(
     `UPDATE chat_sessions SET last_active=NOW(), updated_at=NOW() WHERE session_id=$1`,
@@ -907,15 +959,15 @@ io.use((socket, next) => {
     next()
   } catch (err) {
     logger.error('[Socket] Auth middleware error:', err.message)
-    next()
+    next() // allow connection even on auth error
   }
 })
 
-// ── Typing indicator cleanup ──────────────────────────────────────────────────
+// ── Typing indicator cleanup — every 15 s ─────────────────────────────────────
 setInterval(async () => {
   try {
     await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`)
-  } catch { /* silent */ }
+  } catch { /* silent — table may not exist yet */ }
 }, 15_000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -935,6 +987,7 @@ io.on('connection', (socket) => {
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
+  // ── Package rooms ────────────────────────────────────────────────────────
   socket.on('pkg:join', ({ packageId, userId } = {}) => {
     if (packageId) socket.join(`package-${packageId}`)
     if (userId)    socket.join(`user-${userId}`)
@@ -943,6 +996,8 @@ io.on('connection', (socket) => {
   socket.on('pkg:leave', ({ packageId } = {}) => {
     if (packageId) socket.leave(`package-${packageId}`)
   })
+
+  // ── New messaging system ─────────────────────────────────────────────────
 
   socket.on('msg:register', async (payload = {}, cb) => {
     try {
@@ -1012,9 +1067,12 @@ io.on('connection', (socket) => {
         const name  = String(payload.name  || socket.data.user?.full_name || '').trim()
         const email = String(payload.email || socket.data.user?.email     || '').trim()
         const conv  = await getOrCreateConversation({
-          sessionId: sid, userId: socket.data.userId || null,
-          guestName: name || null, guestEmail: email || null,
-          source: 'frontend-guest', ipAddress: socket.handshake.address,
+          sessionId:  sid,
+          userId:     socket.data.userId || null,
+          guestName:  name  || null,
+          guestEmail: email || null,
+          source:     'frontend-guest',
+          ipAddress:  socket.handshake.address,
         })
         convId = conv.id
         sid    = conv.session_id
@@ -1040,11 +1098,12 @@ io.on('connection', (socket) => {
 
       io.to(`conv:${convId}`).emit('msg:message', serialized)
       io.to('admins').emit('msg:new-from-user', {
-        conversationId: convId, sessionId: sid,
-        message: serialized,
-        senderName:  msg.sender_name  || 'Guest',
-        senderEmail: msg.sender_email || '',
-        unreadCount: unreadAdmin,
+        conversationId: convId,
+        sessionId:      sid,
+        message:        serialized,
+        senderName:     msg.sender_name  || 'Guest',
+        senderEmail:    msg.sender_email || '',
+        unreadCount:    unreadAdmin,
       })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
@@ -1112,7 +1171,10 @@ io.on('connection', (socket) => {
       if (conv.session_id) {
         io.to(`session:${conv.session_id}`).emit('msg:message', serialized)
       }
-      socket.to('admins').emit('msg:admin-sent', { conversationId: convId, message: serialized })
+      socket.to('admins').emit('msg:admin-sent', {
+        conversationId: convId,
+        message:        serialized,
+      })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
     } catch (err) {
@@ -1134,8 +1196,11 @@ io.on('connection', (socket) => {
              (conversation_id, sender_type, sender_id, sender_name, socket_id, expires_at)
            VALUES ($1,$2,$3,$4,$5, NOW() + INTERVAL '10 seconds')
            ON CONFLICT DO NOTHING`,
-          [convId, senderType, socket.data.userId || null,
-           payload.senderName || socket.data.user?.full_name || 'Guest', socket.id],
+          [
+            convId, senderType, socket.data.userId || null,
+            payload.senderName || socket.data.user?.full_name || 'Guest',
+            socket.id,
+          ],
         )
       } else {
         await query(`DELETE FROM typing_indicators WHERE socket_id=$1`, [socket.id])
@@ -1145,7 +1210,9 @@ io.on('connection', (socket) => {
     socket.to(`conv:${convId}`).emit('msg:typing', {
       conversationId: parseInt(convId, 10),
       senderType,
-      senderName: payload.senderName || socket.data.user?.full_name ||
+      senderName:
+        payload.senderName         ||
+        socket.data.user?.full_name ||
         (socket.data.isAdmin ? 'Support' : 'Guest'),
       isTyping,
     })
@@ -1244,7 +1311,7 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ── Legacy chat ────────────────────────────────────────────────────────────
+  // ── Legacy chat system ───────────────────────────────────────────────────
 
   socket.on('chat:register', async (payload = {}, cb) => {
     try {
@@ -1253,9 +1320,11 @@ io.on('connection', (socket) => {
       const email = String(payload.email || socket.data.user?.email    || '').trim()
 
       const session = await getOrCreateChatSession({
-        sessionId: sid, userId: socket.data.user?.id,
-        email: email || null, fullName: name || null,
-        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        sessionId: sid,
+        userId:    socket.data.user?.id,
+        email:     email || null,
+        fullName:  name  || null,
+        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
       })
 
       socket.data.sessionId = session.session_id
@@ -1263,9 +1332,12 @@ io.on('connection', (socket) => {
 
       const history = await fetchSessionMessages(session.session_id)
       socket.emit('chat:session', {
-        sessionId: session.session_id, userId: session.user_id,
-        email: session.email, fullName: session.full_name, source: session.source,
-        messages: history.map(serializeChatMsg),
+        sessionId: session.session_id,
+        userId:    session.user_id,
+        email:     session.email,
+        fullName:  session.full_name,
+        source:    session.source,
+        messages:  history.map(serializeChatMsg),
       })
 
       if (typeof cb === 'function')
@@ -1289,18 +1361,24 @@ io.on('connection', (socket) => {
       const email = String(payload.email || socket.data.user?.email    || '')
 
       const session = await getOrCreateChatSession({
-        sessionId: sid, userId: socket.data.user?.id,
-        email: email || null, fullName: name || null,
-        source: socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        sessionId: sid,
+        userId:    socket.data.user?.id,
+        email:     email || null,
+        fullName:  name  || null,
+        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
       })
 
       socket.data.sessionId = session.session_id
       socket.join(`chat:${session.session_id}`)
 
       const row    = await saveChatMessage({
-        sessionId: session.session_id, senderType: 'user',
-        senderId: socket.data.user?.id, senderName: name,
-        senderEmail: email, body, metadata: payload.metadata || { source: 'frontend-chat' },
+        sessionId:   session.session_id,
+        senderType:  'user',
+        senderId:    socket.data.user?.id,
+        senderName:  name,
+        senderEmail: email,
+        body,
+        metadata:    payload.metadata || { source: 'frontend-chat' },
       })
 
       const message = serializeChatMsg(row)
@@ -1308,9 +1386,13 @@ io.on('connection', (socket) => {
 
       io.to(`chat:${session.session_id}`).emit('chat:message', message)
       io.to('admins').emit('new-chat-message', {
-        sessionId: session.session_id, userId: session.user_id,
-        email: session.email, fullName: session.full_name,
-        body: message.body, senderName: message.senderName, unreadCount: unread,
+        sessionId:   session.session_id,
+        userId:      session.user_id,
+        email:       session.email,
+        fullName:    session.full_name,
+        body:        message.body,
+        senderName:  message.senderName,
+        unreadCount: unread,
       })
 
       if (typeof cb === 'function') cb({ success: true, message })
@@ -1330,11 +1412,13 @@ io.on('connection', (socket) => {
       if (!body) throw new Error('Message body is required')
 
       const row = await saveChatMessage({
-        sessionId: sid, senderType: 'admin',
+        sessionId:   sid,
+        senderType:  'admin',
         senderId:    socket.data.user?.id,
         senderName:  socket.data.user?.full_name || socket.data.user?.name || 'Admin',
         senderEmail: socket.data.user?.email     || null,
-        body, metadata: { source: 'admin-panel' },
+        body,
+        metadata:    { source: 'admin-panel' },
       })
 
       const message = serializeChatMsg(row)
@@ -1379,6 +1463,7 @@ io.on('connection', (socket) => {
     })
   })
 
+  // ── Disconnect ──────────────────────────────────────────────────────────
   socket.on('disconnect', async (reason) => {
     logger.info(`[Socket] Disconnected: ${socket.id} | reason=${reason}`)
 
@@ -1398,7 +1483,7 @@ io.on('connection', (socket) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS
+// ERROR HANDLERS  (must be after all routes)
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.use(notFoundHandler)
@@ -1408,12 +1493,13 @@ app.use(errorHandler)
 // SERVER BOOT
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function initializeServer() {
+async function initializeServer () {
   try {
     logger.info('🔄 Connecting to database…')
     await query('SELECT NOW()')
     logger.info('✅ Database connected')
 
+    // Destination extended schema (optional)
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
@@ -1422,6 +1508,7 @@ async function initializeServer() {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
+    // Core schemas — sequential (some have FK dependencies)
     const schemas = [
       { fn: ensureSubscribersSchema, name: 'Subscribers' },
       { fn: ensureUserSchema,        name: 'Users'        },
@@ -1444,11 +1531,12 @@ async function initializeServer() {
       }
     }
 
+    // Start HTTP server
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.6')
+        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.7')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
@@ -1460,6 +1548,11 @@ async function initializeServer() {
         logger.info(`  Cache        : POST/auth excluded ✅`)
         logger.info(`  Socket.io    : polling → websocket | allowEIO3 | cookie=false ✅`)
         logger.info(`  Conn.Recovery: 2-min window ✅`)
+        logger.info(`  Email checks : ${
+          verifyEmailConnection ? 'emailService ✅' : 'emailService —'
+        } | ${
+          verifyAuthEmail ? 'email ✅' : 'email —'
+        }`)
         logger.info(`${line}\n`)
         resolve()
       })
@@ -1473,12 +1566,22 @@ async function initializeServer() {
     process.exit(1)
   }
 
-  verifyEmailConnection().catch(e =>
-    logger.warn('Email connection check (non-fatal):', e.message),
-  )
-  verifyAuthEmail().catch(e =>
-    logger.warn('Auth email SMTP check (non-fatal):', e.message),
-  )
+  // ── Background email checks (non-blocking, non-fatal) ─────────────────────
+  if (typeof verifyEmailConnection === 'function') {
+    verifyEmailConnection().catch(e =>
+      logger.warn('[Email] Connection check (non-fatal):', e.message),
+    )
+  } else {
+    logger.warn('[Email] verifyEmailConnection not exported from utils/emailService — skipping')
+  }
+
+  if (typeof verifyAuthEmail === 'function') {
+    verifyAuthEmail().catch(e =>
+      logger.warn('[Email] Auth SMTP check (non-fatal):', e.message),
+    )
+  } else {
+    logger.warn('[Email] verifyTransporter not exported from utils/email — skipping')
+  }
 }
 
 initializeServer()
