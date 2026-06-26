@@ -1,18 +1,24 @@
 // controllers/authController.js
 // ═══════════════════════════════════════════════════════════════════════════
-// Passwordless Auth — OTP via email · Google OAuth · GitHub OAuth
-// IPv4 is guaranteed by server.js dns.setDefaultResultOrder("ipv4first")
+// Passwordless Auth — OTP via Gmail · Google OAuth · GitHub OAuth
 // ═══════════════════════════════════════════════════════════════════════════
 
-const bcrypt = require("bcryptjs");
-const jwt    = require("jsonwebtoken");
-const crypto = require("crypto");
-const https  = require("https");
-const http   = require("http");
+"use strict";
 
-const { query }      = require("../config/db");
-const { sendEmail }  = require("../utils/email");
-const logger         = require("../utils/logger");
+const bcrypt  = require("bcryptjs");
+const jwt     = require("jsonwebtoken");
+const crypto  = require("crypto");
+const https   = require("https");
+const http    = require("http");
+
+const { query }    = require("../config/db");
+const {
+  sendEmail,
+  sendOtpEmail,
+  sendWelcomeEmail,
+  sendActivityAlert,
+}                  = require("../utils/email");
+const logger       = require("../utils/logger");
 const { validateEmail, validateName } = require("../utils/validators");
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -21,7 +27,6 @@ const { validateEmail, validateName } = require("../utils/validators");
 
 const APP_NAME               = process.env.APP_NAME             || "Altuvera";
 const FRONTEND_URL           = process.env.FRONTEND_URL         || "https://altuvera.com";
-const SUPPORT_EMAIL          = process.env.SUPPORT_EMAIL        || "support@altuvera.com";
 const JWT_SECRET             = process.env.JWT_SECRET;
 const JWT_REFRESH_SECRET     = process.env.JWT_REFRESH_SECRET   || JWT_SECRET;
 const JWT_EXPIRES_IN         = process.env.JWT_EXPIRES_IN       || "7d";
@@ -32,190 +37,10 @@ const CODE_COOLDOWN_MS       = 60_000;
 const SOCIAL_HTTP_TIMEOUT_MS = parseInt(
   process.env.SOCIAL_AUTH_TIMEOUT_MS || "8000", 10,
 );
-
-// ── Re-verification threshold ──────────────────────────────────────────────
-// After this many successful logins the user must re-verify via email OTP.
-// Frontend mirrors this exact value.
 const REVERIFICATION_THRESHOLD = 3;
 
-// ── IPv4-only agents ───────────────────────────────────────────────────────
 const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const ipv4HttpAgent  = new http.Agent({  family: 4, keepAlive: true });
-
-// ═══════════════════════════════════════════════════════════════════════════
-// EMAIL TEMPLATES
-// ═══════════════════════════════════════════════════════════════════════════
-
-const buildEmailTemplate = ({
-  preheader = "", title = "", subtitle = "", body = "",
-  ctaText = "", ctaUrl = "", recipientName = "", footerNote = "",
-}) => {
-  const year = new Date().getFullYear();
-  return `
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>${title}</title>
-  <style>
-    body,table,td,p,a{-webkit-text-size-adjust:100%;}
-    table{border-collapse:collapse;}
-    body{margin:0;padding:0;width:100%;background-color:#f4f4f5;
-         font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-serif;}
-    @media only screen and (max-width:600px){
-      .container{width:100%!important;}
-      .content-pad{padding:24px 20px!important;}
-      .otp-code{font-size:32px!important;letter-spacing:4px!important;}
-    }
-  </style>
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f5;">
-  <div style="display:none;max-height:0;overflow:hidden;">${preheader}</div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-         style="background-color:#f4f4f5;">
-    <tr>
-      <td align="center" style="padding:40px 16px;">
-        <table role="presentation" class="container" width="520" cellpadding="0"
-               cellspacing="0"
-               style="max-width:520px;width:100%;background:#fff;
-                      border-radius:24px;box-shadow:0 8px 20px rgba(0,0,0,.05);">
-          <tr>
-            <td align="center"
-                style="background:#059669;border-radius:24px 24px 0 0;padding:32px 24px;">
-              <a href="${FRONTEND_URL}"
-                 style="text-decoration:none;color:#fff;font-size:24px;font-weight:700;">
-                ${APP_NAME}
-              </a>
-            </td>
-          </tr>
-          <tr>
-            <td align="center" class="content-pad" style="padding:36px 32px;">
-              ${recipientName
-                ? `<p style="margin:0 0 16px;font-size:16px;color:#111827;font-weight:500;">
-                     Hello ${recipientName},
-                   </p>`
-                : ""}
-              <h1 style="margin:0 0 8px;font-size:24px;font-weight:600;color:#111827;">
-                ${title}
-              </h1>
-              ${subtitle
-                ? `<p style="margin:0 0 24px;font-size:15px;color:#6b7280;">${subtitle}</p>`
-                : ""}
-              ${body}
-              ${ctaText && ctaUrl
-                ? `<table role="presentation" cellpadding="0" cellspacing="0"
-                          style="margin:32px auto 0;">
-                    <tr><td align="center">
-                      <a href="${ctaUrl}"
-                         style="display:inline-block;padding:14px 36px;background:#059669;
-                                color:#fff;text-decoration:none;border-radius:40px;
-                                font-size:16px;font-weight:600;">
-                        ${ctaText}
-                      </a>
-                    </td></tr>
-                  </table>`
-                : ""}
-              ${footerNote
-                ? `<p style="margin:24px 0 0;font-size:13px;color:#9ca3af;
-                             border-top:1px solid #e5e7eb;padding-top:20px;">
-                     ${footerNote}
-                   </p>`
-                : ""}
-            </td>
-          </tr>
-          <tr>
-            <td align="center"
-                style="background:#f9fafb;padding:24px;border-radius:0 0 24px 24px;">
-              <p style="margin:0 0 12px;font-size:13px;">
-                <a href="${FRONTEND_URL}"
-                   style="color:#4b5563;text-decoration:none;margin:0 10px;">Home</a>
-                <span style="color:#d1d5db;">|</span>
-                <a href="mailto:${SUPPORT_EMAIL}"
-                   style="color:#4b5563;text-decoration:none;margin:0 10px;">Support</a>
-              </p>
-              <p style="margin:0;font-size:12px;color:#9ca3af;">
-                &copy; ${year} ${APP_NAME}
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
-};
-
-const buildOtpEmail = ({
-  otp, recipientName, purpose = "verify",
-  expiryMinutes = OTP_EXPIRY_MINUTES,
-}) => {
-  const cfg = (
-    {
-      verify:        { title: "Verify Your Email",     sub: "Enter the code below to verify your account" },
-      login:         { title: "Your Sign-In Code",     sub: "Use this code to sign in" },
-      resend:        { title: "New Verification Code", sub: "Here's your fresh code" },
-      reverification:{ title: "Security Verification", sub: "Confirm your identity to continue" },
-    }[purpose] || { title: "Verification Code", sub: "" }
-  );
-
-  return buildEmailTemplate({
-    preheader:     `Your ${APP_NAME} code is ${otp}`,
-    title:         cfg.title,
-    subtitle:      cfg.sub,
-    recipientName,
-    body: `
-      <p style="margin:0 0 24px;font-size:15px;color:#4b5563;">
-        Valid for <strong>${expiryMinutes} minutes</strong>.
-      </p>
-      <div style="background:#f3f4f6;border-radius:12px;padding:16px 24px;
-                  margin:0 auto 16px;display:inline-block;">
-        <span class="otp-code"
-              style="font-family:'Courier New',monospace;font-size:36px;
-                     font-weight:700;letter-spacing:8px;color:#059669;">
-          ${otp}
-        </span>
-      </div>
-      <p style="margin:0;font-size:13px;color:#6b7280;">
-        Expires in ${expiryMinutes} minutes
-      </p>
-    `,
-    footerNote: "Didn't request this? Safely ignore this email.",
-  });
-};
-
-const buildWelcomeEmail = ({ recipientName }) =>
-  buildEmailTemplate({
-    preheader:     `Welcome to ${APP_NAME}!`,
-    title:         `Welcome to ${APP_NAME}!`,
-    subtitle:      "Your account is verified and ready",
-    recipientName,
-    body: `<p style="margin:0 0 24px;font-size:15px;color:#4b5563;">
-             We're thrilled to have you. Start exploring curated East African experiences.
-           </p>`,
-    ctaText: "Start Exploring →",
-    ctaUrl:  `${FRONTEND_URL}/destinations`,
-  });
-
-const buildActivityAlertEmail = ({ recipientName, activityType }) => {
-  const titles = {
-    profile_updated: "Profile Updated",
-    account_deleted: "Account Deleted",
-  };
-  return buildEmailTemplate({
-    preheader:     `${titles[activityType] || "Activity"} on your account`,
-    title:         titles[activityType] || "Account Activity",
-    subtitle:      "We detected activity on your account",
-    recipientName,
-    body: `<p style="margin:0;font-size:15px;color:#4b5563;">
-             Time: ${new Date().toLocaleDateString("en-US", {
-               month:  "short", day:    "numeric",
-               hour:   "2-digit", minute: "2-digit",
-             })}
-           </p>`,
-  });
-};
 
 // ═══════════════════════════════════════════════════════════════════════════
 // HELPERS
@@ -305,20 +130,20 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
   });
 };
 
-const sendOtpEmail = (email, otp, name, purpose = "verify") =>
-  sendEmail({
-    to:      email,
-    subject: purpose === "login" || purpose === "reverification"
-      ? `Sign In Code: ${otp}`
-      : `Verification Code: ${otp}`,
-    html:    buildOtpEmail({ otp, recipientName: name, purpose }),
-  });
-
-// ── Requires re-verification? ──────────────────────────────────────────────
-// Returns true when the user's login_counter has reached the threshold.
-// The counter is reset to 0 after successful re-verification.
 const requiresReverification = (user) =>
   (user.login_counter ?? 0) >= REVERIFICATION_THRESHOLD;
+
+const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
+  res.status(statusCode).json({
+    success: true,
+    data: {
+      token:        generateToken(user, "user"),
+      refreshToken: generateRefreshToken(user, "user"),
+      user:         sanitizeUser(user),
+      isNewUser:    isNew,
+      loginCounter: user.login_counter ?? 0,
+    },
+  });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SOCIAL HELPERS
@@ -371,9 +196,6 @@ const fetchJsonOrThrow = async (url, options = {}, provider = "oauth") => {
   }
 };
 
-// ── Upsert social user ─────────────────────────────────────────────────────
-// Uses a single atomic query to avoid race conditions.
-// Returns { user, isNew }.
 const upsertSocialUser = async ({
   provider, providerId, email, name, avatar, phone, bio,
 }) => {
@@ -395,7 +217,6 @@ const upsertSocialUser = async ({
     throw err;
   }
 
-  // Single query: upsert on email, update provider id + fields if matched
   const upsertResult = await query(
     `INSERT INTO users (
        email, full_name, avatar_url, ${col},
@@ -425,17 +246,15 @@ const upsertSocialUser = async ({
   const isNew = Boolean(user.is_new_row);
 
   if (isNew) {
-    sendEmail({
-      to:      user.email,
-      subject: `Welcome to ${APP_NAME}!`,
-      html:    buildWelcomeEmail({ recipientName: user.full_name }),
+    sendWelcomeEmail({
+      to:            user.email,
+      recipientName: user.full_name || "",
     }).catch((err) => logger.warn("[Auth] Welcome email failed:", err.message));
   }
 
   return { user, isNew };
 };
 
-// ── Increment login_counter atomically and return updated user ─────────────
 const incrementLoginCounter = async (userId) => {
   const result = await query(
     `UPDATE users
@@ -448,7 +267,6 @@ const incrementLoginCounter = async (userId) => {
   return result.rows[0];
 };
 
-// ── Reset login_counter to 0 (called after successful re-verification) ─────
 const resetLoginCounter = async (userId) => {
   const result = await query(
     `UPDATE users
@@ -459,18 +277,6 @@ const resetLoginCounter = async (userId) => {
   );
   return result.rows[0];
 };
-
-const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
-  res.status(statusCode).json({
-    success: true,
-    data: {
-      token:        generateToken(user, "user"),
-      refreshToken: generateRefreshToken(user, "user"),
-      user:         sanitizeUser(user),
-      isNewUser:    isNew,
-      loginCounter: user.login_counter ?? 0,
-    },
-  });
 
 // ═══════════════════════════════════════════════════════════════════════════
 // REGISTER
@@ -497,40 +303,49 @@ exports.register = async (req, res) => {
         return res.status(409).json({ success: false, message: "Account exists. Please sign in." });
       if (isRateLimited(existing))
         return res.status(429).json({
-          success:  false,
-          message:  `Wait ${getRemainingCooldown(existing)} seconds.`,
+          success: false,
+          message: `Wait ${getRemainingCooldown(existing)} seconds before requesting a new code.`,
         });
 
-      // Update optional fields before sending new OTP
-      await query(
-        `UPDATE users SET
-           full_name  = COALESCE(NULLIF($1,''), full_name),
-           phone      = COALESCE(NULLIF($2,''), phone),
-           bio        = COALESCE(NULLIF($3,''), bio),
-           avatar_url = COALESCE(NULLIF($4,''), avatar_url)
-         WHERE id = $5`,
-        [name, phone || null, bio || null, avatar || null, existing.id],
-      );
+      if (name || phone || bio || avatar) {
+        await query(
+          `UPDATE users SET
+             full_name  = COALESCE(NULLIF($1,''), full_name),
+             phone      = COALESCE(NULLIF($2,''), phone),
+             bio        = COALESCE(NULLIF($3,''), bio),
+             avatar_url = COALESCE(NULLIF($4,''), avatar_url)
+           WHERE id = $5`,
+          [name, phone || null, bio || null, avatar || null, existing.id],
+        );
+      }
 
       const otp = generateOTP();
       await query(
         `UPDATE users SET
            verification_code = $1,
-           code_expiry       = $2,
+           code_expiry       = NOW() + ($2 || ' minutes')::interval,
            code_attempts     = 0,
            last_code_sent_at = NOW()
          WHERE id = $3`,
-        [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existing.id],
+        [otp, OTP_EXPIRY_MINUTES, existing.id],
       );
 
-      await sendOtpEmail(normalizedEmail, otp, name || existing.full_name, "verify");
+      await sendOtpEmail({
+        to:            normalizedEmail,
+        recipientName: name || existing.full_name || "",
+        otp,
+        purpose:       "verify",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
+
       return res.json({
         success: true,
-        message: "Verification code sent.",
+        message: "Verification code sent. Check your inbox.",
         data:    { email: normalizedEmail },
       });
     }
 
+    // New user
     result = await query(
       `INSERT INTO users
          (email, full_name, phone, bio, avatar_url, is_verified, auth_provider, login_counter)
@@ -541,20 +356,28 @@ exports.register = async (req, res) => {
 
     const user = result.rows[0];
     const otp  = generateOTP();
+
     await query(
       `UPDATE users SET
          verification_code = $1,
-         code_expiry       = $2,
+         code_expiry       = NOW() + ($2 || ' minutes')::interval,
          code_attempts     = 0,
          last_code_sent_at = NOW()
        WHERE id = $3`,
-      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), user.id],
+      [otp, OTP_EXPIRY_MINUTES, user.id],
     );
 
-    await sendOtpEmail(normalizedEmail, otp, name, "verify");
+    await sendOtpEmail({
+      to:            normalizedEmail,
+      recipientName: name || "",
+      otp,
+      purpose:       "verify",
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
+
     return res.status(201).json({
       success: true,
-      message: "Account created! Code sent.",
+      message: "Account created! Verification code sent to your inbox.",
       data:    { email: normalizedEmail, requiresVerification: true },
     });
   } catch (err) {
@@ -579,7 +402,6 @@ exports.login = async (req, res) => {
     let isNew  = false;
 
     if (result.rows.length === 0) {
-      // Auto-create account for passwordless flow
       result = await query(
         `INSERT INTO users (email, full_name, is_verified, auth_provider, login_counter)
          VALUES ($1,$2,false,'email',0)
@@ -591,31 +413,39 @@ exports.login = async (req, res) => {
 
     const user = result.rows[0];
     if (!user.is_active)
-      return res.status(401).json({ success: false, message: "Account deactivated." });
+      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
     if (isRateLimited(user))
       return res.status(429).json({
         success: false,
-        message: `Wait ${getRemainingCooldown(user)} seconds.`,
+        message: `Please wait ${getRemainingCooldown(user)} seconds before requesting a new code.`,
       });
 
     const otp     = generateOTP();
-    const purpose = isNew ? "verify" : requiresReverification(user) ? "reverification" : "login";
+    const purpose = isNew ? "verify"
+      : requiresReverification(user) ? "reverification"
+      : "login";
 
     await query(
       `UPDATE users SET
          verification_code = $1,
-         code_expiry       = $2,
+         code_expiry       = NOW() + ($2 || ' minutes')::interval,
          code_attempts     = 0,
          last_code_sent_at = NOW()
        WHERE id = $3`,
-      [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), user.id],
+      [otp, OTP_EXPIRY_MINUTES, user.id],
     );
 
-    await sendOtpEmail(normalizedEmail, otp, user.full_name || name, purpose);
+    await sendOtpEmail({
+      to:            normalizedEmail,
+      recipientName: user.full_name || name || "",
+      otp,
+      purpose,
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
 
     return res.json({
       success: true,
-      message: "Verification code sent.",
+      message: "Verification code sent to your inbox.",
       data: {
         email:        normalizedEmail,
         isNewUser:    isNew,
@@ -639,53 +469,56 @@ exports.verifyCode = async (req, res) => {
     const normalizedEmail = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail || !sanitizedCode)
-      return res.status(400).json({ success: false, message: "Email and code required" });
+      return res.status(400).json({ success: false, message: "Email and code are required" });
     if (sanitizedCode.length !== 6)
       return res.status(400).json({ success: false, message: "Enter a valid 6-digit code" });
 
     const result = await query("SELECT * FROM users WHERE email = $1", [normalizedEmail]);
     if (result.rows.length === 0)
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: "Account not found" });
 
     const user = result.rows[0];
 
-    if (user.code_attempts >= OTP_MAX_ATTEMPTS) {
+    if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
       await query(
         "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
         [user.id],
       );
       return res.status(429).json({
         success: false,
-        message: "Too many attempts. Request a new code.",
+        message: "Too many attempts. Please request a new code.",
       });
     }
 
-    if (
-      user.verification_code !== sanitizedCode ||
-      !user.code_expiry ||
-      new Date(user.code_expiry) < new Date()
-    ) {
+    // Check code match AND expiry
+    const codeMatches = user.verification_code === sanitizedCode;
+    const notExpired  = user.code_expiry && new Date(user.code_expiry) > new Date();
+
+    if (!codeMatches || !notExpired) {
       await query(
-        "UPDATE users SET code_attempts = code_attempts + 1 WHERE id = $1",
+        "UPDATE users SET code_attempts = COALESCE(code_attempts,0) + 1 WHERE id = $1",
         [user.id],
       );
-      const remaining = OTP_MAX_ATTEMPTS - (user.code_attempts + 1);
+      const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
+
+      if (!notExpired && codeMatches) {
+        return res.status(401).json({
+          success: false,
+          message: "Code has expired. Please request a new one.",
+        });
+      }
+
       return res.status(401).json({
         success: false,
-        message:
-          remaining > 0
-            ? `Invalid or expired code. ${remaining} attempt${remaining !== 1 ? "s" : ""} left.`
-            : "Too many attempts. Request a new code.",
+        message: remaining > 0
+          ? `Incorrect code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
+          : "Too many attempts. Please request a new code.",
       });
     }
 
     const isFirstVerification = !user.is_verified;
     const wasReverification   = requiresReverification(user);
-
-    // ── Atomic update: clear OTP fields + manage counter ──────────────────
-    // If this was a re-verification cycle, reset counter to 1
-    // (counts as one fresh login). Otherwise increment normally.
-    const newCounter = wasReverification ? 1 : (user.login_counter ?? 0) + 1;
+    const newCounter          = wasReverification ? 1 : (user.login_counter ?? 0) + 1;
 
     const updated = await query(
       `UPDATE users SET
@@ -702,18 +535,16 @@ exports.verifyCode = async (req, res) => {
 
     const freshUser = updated.rows[0];
 
-    // Send welcome email for first-time verified users
     if (isFirstVerification) {
-      sendEmail({
-        to:      user.email,
-        subject: `Welcome to ${APP_NAME}! 🎉`,
-        html:    buildWelcomeEmail({ recipientName: user.full_name }),
+      sendWelcomeEmail({
+        to:            user.email,
+        recipientName: user.full_name || "",
       }).catch(() => {});
     }
 
     return res.json({
       success: true,
-      message: isFirstVerification ? "Account verified!" : "Signed in!",
+      message: isFirstVerification ? "Account verified! Welcome!" : "Signed in successfully!",
       data: {
         token:        generateToken(freshUser, "user"),
         refreshToken: generateRefreshToken(freshUser, "user"),
@@ -736,21 +567,30 @@ exports.resendCode = async (req, res) => {
   try {
     const normalizedEmail = (req.body.email || "").trim().toLowerCase();
     if (!normalizedEmail)
-      return res.status(400).json({ success: false, message: "Email required" });
+      return res.status(400).json({ success: false, message: "Email is required" });
 
     const result = await query(
-      "SELECT id, email, full_name, last_code_sent_at, login_counter FROM users WHERE email = $1",
+      `SELECT id, email, full_name, last_code_sent_at, login_counter, is_active
+         FROM users WHERE email = $1`,
       [normalizedEmail],
     );
-    // Always respond the same way to prevent email enumeration
+
+    // Anti-enumeration: always respond success
     if (result.rows.length === 0)
-      return res.json({ success: true, message: "If an account exists, a new code was sent." });
+      return res.json({
+        success: true,
+        message: "If an account exists, a new code has been sent.",
+      });
 
     const user = result.rows[0];
+
+    if (!user.is_active)
+      return res.status(401).json({ success: false, message: "Account deactivated." });
+
     if (isRateLimited(user))
       return res.status(429).json({
         success: false,
-        message: `Wait ${getRemainingCooldown(user)}s.`,
+        message: `Please wait ${getRemainingCooldown(user)} seconds before requesting again.`,
       });
 
     const otp     = generateOTP();
@@ -759,15 +599,25 @@ exports.resendCode = async (req, res) => {
     await query(
       `UPDATE users SET
          verification_code = $1,
-         code_expiry       = $2,
+         code_expiry       = NOW() + '15 minutes'::interval,
          code_attempts     = 0,
          last_code_sent_at = NOW()
-       WHERE id = $3`,
-      [otp, new Date(Date.now() + 15 * 60_000), user.id],
+       WHERE id = $2`,
+      [otp, user.id],
     );
 
-    await sendOtpEmail(user.email, otp, user.full_name, purpose);
-    return res.json({ success: true, message: "New code sent." });
+    await sendOtpEmail({
+      to:            user.email,
+      recipientName: user.full_name || "",
+      otp,
+      purpose,
+      expiryMinutes: 15,
+    });
+
+    return res.json({
+      success: true,
+      message: "New verification code sent. Valid for 15 minutes.",
+    });
   } catch (err) {
     handleError(res, err, "Resend failed");
   }
@@ -781,7 +631,7 @@ exports.checkEmail = async (req, res) => {
   try {
     const normalizedEmail = (req.body.email || "").trim().toLowerCase();
     if (!normalizedEmail)
-      return res.status(400).json({ success: false, message: "Email required" });
+      return res.status(400).json({ success: false, message: "Email is required" });
 
     const result = await query(
       "SELECT id, is_verified, auth_provider FROM users WHERE email = $1",
@@ -796,7 +646,7 @@ exports.checkEmail = async (req, res) => {
       },
     });
   } catch (err) {
-    handleError(res, err, "Check failed");
+    handleError(res, err, "Email check failed");
   }
 };
 
@@ -807,25 +657,13 @@ exports.checkEmail = async (req, res) => {
 exports.googleAuth = async (req, res) => {
   try {
     const { credential, idToken, phone, bio, avatar } = req.body;
-
-    // Accept either field name from the frontend
     const rawCredential = (credential || idToken || "").trim();
 
     if (!rawCredential)
-      return res.status(400).json({
-        success: false,
-        message: "Google credential is required",
-      });
+      return res.status(400).json({ success: false, message: "Google credential is required" });
+    if (!process.env.GOOGLE_CLIENT_ID)
+      return res.status(500).json({ success: false, message: "Google auth not configured on server" });
 
-    if (!process.env.GOOGLE_CLIENT_ID) {
-      logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
-      return res.status(500).json({
-        success: false,
-        message: "Google authentication is not configured on the server",
-      });
-    }
-
-    // ── Verify the id_token ────────────────────────────────────────────────
     let payload;
     try {
       const client = getGoogleOAuthClient();
@@ -834,31 +672,24 @@ exports.googleAuth = async (req, res) => {
         audience: process.env.GOOGLE_CLIENT_ID,
       });
       payload = ticket.getPayload();
-    } catch (verifyError) {
-      logger.error("[Google Auth] Token verification failed:", verifyError.message);
+    } catch (err) {
+      logger.error("[Google Auth] Token verify failed:", err.message);
       return res.status(401).json({
         success: false,
-        message: "Invalid Google credential. Please try signing in again.",
+        message: "Invalid Google credential. Please try again.",
       });
     }
 
     if (!payload?.sub || !payload?.email)
-      return res.status(401).json({
-        success: false,
-        message: "Could not get account information from Google",
-      });
-
+      return res.status(401).json({ success: false, message: "Could not get account info from Google" });
     if (payload.email_verified === false)
-      return res.status(401).json({
-        success: false,
-        message: "Please verify your Google email first",
-      });
+      return res.status(401).json({ success: false, message: "Please verify your Google email first" });
 
     const email      = payload.email.toLowerCase();
     const providerId = String(payload.sub).trim();
     const name       = (payload.name || email.split("@")[0] || "User").trim();
 
-    // ── Check for existing user and re-verification requirement ───────────
+    // Re-verification check
     const existingResult = await query(
       `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
@@ -866,24 +697,26 @@ exports.googleAuth = async (req, res) => {
 
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-
       if (requiresReverification(existingUser)) {
-        // Send OTP automatically so user can proceed immediately
         const otp = generateOTP();
         if (!isRateLimited(existingUser)) {
           await query(
             `UPDATE users SET
                verification_code = $1,
-               code_expiry       = $2,
+               code_expiry       = NOW() + ($2 || ' minutes')::interval,
                code_attempts     = 0,
                last_code_sent_at = NOW()
              WHERE id = $3`,
-            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
+            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
           );
-          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
-            .catch(() => {});
+          await sendOtpEmail({
+            to:            existingUser.email,
+            recipientName: existingUser.full_name || "",
+            otp,
+            purpose:       "reverification",
+            expiryMinutes: OTP_EXPIRY_MINUTES,
+          }).catch(() => {});
         }
-
         return res.status(403).json({
           success:                false,
           message:                "For your security, please verify your email to continue.",
@@ -894,29 +727,101 @@ exports.googleAuth = async (req, res) => {
       }
     }
 
-    // ── Upsert user ────────────────────────────────────────────────────────
     const { user, isNew } = await upsertSocialUser({
-      provider:   "google",
-      providerId,
-      email,
-      name,
-      avatar:     avatar || payload.picture,
-      phone,
-      bio,
+      provider: "google", providerId, email, name,
+      avatar: avatar || payload.picture, phone, bio,
     });
 
-    // ── Increment counter ──────────────────────────────────────────────────
     const freshUser = await incrementLoginCounter(user.id);
-
-    logger.info("[Google Auth] Success:", {
-      email:       freshUser.email,
-      isNew,
-      loginCounter: freshUser.login_counter,
-    });
-
+    logger.info("[Google Auth] Success:", { email: freshUser.email, isNew });
     return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// COMPLETE GOOGLE SIGN-UP
+// ═══════════════════════════════════════════════════════════════════════════
+
+exports.completeGoogleSignUp = async (req, res) => {
+  try {
+    const { credential, idToken, fullName, phone, bio, avatar } = req.body;
+    const rawCredential = (credential || idToken || "").trim();
+
+    if (!rawCredential)
+      return res.status(400).json({ success: false, message: "Google credential is required" });
+    if (!process.env.GOOGLE_CLIENT_ID)
+      return res.status(500).json({ success: false, message: "Google auth not configured" });
+
+    let payload;
+    try {
+      const client = getGoogleOAuthClient();
+      const ticket = await client.verifyIdToken({
+        idToken:  rawCredential,
+        audience: process.env.GOOGLE_CLIENT_ID,
+      });
+      payload = ticket.getPayload();
+    } catch (err) {
+      return res.status(401).json({ success: false, message: "Invalid Google credential." });
+    }
+
+    if (!payload?.sub || !payload?.email)
+      return res.status(401).json({ success: false, message: "Could not get account info from Google" });
+
+    const email      = payload.email.toLowerCase();
+    const providerId = String(payload.sub).trim();
+    const name       = (fullName || payload.name || email.split("@")[0] || "User").trim();
+
+    const existingResult = await query(
+      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
+      [providerId, email],
+    );
+
+    if (existingResult.rows.length > 0) {
+      const existingUser = existingResult.rows[0];
+      if (requiresReverification(existingUser)) {
+        const otp = generateOTP();
+        if (!isRateLimited(existingUser)) {
+          await query(
+            `UPDATE users SET
+               verification_code = $1,
+               code_expiry       = NOW() + ($2 || ' minutes')::interval,
+               code_attempts     = 0,
+               last_code_sent_at = NOW()
+             WHERE id = $3`,
+            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
+          );
+          await sendOtpEmail({
+            to:            existingUser.email,
+            recipientName: existingUser.full_name || "",
+            otp,
+            purpose:       "reverification",
+            expiryMinutes: OTP_EXPIRY_MINUTES,
+          }).catch(() => {});
+        }
+        return res.status(403).json({
+          success:                false,
+          message:                "For your security, please verify your email to continue.",
+          code:                   "REVERIFICATION_REQUIRED",
+          requiresReVerification: true,
+          email,
+        });
+      }
+    }
+
+    const { user, isNew } = await upsertSocialUser({
+      provider: "google", providerId, email, name,
+      avatar: avatar || payload.picture,
+      phone:  phone  || null,
+      bio:    bio    || null,
+    });
+
+    const freshUser = await incrementLoginCounter(user.id);
+    logger.info("[Google Auth] Signup complete:", { email: freshUser.email, isNew });
+    return respondWithAuth(res, freshUser, isNew);
+  } catch (err) {
+    handleError(res, err, "Google signup failed");
   }
 };
 
@@ -928,11 +833,10 @@ exports.githubAuth = async (req, res) => {
   try {
     const { code, phone, bio } = req.body;
     if (!code)
-      return res.status(400).json({ success: false, message: "GitHub code required" });
+      return res.status(400).json({ success: false, message: "GitHub code is required" });
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
 
-    // Step 1: Exchange code → access token
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
       {
@@ -948,10 +852,7 @@ exports.githubAuth = async (req, res) => {
     );
 
     if (!tokenData.access_token)
-      return res.status(401).json({
-        success: false,
-        message: "GitHub did not return an access token.",
-      });
+      return res.status(401).json({ success: false, message: "GitHub did not return an access token." });
 
     const ghHeaders = {
       Authorization: `Bearer ${tokenData.access_token}`,
@@ -959,38 +860,24 @@ exports.githubAuth = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    // Step 2: Fetch user profile
-    const gh = await fetchJsonOrThrow(
-      "https://api.github.com/user",
-      { headers: ghHeaders },
-      "GitHub profile",
-    );
+    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
 
-    // Step 3: Fetch email if not public
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow(
-        "https://api.github.com/user/emails",
-        { headers: ghHeaders },
-        "GitHub emails",
-      );
-      const list = Array.isArray(emails) ? emails : [];
-      ghEmail =
-        list.find((e) => e.primary && e.verified)?.email ||
-        list.find((e) => e.verified)?.email ||
-        list[0]?.email;
+      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
+      const list   = Array.isArray(emails) ? emails : [];
+      ghEmail = list.find((e) => e.primary && e.verified)?.email
+             || list.find((e) => e.verified)?.email
+             || list[0]?.email;
     }
 
     if (!ghEmail)
-      return res.status(400).json({ success: false, message: "Could not get email from GitHub" });
-    if (!gh.id)
-      return res.status(401).json({ success: false, message: "GitHub account ID missing." });
+      return res.status(400).json({ success: false, message: "Could not retrieve email from GitHub" });
 
     const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
     const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
 
-    // ── Check re-verification ──────────────────────────────────────────────
     const existingResult = await query(
       `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
@@ -998,130 +885,26 @@ exports.githubAuth = async (req, res) => {
 
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-
       if (requiresReverification(existingUser)) {
         const otp = generateOTP();
         if (!isRateLimited(existingUser)) {
           await query(
             `UPDATE users SET
                verification_code = $1,
-               code_expiry       = $2,
+               code_expiry       = NOW() + ($2 || ' minutes')::interval,
                code_attempts     = 0,
                last_code_sent_at = NOW()
              WHERE id = $3`,
-            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
+            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
           );
-          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
-            .catch(() => {});
+          await sendOtpEmail({
+            to:            existingUser.email,
+            recipientName: existingUser.full_name || "",
+            otp,
+            purpose:       "reverification",
+            expiryMinutes: OTP_EXPIRY_MINUTES,
+          }).catch(() => {});
         }
-
-        return res.status(403).json({
-          success:                false,
-          message:                "For your security, please verify your email to continue.",
-          code:                   "REVERIFICATION_REQUIRED",
-          requiresReVerification: true,
-          email:                  existingUser.email,
-        });
-      }
-    }
-
-    // ── Upsert user ────────────────────────────────────────────────────────
-    const { user, isNew } = await upsertSocialUser({
-      provider:   "github",
-      providerId,
-      email,
-      name,
-      avatar:     gh.avatar_url,
-      phone,
-      bio:        bio || gh.bio,
-    });
-
-    // ── Increment counter ──────────────────────────────────────────────────
-    const freshUser = await incrementLoginCounter(user.id);
-
-    logger.info("[GitHub Auth] Success:", {
-      email:        freshUser.email,
-      isNew,
-      loginCounter: freshUser.login_counter,
-    });
-
-    return respondWithAuth(res, freshUser, isNew);
-  } catch (err) {
-    handleError(res, err, "GitHub auth failed");
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// COMPLETE GOOGLE SIGN-UP (Step 2 for new Google users)
-// ═══════════════════════════════════════════════════════════════════════════
-
-exports.completeGoogleSignUp = async (req, res) => {
-  try {
-    const { credential, idToken, fullName, phone, bio, avatar } = req.body;
-    const rawCredential = (credential || idToken || "").trim();
-
-    if (!rawCredential)
-      return res.status(400).json({ success: false, message: "Google credential is required" });
-
-    if (!process.env.GOOGLE_CLIENT_ID) {
-      logger.error("[Google Auth] GOOGLE_CLIENT_ID not set");
-      return res.status(500).json({
-        success: false,
-        message: "Google authentication is not configured on the server",
-      });
-    }
-
-    let payload;
-    try {
-      const client = getGoogleOAuthClient();
-      const ticket = await client.verifyIdToken({
-        idToken:  rawCredential,
-        audience: process.env.GOOGLE_CLIENT_ID,
-      });
-      payload = ticket.getPayload();
-    } catch (verifyError) {
-      logger.error("[Google Auth] Token verification failed:", verifyError.message);
-      return res.status(401).json({
-        success: false,
-        message: "Invalid Google credential. Please try signing in again.",
-      });
-    }
-
-    if (!payload?.sub || !payload?.email)
-      return res.status(401).json({
-        success: false,
-        message: "Could not get account information from Google",
-      });
-
-    const email      = payload.email.toLowerCase();
-    const providerId = String(payload.sub).trim();
-    const name       = (fullName || payload.name || email.split("@")[0] || "User").trim();
-
-    // ── Existing user re-verification check ────────────────────────────────
-    const existingResult = await query(
-      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
-      [providerId, email],
-    );
-
-    if (existingResult.rows.length > 0) {
-      const existingUser = existingResult.rows[0];
-
-      if (requiresReverification(existingUser)) {
-        const otp = generateOTP();
-        if (!isRateLimited(existingUser)) {
-          await query(
-            `UPDATE users SET
-               verification_code = $1,
-               code_expiry       = $2,
-               code_attempts     = 0,
-               last_code_sent_at = NOW()
-             WHERE id = $3`,
-            [otp, new Date(Date.now() + OTP_EXPIRY_MINUTES * 60_000), existingUser.id],
-          );
-          await sendOtpEmail(existingUser.email, otp, existingUser.full_name, "reverification")
-            .catch(() => {});
-        }
-
         return res.status(403).json({
           success:                false,
           message:                "For your security, please verify your email to continue.",
@@ -1133,72 +916,44 @@ exports.completeGoogleSignUp = async (req, res) => {
     }
 
     const { user, isNew } = await upsertSocialUser({
-      provider:   "google",
-      providerId,
-      email,
-      name,
-      avatar:     avatar || payload.picture,
-      phone:      phone  || null,
-      bio:        bio    || null,
+      provider: "github", providerId, email, name,
+      avatar: gh.avatar_url, phone, bio: bio || gh.bio,
     });
 
     const freshUser = await incrementLoginCounter(user.id);
-
-    logger.info("[Google Auth] Signup complete:", {
-      email: freshUser.email,
-      isNew,
-    });
-
+    logger.info("[GitHub Auth] Success:", { email: freshUser.email, isNew });
     return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
-    handleError(res, err, "Google signup failed");
+    handleError(res, err, "GitHub auth failed");
   }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GITHUB SIGNIN INIT
+// GITHUB OAUTH REDIRECTS
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.githubSignInInit = async (req, res) => {
   try {
     if (!process.env.GITHUB_CLIENT_ID)
       return res.status(500).json({ success: false, message: "GitHub auth not configured" });
-
-    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback`;
-    const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
-    res.redirect(authUrl);
+    const redirectUri = `${process.env.BACKEND_URL}/api/users/github/callback`;
+    res.redirect(
+      `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}` +
+      `&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`,
+    );
   } catch (err) {
-    logger.error("[GitHub Signin] Init failed:", err.message);
-    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_init_failed`);
+    res.redirect(`${process.env.FRONTEND_URL}/?error=github_init_failed`);
   }
 };
 
-exports.githubSignUpInit = async (req, res) => {
-  try {
-    if (!process.env.GITHUB_CLIENT_ID)
-      return res.status(500).json({ success: false, message: "GitHub auth not configured" });
-
-    const redirectUri = `${process.env.BACKEND_URL || "https://backend-jd8f.onrender.com"}/api/users/github/callback`;
-    const authUrl = `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}&redirect_uri=${encodeURIComponent(redirectUri)}&scope=read:user,user:email`;
-    res.redirect(authUrl);
-  } catch (err) {
-    logger.error("[GitHub Signup] Init failed:", err.message);
-    res.redirect(`${process.env.FRONTEND_URL || "https://altuvera.vercel.app"}/?error=github_init_failed`);
-  }
-};
-
-// ═══════════════════════════════════════════════════════════════════════════
-// GITHUB CALLBACK
-// ═══════════════════════════════════════════════════════════════════════════
+exports.githubSignUpInit = exports.githubSignInInit;
 
 exports.githubCallback = async (req, res) => {
   const FRONTEND = process.env.FRONTEND_URL || "https://altuvera.vercel.app";
-
   try {
     const { code } = req.query;
-    if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET) {
+    if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
       return res.redirect(`${FRONTEND}/auth/github/callback?error=github_auth_failed`);
-    }
 
     const tokenData = await fetchJsonOrThrow(
       "https://github.com/login/oauth/access_token",
@@ -1214,9 +969,8 @@ exports.githubCallback = async (req, res) => {
       "GitHub token exchange",
     );
 
-    if (!tokenData.access_token) {
+    if (!tokenData.access_token)
       return res.redirect(`${FRONTEND}/auth/github/callback?error=github_token_failed`);
-    }
 
     const ghHeaders = {
       Authorization: `Bearer ${tokenData.access_token}`,
@@ -1224,35 +978,24 @@ exports.githubCallback = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    const gh = await fetchJsonOrThrow(
-      "https://api.github.com/user",
-      { headers: ghHeaders },
-      "GitHub profile",
-    );
+    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
 
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow(
-        "https://api.github.com/user/emails",
-        { headers: ghHeaders },
-        "GitHub emails",
-      );
-      const list = Array.isArray(emails) ? emails : [];
-      ghEmail =
-        list.find((e) => e.primary && e.verified)?.email ||
-        list.find((e) => e.verified)?.email ||
-        list[0]?.email;
+      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
+      const list   = Array.isArray(emails) ? emails : [];
+      ghEmail = list.find((e) => e.primary && e.verified)?.email
+             || list.find((e) => e.verified)?.email
+             || list[0]?.email;
     }
 
-    if (!ghEmail || !gh.id) {
+    if (!ghEmail || !gh.id)
       return res.redirect(`${FRONTEND}/auth/github/callback?error=github_profile_failed`);
-    }
 
     const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
     const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
 
-    // ── Re-verification check ──────────────────────────────────────────────
     const existingResult = await query(
       `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
       [providerId, email],
@@ -1260,35 +1003,25 @@ exports.githubCallback = async (req, res) => {
 
     if (existingResult.rows.length > 0) {
       const existingUser = existingResult.rows[0];
-      if (requiresReverification(existingUser)) {
+      if (requiresReverification(existingUser))
         return res.redirect(
-          `${FRONTEND}/auth/github/callback?error=reverification_required&email=${encodeURIComponent(email)}`,
+          `${FRONTEND}/auth/github/callback?error=reverification_required` +
+          `&email=${encodeURIComponent(email)}`,
         );
-      }
     }
 
     const { user, isNew } = await upsertSocialUser({
-      provider:   "github",
-      providerId,
-      email,
-      name,
-      avatar:     gh.avatar_url,
-      phone:      null,
-      bio:        gh.bio,
+      provider: "github", providerId, email, name,
+      avatar: gh.avatar_url, phone: null, bio: gh.bio,
     });
 
     const freshUser = await incrementLoginCounter(user.id);
     const jwtToken  = generateToken(freshUser, "user");
-    const userData  = sanitizeUser(freshUser);
 
-    // Redirect to frontend callback page with token in URL params
-    const params = new URLSearchParams({
-      code:     jwtToken,
-      provider: "github",
-      isNew:    String(isNew),
-    });
-
-    return res.redirect(`${FRONTEND}/auth/github/callback?${params}`);
+    return res.redirect(
+      `${FRONTEND}/auth/github/callback?` +
+      new URLSearchParams({ code: jwtToken, provider: "github", isNew: String(isNew) }),
+    );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
     return res.redirect(`${FRONTEND}/auth/github/callback?error=github_callback_failed`);
@@ -1309,10 +1042,7 @@ exports.getMe = (req, res) =>
 exports.updateProfile = async (req, res) => {
   try {
     const { id } = req.user;
-    const {
-      full_name, fullName, avatar_url, avatar,
-      phone, bio, preferences,
-    } = req.body;
+    const { full_name, fullName, avatar_url, avatar, phone, bio, preferences } = req.body;
     const resolvedName   = full_name  || fullName || null;
     const resolvedAvatar = avatar_url || avatar   || null;
 
@@ -1325,7 +1055,8 @@ exports.updateProfile = async (req, res) => {
          avatar_url  = COALESCE(NULLIF($2,''), avatar_url),
          phone       = COALESCE($3, phone),
          bio         = COALESCE($4, bio),
-         preferences = COALESCE($5::jsonb, preferences)
+         preferences = COALESCE($5::jsonb, preferences),
+         updated_at  = NOW()
        WHERE id = $6
        RETURNING *`,
       [
@@ -1334,9 +1065,7 @@ exports.updateProfile = async (req, res) => {
         phone       || null,
         bio         || null,
         preferences
-          ? typeof preferences === "string"
-            ? preferences
-            : JSON.stringify(preferences)
+          ? typeof preferences === "string" ? preferences : JSON.stringify(preferences)
           : null,
         id,
       ],
@@ -1345,18 +1074,15 @@ exports.updateProfile = async (req, res) => {
     if (result.rows.length === 0)
       return res.status(404).json({ success: false, message: "User not found" });
 
-    sendEmail({
-      to:      result.rows[0].email,
-      subject: `Profile Updated — ${APP_NAME}`,
-      html:    buildActivityAlertEmail({
-        recipientName: result.rows[0].full_name,
-        activityType:  "profile_updated",
-      }),
+    sendActivityAlert({
+      to:            result.rows[0].email,
+      recipientName: result.rows[0].full_name || "",
+      activityType:  "profile_updated",
     }).catch(() => {});
 
     return res.json({
       success: true,
-      message: "Profile updated.",
+      message: "Profile updated successfully.",
       data:    { user: sanitizeUser(result.rows[0]) },
     });
   } catch (err) {
@@ -1372,7 +1098,7 @@ exports.refreshToken = async (req, res) => {
   try {
     const { refreshToken } = req.body;
     if (!refreshToken)
-      return res.status(400).json({ success: false, message: "Refresh token required" });
+      return res.status(400).json({ success: false, message: "Refresh token is required" });
 
     let decoded;
     try {
@@ -1381,7 +1107,7 @@ exports.refreshToken = async (req, res) => {
       return res.status(401).json({
         success: false,
         message: err.name === "TokenExpiredError"
-          ? "Session expired. Please log in again."
+          ? "Session expired. Please sign in again."
           : "Invalid refresh token.",
       });
     }
@@ -1400,11 +1126,11 @@ exports.refreshToken = async (req, res) => {
       return res.status(401).json({ success: false, message: "Account deactivated." });
 
     if (
-      decoded.tokenVersion !== undefined && decoded.tokenVersion !== null &&
-      entity.token_version !== undefined && entity.token_version !== null &&
+      typeof decoded.tokenVersion === "number" &&
+      typeof entity.token_version === "number" &&
       decoded.tokenVersion !== entity.token_version
     ) {
-      return res.status(401).json({ success: false, message: "Session invalidated." });
+      return res.status(401).json({ success: false, message: "Session invalidated. Please sign in again." });
     }
 
     return res.json({
@@ -1425,8 +1151,8 @@ exports.refreshToken = async (req, res) => {
 
 exports.adminLogin = async (req, res) => {
   try {
-    const { email, password }  = req.body;
-    const normalizedEmail      = (email || "").trim().toLowerCase();
+    const { email, password } = req.body;
+    const normalizedEmail     = (email || "").trim().toLowerCase();
 
     if (!normalizedEmail || !password)
       return res.status(400).json({ success: false, message: "Email and password are required." });
@@ -1458,7 +1184,7 @@ exports.adminLogin = async (req, res) => {
       );
       freshAdmin = updated.rows[0];
     } catch (updateErr) {
-      logger.warn("[adminLogin] token_version column missing, falling back:", updateErr.message);
+      logger.warn("[adminLogin] token_version column missing:", updateErr.message);
       await query("UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id]);
       freshAdmin = { ...admin, last_login: new Date(), token_version: 0 };
     }
@@ -1517,7 +1243,7 @@ exports.changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
     if (!oldPassword || !newPassword)
-      return res.status(400).json({ success: false, message: "Old and new password are required." });
+      return res.status(400).json({ success: false, message: "Both passwords are required." });
 
     const isMatch = await bcrypt.compare(oldPassword, req.user.password_hash);
     if (!isMatch)
@@ -1525,10 +1251,9 @@ exports.changePassword = async (req, res) => {
 
     const newHash = await bcrypt.hash(newPassword, 12);
     await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [newHash, req.user.id]);
-
     return res.json({ success: true, message: "Password updated successfully." });
   } catch (err) {
-    handleError(res, err, "Change password failed");
+    handleError(res, err, "Password change failed");
   }
 };
 
@@ -1551,7 +1276,7 @@ exports.logout = async (req, res) => {
         logger.warn("[logout] token_version update failed:", updateErr.message);
       }
     }
-    return res.json({ success: true, message: "Signed out." });
+    return res.json({ success: true, message: "Signed out successfully." });
   } catch {
     return res.json({ success: true, message: "Signed out." });
   }
@@ -1567,27 +1292,19 @@ exports.deleteAccount = async (req, res) => {
     const table = req.userType === "admin" ? "admin_users" : "users";
 
     if (email) {
-      sendEmail({
-        to:      email,
-        subject: `Account Deleted — ${APP_NAME}`,
-        html:    buildActivityAlertEmail({
-          recipientName: full_name,
-          activityType:  "account_deleted",
-        }),
+      sendActivityAlert({
+        to:            email,
+        recipientName: full_name || "",
+        activityType:  "account_deleted",
       }).catch(() => {});
     }
 
     await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
-    return res.json({ success: true, message: "Account deleted." });
+    return res.json({ success: true, message: "Account deleted successfully." });
   } catch (err) {
-    handleError(res, err, "Deletion failed");
+    handleError(res, err, "Account deletion failed");
   }
 };
 
-// ── Export email builders ──────────────────────────────────────────────────
-exports._emailBuilders = {
-  buildEmailTemplate,
-  buildOtpEmail,
-  buildWelcomeEmail,
-  buildActivityAlertEmail,
-};
+// ── Export email builders for admin use ───────────────────────────────────
+exports._emailBuilders = require("../utils/email");

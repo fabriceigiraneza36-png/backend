@@ -1072,6 +1072,92 @@ const closeConnections = async () => {
   logger.info("[DB] All connections closed");
 };
 
+// Add inside config/db.js — before module.exports
+
+const ensureTestimonialsSchema = async () => {
+  try {
+    // ── Create table ──────────────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS testimonials (
+        id               SERIAL PRIMARY KEY,
+        name             VARCHAR(255)  NOT NULL,
+        location         VARCHAR(255),
+        avatar_url       TEXT,
+        rating           INTEGER       NOT NULL DEFAULT 5
+                         CHECK (rating >= 1 AND rating <= 5),
+        trip             VARCHAR(255),
+        date_text        VARCHAR(100),
+        testimonial_text TEXT          NOT NULL,
+        is_featured      BOOLEAN       DEFAULT false,
+        is_active        BOOLEAN       DEFAULT false,
+        sort_order       INTEGER       DEFAULT 0,
+        user_id          INTEGER,
+        created_at       TIMESTAMP     DEFAULT NOW(),
+        updated_at       TIMESTAMP     DEFAULT NOW()
+      )
+    `);
+
+    // ── Add user_id if upgrading from old schema ──────────────────────────
+    await pool
+      .query(`ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS user_id INTEGER`)
+      .catch(() => {});
+
+    // ── Ensure is_active defaults to false (pending approval) ─────────────
+    await pool
+      .query(`ALTER TABLE testimonials ALTER COLUMN is_active SET DEFAULT false`)
+      .catch(() => {});
+
+    // ── Indexes ───────────────────────────────────────────────────────────
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_is_active
+         ON testimonials(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_is_featured
+         ON testimonials(is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_rating
+         ON testimonials(rating)`,
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_sort_order
+         ON testimonials(sort_order)`,
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_created_at
+         ON testimonials(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_user_id
+         ON testimonials(user_id)`,
+      // Composite: most common public query
+      `CREATE INDEX IF NOT EXISTS idx_testimonials_active_featured
+         ON testimonials(is_active, is_featured, sort_order)`,
+    ];
+
+    for (const idx of indexes) {
+      await pool.query(idx).catch(() => {});
+    }
+
+    // ── updated_at trigger ────────────────────────────────────────────────
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN
+        NEW.updated_at = NOW();
+        RETURN NEW;
+      END;
+      $$ LANGUAGE plpgsql;
+    `).catch(() => {});
+
+    await pool.query(`
+      DROP TRIGGER IF EXISTS trg_testimonials_updated_at ON testimonials;
+    `).catch(() => {});
+
+    await pool.query(`
+      CREATE TRIGGER trg_testimonials_updated_at
+        BEFORE UPDATE ON testimonials
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column();
+    `).catch(() => {});
+
+    logger.info('[DB] ✅ Testimonials schema verified & ensured');
+  } catch (err) {
+    logger.warn('[DB] Testimonials schema ensure failed:', err.message);
+  }
+};
+
 // ── Exports ──────────────────────────────────────────────────────────────────
 
 // config/db.js — update the module.exports at the bottom
@@ -1092,5 +1178,6 @@ module.exports = {
   ensureSubscribersSchema,
   ensurePostsSchema,
   ensureBookingsSchema,
-  ensurePackagesSchema,        // ← ADD
-}
+  ensurePackagesSchema,
+  ensureTestimonialsSchema,   // ← ADD
+};
