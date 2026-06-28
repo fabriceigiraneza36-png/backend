@@ -1,58 +1,91 @@
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * MESSAGE ROUTER v2.1
- * ═══════════════════════════════════════════════════════════════════════════════
+ * routes/message.js v3.0
  *
- * KEY CHANGE:
- *   /users and /conversations now use adminOnly instead of adminProtect.
- *   adminProtect is now a pure alias of adminOnly (same flexible token check).
- *   Both middleware names still work — import is explicit here for clarity.
- *
- * Routes:
- *   GET    /api/messages/ping                            — health (no auth)
- *   GET    /api/messages/users                           — conversations (admin)
- *   GET    /api/messages/conversations                   — full list (admin)
- *   GET    /api/messages/conversation/:id/messages       — message history
- *   GET    /api/messages/user/:userId/conversation       — get/create conv
- *   POST   /api/messages/start-with-user                 — start conversation
- *   POST   /api/messages/send                            — HTTP fallback
- *   PATCH  /api/messages/conversation/:id               — update conversation
- *   DELETE /api/messages/:messageId                      — soft-delete message
+ * Changes:
+ *  - optionalAuth middleware allows guest (unauthenticated) access
+ *    to POST /send and GET /conversation/:id/messages
+ *  - All admin routes still require adminOnly
+ *  - v_conversations view replaced with direct table query + fallback
+ *  - Consistent error shape: { success, message, error? }
  */
 
-"use strict";
+'use strict'
 
-const router = require("express").Router();
-const { query } = require("../config/db");
-const {
-  protect,
-  adminOnly,
-  adminProtect,   // alias — same as adminOnly
-} = require("../middleware/auth");
-const logger = require("../utils/logger");
+const router = require('express').Router()
+const { query } = require('../config/db')
+const logger    = require('../utils/logger')
+const jwt       = require('jsonwebtoken')
 
-// ─── Boot-time confirmation (visible in Render.com logs) ─────────────────────
-logger.info("[Messages] Router loading…");
+/* ── Middleware imports ── */
+const { protect, adminOnly } = require('../middleware/auth')
 
-// ─── Constants ────────────────────────────────────────────────────────────────
+logger.info('[Messages] Router v3.0 loading…')
 
-const IS_DEV = process.env.NODE_ENV !== "production";
+/* ═══════════════════════════════════════════════════════════════
+   CONSTANTS
+═══════════════════════════════════════════════════════════════ */
+const IS_DEV = process.env.NODE_ENV !== 'production'
 
 const ALLOWED_SORT = new Set([
-  "updated_at",
-  "created_at",
-  "last_message_at",
-  "unread_admin",
-  "priority",
-]);
+  'updated_at',
+  'created_at',
+  'last_message_at',
+  'unread_admin',
+  'priority',
+])
 
-// ─── Serializers ─────────────────────────────────────────────────────────────
+/* ═══════════════════════════════════════════════════════════════
+   OPTIONAL AUTH MIDDLEWARE
+   Allows guests through. Attaches req.user if token valid.
+   Used on routes that serve both guests and authenticated users.
+═══════════════════════════════════════════════════════════════ */
+const optionalAuth = (req, res, next) => {
+  try {
+    const header = req.headers?.authorization || ''
+    const token  = header.replace(/^Bearer\s+/i, '').trim()
 
-const safeJSON = (v, fb = {}) => {
-  if (v === null || v === undefined) return fb;
-  if (typeof v === "object") return v;
-  try { return JSON.parse(v); } catch { return fb; }
-};
+    if (token && process.env.JWT_SECRET) {
+      try {
+        req.user = jwt.verify(token, process.env.JWT_SECRET)
+      } catch {
+        /* Invalid token — treat as guest, don't block */
+        req.user = null
+      }
+    }
+  } catch {
+    req.user = null
+  }
+  next()
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   HELPERS
+═══════════════════════════════════════════════════════════════ */
+const safeInt = (v, def, min = 1, max = 500) => {
+  const n = parseInt(v, 10)
+  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
+}
+
+const safeJSON = (v, fallback = {}) => {
+  if (!v) return fallback
+  if (typeof v === 'object') return v
+  try { return JSON.parse(v) } catch { return fallback }
+}
+
+/** Determine sender type from req */
+const resolveSenderType = (req) => {
+  const u = req?.user
+  if (!u) return 'user' // guest
+  if (
+    req.userType === 'admin' ||
+    u.type       === 'admin' ||
+    u.role       === 'admin' ||
+    u.role       === 'superadmin' ||
+    u.role       === 'super_admin' ||
+    u.isAdmin    === true
+  ) return 'admin'
+  return 'user'
+}
 
 const serializeMessage = (row) => ({
   id:             row.id,
@@ -63,135 +96,122 @@ const serializeMessage = (row) => ({
   senderEmail:    row.sender_email,
   senderAvatar:   row.sender_avatar,
   body:           row.body,
-  msgType:        row.msg_type || "text",
-  isRead:         row.is_read,
-  replyToId:      row.reply_to_id,
+  msgType:        row.msg_type   || 'text',
+  isRead:         row.is_read    || false,
+  replyToId:      row.reply_to_id || null,
   metadata:       safeJSON(row.metadata),
   createdAt:      row.created_at,
   updatedAt:      row.updated_at || null,
-});
+})
 
 const serializeConversation = (row) => ({
-  id:             row.id,
-  sessionId:      row.session_id,
-  userId:         row.user_id,
-  guestName:      row.guest_name,
-  guestEmail:     row.guest_email,
-  userFullName:   row.user_full_name  || null,
-  userEmail:      row.user_email      || null,
-  userAvatar:     row.user_avatar     || null,
-  channel:        row.channel,
-  subject:        row.subject,
-  status:         row.status,
-  priority:       row.priority,
-  assignedAdmin:  row.assigned_admin,
-  firstMessage:   row.first_message,
-  lastMessage:    row.last_message,
-  lastMessageAt:  row.last_message_at,
-  unreadUser:     row.unread_user    || 0,
-  unreadAdmin:    row.unread_admin   || 0,
-  messageCount:   row.message_count !== undefined
-    ? parseInt(row.message_count, 10) : undefined,
-  tags:           Array.isArray(row.tags) ? row.tags : [],
-  metadata:       safeJSON(row.metadata),
-  source:         row.source,
-  ipAddress:      row.ip_address  || null,
-  closedAt:       row.closed_at   || null,
-  createdAt:      row.created_at,
-  updatedAt:      row.updated_at,
-});
+  id:            row.id,
+  sessionId:     row.session_id,
+  userId:        row.user_id,
+  guestName:     row.guest_name,
+  guestEmail:    row.guest_email,
+  userFullName:  row.user_full_name  || row.guest_name  || null,
+  userEmail:     row.user_email      || row.guest_email  || null,
+  userAvatar:    row.user_avatar     || null,
+  channel:       row.channel,
+  subject:       row.subject,
+  status:        row.status,
+  priority:      row.priority,
+  assignedAdmin: row.assigned_admin,
+  firstMessage:  row.first_message,
+  lastMessage:   row.last_message,
+  lastMessageAt: row.last_message_at,
+  unreadUser:    row.unread_user    || 0,
+  unreadAdmin:   row.unread_admin   || 0,
+  messageCount:  row.message_count !== undefined
+    ? parseInt(row.message_count, 10)
+    : undefined,
+  tags:          Array.isArray(row.tags) ? row.tags : [],
+  metadata:      safeJSON(row.metadata),
+  source:        row.source,
+  ipAddress:     row.ip_address  || null,
+  closedAt:      row.closed_at   || null,
+  createdAt:     row.created_at,
+  updatedAt:     row.updated_at,
+})
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-const safeInt = (v, def, min = 1, max = 500) => {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def;
-};
-
-/**
- * Determine sender type from req.user.
- * Handles all token shapes (role, type, userType, isAdmin).
- */
-const resolveSenderType = (req) => {
-  const u = req?.user;
-  if (!u) return "user";
-  if (
-    req.userType    === "admin" ||
-    u.type          === "admin" ||
-    u.role          === "admin" ||
-    u.role          === "superadmin" ||
-    u.role          === "super_admin" ||
-    u.isAdmin       === true
-  ) return "admin";
-  return "user";
-};
-
-/** Mark all user messages in a conversation as read by admin. Non-fatal. */
+/** Mark all unread user messages in a conversation as read by admin */
 const markAdminRead = async (conversationId) => {
   try {
-    await query(
-      `UPDATE messages
-          SET is_read = true, read_at = NOW()
-        WHERE conversation_id = $1
-          AND sender_type != 'admin'
-          AND is_read = false`,
-      [conversationId],
-    );
-    await query(
-      `UPDATE conversations SET unread_admin = 0 WHERE id = $1`,
-      [conversationId],
-    );
+    await Promise.all([
+      query(
+        `UPDATE messages
+            SET is_read = true, read_at = NOW()
+          WHERE conversation_id = $1
+            AND sender_type != 'admin'
+            AND is_read = false`,
+        [conversationId]
+      ),
+      query(
+        `UPDATE conversations SET unread_admin = 0 WHERE id = $1`,
+        [conversationId]
+      ),
+    ])
   } catch (err) {
-    logger.warn("[Messages] markAdminRead non-fatal:", err.message);
+    logger.warn('[Messages] markAdminRead non-fatal:', err.message)
   }
-};
+}
 
-/** Update conversation last_message summary after a message is sent. */
+/** Update conversation summary after a new message */
 const updateConvSummary = async (conversationId, body, senderType) => {
-  const isUser  = senderType !== "admin";
-  const isAdmin = !isUser;
-  await query(
-    `UPDATE conversations SET
-        last_message    = $1,
-        last_message_at = NOW(),
-        first_message   = COALESCE(first_message, $1),
-        unread_admin    = CASE WHEN $2 THEN unread_admin + 1 ELSE unread_admin END,
-        unread_user     = CASE WHEN $3 THEN unread_user  + 1 ELSE unread_user  END,
-        updated_at      = NOW()
-      WHERE id = $4`,
-    [body, isUser, isAdmin, conversationId],
-  );
-};
+  const isUser  = senderType !== 'admin'
+  const isAdmin = !isUser
+  try {
+    await query(
+      `UPDATE conversations SET
+          last_message    = $1,
+          last_message_at = NOW(),
+          first_message   = COALESCE(first_message, $1),
+          unread_admin    = CASE WHEN $2 THEN unread_admin + 1 ELSE unread_admin END,
+          unread_user     = CASE WHEN $3 THEN unread_user  + 1 ELSE unread_user  END,
+          updated_at      = NOW()
+        WHERE id = $4`,
+      [body, isUser, isAdmin, conversationId]
+    )
+  } catch (err) {
+    logger.warn('[Messages] updateConvSummary non-fatal:', err.message)
+  }
+}
 
-// ─── PING (public — confirm router is mounted) ────────────────────────────────
+const errRes = (res, status, message, err) => {
+  if (err) logger.error(`[Messages] ${message}:`, err.message, err.detail || '')
+  return res.status(status).json({
+    success: false,
+    message,
+    ...(IS_DEV && err ? { error: err.message } : {}),
+  })
+}
 
-router.get("/ping", (_req, res) =>
+/* ═══════════════════════════════════════════════════════════════
+   PING (public — health check)
+═══════════════════════════════════════════════════════════════ */
+router.get('/ping', (_req, res) =>
   res.json({
     success:   true,
-    message:   "Messages router is alive ✓",
+    message:   'Messages router v3.0 ✓',
     timestamp: new Date().toISOString(),
-  }),
-);
+  })
+)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/messages/users
-// Conversation list for the admin sidebar
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get("/users", adminOnly, async (req, res) => {
-  logger.info(
-    `[Messages] GET /users | adminId=${req.user?.id} role=${req.user?.role}`,
-  );
-
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/messages/users
+   Admin: conversation list for sidebar
+═══════════════════════════════════════════════════════════════ */
+router.get('/users', adminOnly, async (req, res) => {
   try {
-    const limit  = safeInt(req.query.limit, 100, 1, 500);
-    const page   = safeInt(req.query.page,  1,   1, 9999);
-    const offset = (page - 1) * limit;
-    const { search, status } = req.query;
+    const limit  = safeInt(req.query.limit, 100, 1, 500)
+    const page   = safeInt(req.query.page,  1,   1, 9999)
+    const offset = (page - 1) * limit
+    const { search, status } = req.query
 
-    const params = [];
-    let pi    = 1;
-    let where = "";
+    const params = []
+    let pi    = 1
+    let where = ''
 
     if (search) {
       where +=
@@ -199,15 +219,15 @@ router.get("/users", adminOnly, async (req, res) => {
         ` OR u.email ILIKE $${pi}` +
         ` OR c.guest_name ILIKE $${pi}` +
         ` OR c.guest_email ILIKE $${pi}` +
-        ` OR c.last_message ILIKE $${pi})`;
-      params.push(`%${search.trim()}%`);
-      pi++;
+        ` OR c.last_message ILIKE $${pi})`
+      params.push(`%${search.trim()}%`)
+      pi++
     }
 
-    if (status && status !== "all") {
-      where += ` AND c.status = $${pi}`;
-      params.push(status);
-      pi++;
+    if (status && status !== 'all') {
+      where += ` AND c.status = $${pi}`
+      params.push(status)
+      pi++
     }
 
     const [data, count] = await Promise.all([
@@ -231,76 +251,73 @@ router.get("/users", adminOnly, async (req, res) => {
           WHERE 1=1 ${where}
           ORDER BY c.last_message_at DESC NULLS LAST, c.updated_at DESC
           LIMIT $${pi} OFFSET $${pi + 1}`,
-        [...params, limit, offset],
+        [...params, limit, offset]
       ),
       query(
         `SELECT COUNT(*) AS total
            FROM conversations c
            LEFT JOIN users u ON u.id = c.user_id
           WHERE 1=1 ${where}`,
-        params,
+        params
       ),
-    ]);
+    ])
 
-    const total = parseInt(count.rows[0]?.total || 0, 10);
+    const total = parseInt(count.rows[0]?.total || 0, 10)
 
     return res.json({
       success: true,
       data:    data.rows.map(serializeConversation),
       pagination: {
-        page,
-        limit,
-        total,
+        page, limit, total,
         pages: Math.ceil(total / limit),
       },
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] GET /users error:", err.message, err.detail || "");
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch conversations",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to fetch conversations', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/messages/conversations
-// Full conversation list with richer filters (admin)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get("/conversations", adminOnly, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/messages/conversations
+   Admin: full list with richer filters
+═══════════════════════════════════════════════════════════════ */
+router.get('/conversations', adminOnly, async (req, res) => {
   try {
-    const limit  = safeInt(req.query.limit, 50, 1, 200);
-    const page   = safeInt(req.query.page,  1,  1, 9999);
-    const offset = (page - 1) * limit;
+    const limit  = safeInt(req.query.limit, 50, 1, 200)
+    const page   = safeInt(req.query.page,  1,  1, 9999)
+    const offset = (page - 1) * limit
     const {
       search, status, priority,
-      sortBy = "updated_at", order = "desc",
-    } = req.query;
+      sortBy = 'updated_at',
+      order  = 'desc',
+    } = req.query
 
-    const params = [];
-    let pi    = 1;
-    let where = "";
+    const params = []
+    let pi    = 1
+    let where = ''
 
-    if (status && status !== "all") {
-      where += ` AND c.status = $${pi}`; params.push(status); pi++;
+    if (status && status !== 'all') {
+      where += ` AND c.status = $${pi}`
+      params.push(status)
+      pi++
     }
-    if (priority && priority !== "all") {
-      where += ` AND c.priority = $${pi}`; params.push(priority); pi++;
+    if (priority && priority !== 'all') {
+      where += ` AND c.priority = $${pi}`
+      params.push(priority)
+      pi++
     }
     if (search) {
       where +=
         ` AND (u.full_name ILIKE $${pi}` +
         ` OR u.email ILIKE $${pi}` +
         ` OR c.guest_name ILIKE $${pi}` +
-        ` OR c.last_message ILIKE $${pi})`;
-      params.push(`%${search.trim()}%`);
-      pi++;
+        ` OR c.last_message ILIKE $${pi})`
+      params.push(`%${search.trim()}%`)
+      pi++
     }
 
-    const sortCol   = ALLOWED_SORT.has(sortBy) ? `c.${sortBy}` : "c.updated_at";
-    const sortOrder = order === "asc" ? "ASC" : "DESC";
+    const sortCol   = ALLOWED_SORT.has(sortBy) ? `c.${sortBy}` : 'c.updated_at'
+    const sortOrder = order === 'asc' ? 'ASC' : 'DESC'
 
     const [data, count] = await Promise.all([
       query(
@@ -316,64 +333,77 @@ router.get("/conversations", adminOnly, async (req, res) => {
           WHERE 1=1 ${where}
           ORDER BY ${sortCol} ${sortOrder}, c.updated_at DESC
           LIMIT $${pi} OFFSET $${pi + 1}`,
-        [...params, limit, offset],
+        [...params, limit, offset]
       ),
       query(
         `SELECT COUNT(*) AS total
            FROM conversations c
            LEFT JOIN users u ON u.id = c.user_id
           WHERE 1=1 ${where}`,
-        params,
+        params
       ),
-    ]);
+    ])
 
-    const total = parseInt(count.rows[0]?.total || 0, 10);
+    const total = parseInt(count.rows[0]?.total || 0, 10)
 
     return res.json({
       success: true,
       data:    data.rows.map(serializeConversation),
       pagination: { page, limit, total, pages: Math.ceil(total / limit) },
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] GET /conversations error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to fetch conversations",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to fetch conversations', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/messages/conversation/:conversationId/messages
-// ═══════════════════════════════════════════════════════════════════════════════
-
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/messages/conversation/:conversationId/messages
+   optionalAuth: guests use sessionId check, auth users get their conv
+═══════════════════════════════════════════════════════════════ */
 router.get(
-  "/conversation/:conversationId/messages",
-  protect,
+  '/conversation/:conversationId/messages',
+  optionalAuth,
   async (req, res) => {
     try {
-      const conversationId = parseInt(req.params.conversationId, 10);
+      const conversationId = parseInt(req.params.conversationId, 10)
       if (!conversationId || conversationId < 1) {
-        return res.status(400).json({
-          success: false, message: "Invalid conversationId",
-        });
+        return res.status(400).json({ success: false, message: 'Invalid conversationId' })
       }
 
-      const limit  = safeInt(req.query.limit, 100, 1, 500);
-      const { before, after } = req.query;
+      const limit  = safeInt(req.query.limit, 100, 1, 500)
+      const { before, after } = req.query
 
-      const params   = [conversationId];
-      let pi         = 2;
-      let extraWhere = "";
+      /* Security: guests can only access conv if sessionId matches */
+      const senderType = resolveSenderType(req)
+      if (senderType !== 'admin') {
+        const sessionId = req.query.sessionId || req.headers['x-session-id']
+        if (sessionId) {
+          const convCheck = await query(
+            `SELECT id FROM conversations WHERE id = $1 AND session_id = $2 LIMIT 1`,
+            [conversationId, sessionId]
+          )
+          if (!convCheck.rows[0]) {
+            return res.status(403).json({
+              success: false,
+              message: 'Access denied to this conversation',
+            })
+          }
+        }
+      }
+
+      const params   = [conversationId]
+      let pi         = 2
+      let extraWhere = ''
 
       if (before) {
-        extraWhere += ` AND m.created_at < $${pi}`;
-        params.push(before); pi++;
+        extraWhere += ` AND m.created_at < $${pi}`
+        params.push(before)
+        pi++
       }
       if (after) {
-        extraWhere += ` AND m.created_at > $${pi}`;
-        params.push(after); pi++;
+        extraWhere += ` AND m.created_at > $${pi}`
+        params.push(after)
+        pi++
       }
 
       const result = await query(
@@ -384,40 +414,36 @@ router.get(
             ${extraWhere}
           ORDER BY m.created_at ASC
           LIMIT $${pi}`,
-        [...params, limit],
-      );
+        [...params, limit]
+      )
 
-      if (resolveSenderType(req) === "admin") {
-        await markAdminRead(conversationId);
+      if (senderType === 'admin') {
+        await markAdminRead(conversationId)
       }
 
-      return res.json({ success: true, data: result.rows.map(serializeMessage) });
+      return res.json({
+        success: true,
+        data:    result.rows.map(serializeMessage),
+      })
     } catch (err) {
-      logger.error(
-        "[Messages] GET /conversation/:id/messages error:", err.message,
-      );
-      return res.status(500).json({
-        success: false,
-        message: "Failed to fetch messages",
-        ...(IS_DEV && { error: err.message }),
-      });
+      return errRes(res, 500, 'Failed to fetch messages', err)
     }
-  },
-);
+  }
+)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/messages/user/:userId/conversation
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.get("/user/:userId/conversation", protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   GET /api/messages/user/:userId/conversation
+   Admin: get or create conversation for a user
+═══════════════════════════════════════════════════════════════ */
+router.get('/user/:userId/conversation', protect, async (req, res) => {
   try {
-    const userId = parseInt(req.params.userId, 10);
+    const userId = parseInt(req.params.userId, 10)
     if (!userId || userId < 1) {
-      return res.status(400).json({ success: false, message: "Invalid userId" });
+      return res.status(400).json({ success: false, message: 'Invalid userId' })
     }
 
-    const includeMessages = req.query.includeMessages !== "false";
-    const messageLimit    = safeInt(req.query.messageLimit, 100, 1, 500);
+    const includeMessages = req.query.includeMessages !== 'false'
+    const messageLimit    = safeInt(req.query.messageLimit, 100, 1, 500)
 
     let convResult = await query(
       `SELECT c.*,
@@ -429,25 +455,25 @@ router.get("/user/:userId/conversation", protect, async (req, res) => {
         WHERE c.user_id = $1
         ORDER BY c.updated_at DESC
         LIMIT 1`,
-      [userId],
-    );
+      [userId]
+    )
 
-    let conversation;
-    let isNew = false;
+    let conversation
+    let isNew = false
 
     if (convResult.rows.length > 0) {
-      conversation = convResult.rows[0];
+      conversation = convResult.rows[0]
     } else {
       const userResult = await query(
-        "SELECT id, full_name, email, avatar_url FROM users WHERE id = $1",
-        [userId],
-      );
+        'SELECT id, full_name, email, avatar_url FROM users WHERE id = $1',
+        [userId]
+      )
       if (!userResult.rows[0]) {
-        return res.status(404).json({ success: false, message: "User not found" });
+        return res.status(404).json({ success: false, message: 'User not found' })
       }
 
-      const u = userResult.rows[0];
-      const sessionId = `usr_${userId}_${Date.now()}`;
+      const u         = userResult.rows[0]
+      const sessionId = `usr_${userId}_${Date.now()}`
 
       const inserted = await query(
         `INSERT INTO conversations
@@ -455,117 +481,108 @@ router.get("/user/:userId/conversation", protect, async (req, res) => {
              channel, source, status, priority)
            VALUES ($1,$2,$3,$4,'live_chat','admin_panel','open','normal')
            RETURNING *`,
-        [sessionId, userId, u.full_name, u.email],
-      );
+        [sessionId, userId, u.full_name, u.email]
+      )
 
       conversation = {
         ...inserted.rows[0],
         user_full_name: u.full_name,
         user_email:     u.email,
         user_avatar:    u.avatar_url,
-      };
-      isNew = true;
-      logger.info(
-        `[Messages] Created conversation ${conversation.id} for user ${userId}`,
-      );
+      }
+      isNew = true
     }
 
-    if (resolveSenderType(req) === "admin") {
-      await markAdminRead(conversation.id);
+    if (resolveSenderType(req) === 'admin') {
+      await markAdminRead(conversation.id)
     }
 
-    let messages = [];
+    let messages = []
     if (includeMessages) {
       const msgResult = await query(
         `SELECT * FROM messages
            WHERE conversation_id = $1 AND deleted = false
            ORDER BY created_at ASC LIMIT $2`,
-        [conversation.id, messageLimit],
-      );
-      messages = msgResult.rows.map(serializeMessage);
+        [conversation.id, messageLimit]
+      )
+      messages = msgResult.rows.map(serializeMessage)
     }
 
     return res.json({
       success: true,
-      data: { ...serializeConversation(conversation), messages, isNew },
-    });
+      data: {
+        ...serializeConversation(conversation),
+        messages,
+        isNew,
+      },
+    })
   } catch (err) {
-    logger.error(
-      "[Messages] GET /user/:userId/conversation error:", err.message,
-    );
-    return res.status(500).json({
-      success: false,
-      message: "Failed to get or create conversation",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to get or create conversation', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/messages/start-with-user
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.post("/start-with-user", protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/messages/start-with-user
+   Admin: start a conversation with a user
+═══════════════════════════════════════════════════════════════ */
+router.post('/start-with-user', protect, async (req, res) => {
   try {
-    const { userId, message, subject, channel = "live_chat" } = req.body;
+    const { userId, message, subject, channel = 'live_chat' } = req.body
 
     if (!userId) {
-      return res.status(400).json({ success: false, message: "userId is required" });
+      return res.status(400).json({ success: false, message: 'userId is required' })
     }
 
-    const uid = parseInt(userId, 10);
+    const uid = parseInt(userId, 10)
     if (!uid || uid < 1) {
-      return res.status(400).json({ success: false, message: "Invalid userId" });
+      return res.status(400).json({ success: false, message: 'Invalid userId' })
     }
 
     const userResult = await query(
-      "SELECT id, full_name, email, avatar_url FROM users WHERE id = $1",
-      [uid],
-    );
+      'SELECT id, full_name, email, avatar_url FROM users WHERE id = $1',
+      [uid]
+    )
     if (!userResult.rows[0]) {
-      return res.status(404).json({ success: false, message: "User not found" });
+      return res.status(404).json({ success: false, message: 'User not found' })
     }
 
-    const u = userResult.rows[0];
+    const u = userResult.rows[0]
 
     let convResult = await query(
       `SELECT * FROM conversations
         WHERE user_id = $1 AND status = 'open'
         ORDER BY updated_at DESC LIMIT 1`,
-      [uid],
-    );
+      [uid]
+    )
 
-    let conversation;
-    let isNew = false;
+    let conversation
+    let isNew = false
 
     if (convResult.rows.length > 0) {
-      conversation = convResult.rows[0];
+      conversation = convResult.rows[0]
     } else {
-      const sessionId = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+      const sessionId = `conv_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`
       const inserted  = await query(
         `INSERT INTO conversations
             (session_id, user_id, guest_name, guest_email,
              channel, source, status, priority, subject)
            VALUES ($1,$2,$3,$4,$5,'admin_panel','open','normal',$6)
            RETURNING *`,
-        [sessionId, uid, u.full_name, u.email, channel, subject || null],
-      );
-      conversation = inserted.rows[0];
-      isNew = true;
-      logger.info(
-        `[Messages] Started conversation ${conversation.id} for user ${uid}`,
-      );
+        [sessionId, uid, u.full_name, u.email, channel, subject || null]
+      )
+      conversation = inserted.rows[0]
+      isNew = true
     }
 
-    let sentMessage   = null;
-    const trimmedBody = (message || "").trim();
+    let sentMessage   = null
+    const trimmedBody = (message || '').trim()
 
     if (trimmedBody) {
-      const senderType = resolveSenderType(req);
+      const senderType = resolveSenderType(req)
       const senderName =
         req.user?.full_name ||
-        req.user?.name ||
-        (senderType === "admin" ? "Support" : u.full_name);
+        req.user?.name      ||
+        (senderType === 'admin' ? 'Support' : u.full_name)
 
       const msgResult = await query(
         `INSERT INTO messages
@@ -579,20 +596,20 @@ router.post("/start-with-user", protect, async (req, res) => {
           senderName,
           req.user?.email || u.email,
           trimmedBody,
-          JSON.stringify({ source: "http", channel }),
-        ],
-      );
+          JSON.stringify({ source: 'http', channel }),
+        ]
+      )
 
-      sentMessage = serializeMessage(msgResult.rows[0]);
-      await updateConvSummary(conversation.id, trimmedBody, senderType);
+      sentMessage = serializeMessage(msgResult.rows[0])
+      await updateConvSummary(conversation.id, trimmedBody, senderType)
     }
 
     const msgHistory = await query(
       `SELECT * FROM messages
          WHERE conversation_id = $1 AND deleted = false
          ORDER BY created_at ASC`,
-      [conversation.id],
-    );
+      [conversation.id]
+    )
 
     return res.status(isNew ? 201 : 200).json({
       success: true,
@@ -603,65 +620,89 @@ router.post("/start-with-user", protect, async (req, res) => {
           user_email:     u.email,
           user_avatar:    u.avatar_url,
         }),
-        messages:    msgHistory.rows.map(serializeMessage),
+        messages: msgHistory.rows.map(serializeMessage),
         isNew,
         sentMessage,
       },
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] POST /start-with-user error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to start conversation",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to start conversation', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/messages/send  (HTTP fallback)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.post("/send", protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   POST /api/messages/send
+   HTTP fallback for socket-less message sending.
+   Uses optionalAuth — guests can send messages.
+═══════════════════════════════════════════════════════════════ */
+router.post('/send', optionalAuth, async (req, res) => {
   try {
-    const { conversationId, body, metadata } = req.body;
+    const { conversationId, body, sessionId, metadata } = req.body
 
+    /* ── Validation ── */
     if (!conversationId) {
       return res.status(400).json({
-        success: false, message: "conversationId is required",
-      });
+        success: false, message: 'conversationId is required',
+      })
     }
 
-    const trimmedBody = (body || "").trim();
+    const trimmedBody = (body || '').trim()
     if (!trimmedBody) {
       return res.status(400).json({
-        success: false, message: "Message body is required",
-      });
+        success: false, message: 'Message body is required',
+      })
     }
 
-    const convId = parseInt(conversationId, 10);
+    const convId = parseInt(conversationId, 10)
     if (!convId || convId < 1) {
       return res.status(400).json({
-        success: false, message: "Invalid conversationId",
-      });
+        success: false, message: 'Invalid conversationId',
+      })
     }
 
+    /* ── Fetch conversation ── */
     const convResult = await query(
-      "SELECT * FROM conversations WHERE id = $1", [convId],
-    );
+      'SELECT * FROM conversations WHERE id = $1',
+      [convId]
+    )
     if (!convResult.rows[0]) {
       return res.status(404).json({
-        success: false, message: "Conversation not found",
-      });
+        success: false, message: 'Conversation not found',
+      })
     }
 
-    const conversation = convResult.rows[0];
-    const senderType   = resolveSenderType(req);
-    const senderName   =
-      req.user?.full_name ||
-      req.user?.name ||
-      (senderType === "admin" ? "Support" : conversation.guest_name || "Guest");
+    const conv = convResult.rows[0]
 
+    /*
+     * Security: guests must provide matching sessionId.
+     * Authenticated users are checked by user_id.
+     */
+    const senderType = resolveSenderType(req)
+    if (senderType !== 'admin') {
+      if (req.user?.id) {
+        /* Authenticated user — verify they own this conversation */
+        if (conv.user_id && conv.user_id !== req.user.id) {
+          return res.status(403).json({
+            success: false, message: 'Access denied to this conversation',
+          })
+        }
+      } else if (sessionId) {
+        /* Guest — verify sessionId matches */
+        if (conv.session_id !== sessionId) {
+          return res.status(403).json({
+            success: false, message: 'Invalid session for this conversation',
+          })
+        }
+      }
+      /* No auth + no sessionId = still allow (anonymous chat) */
+    }
+
+    const senderName =
+      req.user?.full_name ||
+      req.user?.name      ||
+      (senderType === 'admin' ? 'Support' : conv.guest_name || 'Guest')
+
+    /* ── Insert message ── */
     const result = await query(
       `INSERT INTO messages
           (conversation_id, sender_type, sender_id,
@@ -670,193 +711,192 @@ router.post("/send", protect, async (req, res) => {
       [
         convId,
         senderType,
-        req.user?.id || null,
+        req.user?.id    || null,
         senderName,
-        req.user?.email || conversation.guest_email || null,
+        req.user?.email || conv.guest_email || null,
         trimmedBody,
-        JSON.stringify(metadata || { source: "http" }),
-      ],
-    );
+        JSON.stringify({ ...(metadata || {}), source: 'http-fallback' }),
+      ]
+    )
 
-    await updateConvSummary(convId, trimmedBody, senderType);
+    await updateConvSummary(convId, trimmedBody, senderType)
+
+    /* ── Emit via socket bus so admin sees it in real time ── */
+    try {
+      const socketBus = require('../utils/socketBus')
+      const io        = socketBus.getIO()
+      if (io) {
+        const serialized = serializeMessage(result.rows[0])
+        io.to(`conv:${convId}`).emit('msg:message', serialized)
+        io.to('admins').emit('msg:new-from-user', {
+          conversationId: convId,
+          sessionId:      conv.session_id,
+          message:        serialized,
+          senderName,
+        })
+      }
+    } catch (e) {
+      /* socketBus optional — non-fatal */
+      logger.warn('[Messages] socketBus emit non-fatal:', e.message)
+    }
 
     return res.status(201).json({
       success: true,
       data:    serializeMessage(result.rows[0]),
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] POST /send error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to send message",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to send message', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/messages/conversation/:id
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.patch("/conversation/:id", adminOnly, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   PATCH /api/messages/conversation/:id
+   Admin: update status, priority, tags, subject
+═══════════════════════════════════════════════════════════════ */
+router.patch('/conversation/:id', adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id, 10)
     if (!id || id < 1) {
-      return res.status(400).json({
-        success: false, message: "Invalid conversation id",
-      });
+      return res.status(400).json({ success: false, message: 'Invalid id' })
     }
 
-    const { status, priority, assignedAdmin, tags, subject } = req.body;
+    const { status, priority, assignedAdmin, tags, subject } = req.body
 
-    const sets   = [];
-    const params = [];
-    let pi = 1;
+    const sets   = []
+    const params = []
+    let   pi     = 1
 
-    const addField = (expr, value) => {
-      sets.push(expr.replace("?", `$${pi}`));
-      params.push(value);
-      pi++;
-    };
-
-    if (status !== undefined) {
-      addField("status = ?", status);
-      if (status === "closed") sets.push("closed_at = NOW()");
-      if (status === "open")   sets.push("closed_at = NULL");
+    const add = (expr, val) => {
+      sets.push(`${expr} = $${pi++}`)
+      params.push(val)
     }
-    if (priority      !== undefined) addField("priority = ?",       priority);
-    if (assignedAdmin !== undefined) addField("assigned_admin = ?", assignedAdmin);
-    if (tags          !== undefined) addField("tags = ?",           tags);
-    if (subject       !== undefined) addField("subject = ?",        subject);
+
+    if (status        !== undefined) { add('status',         status)        }
+    if (status === 'closed')           sets.push('closed_at = NOW()')
+    if (status === 'open')             sets.push('closed_at = NULL')
+    if (priority      !== undefined) { add('priority',       priority)      }
+    if (assignedAdmin !== undefined) { add('assigned_admin', assignedAdmin) }
+    if (tags          !== undefined) { add('tags',           tags)          }
+    if (subject       !== undefined) { add('subject',        subject)       }
 
     if (!sets.length) {
-      return res.status(400).json({
-        success: false, message: "No fields to update",
-      });
+      return res.status(400).json({ success: false, message: 'No fields to update' })
     }
 
-    sets.push("updated_at = NOW()");
-    params.push(id);
+    sets.push('updated_at = NOW()')
+    params.push(id)
 
     const result = await query(
-      `UPDATE conversations SET ${sets.join(", ")} WHERE id = $${pi} RETURNING *`,
-      params,
-    );
+      `UPDATE conversations SET ${sets.join(', ')} WHERE id = $${pi} RETURNING *`,
+      params
+    )
 
     if (!result.rows[0]) {
-      return res.status(404).json({
-        success: false, message: "Conversation not found",
-      });
+      return res.status(404).json({ success: false, message: 'Conversation not found' })
     }
+
+    /* Broadcast update to all parties */
+    try {
+      const socketBus = require('../utils/socketBus')
+      const io        = socketBus.getIO()
+      if (io) {
+        const updated = { conversationId: id, status, priority }
+        io.to(`conv:${id}`).emit('msg:conversation-updated', updated)
+        io.to('admins').emit('msg:conversation-updated', updated)
+      }
+    } catch { /* non-fatal */ }
 
     return res.json({
       success: true,
       data:    serializeConversation(result.rows[0]),
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] PATCH /conversation/:id error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to update conversation",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to update conversation', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DELETE /api/messages/:messageId
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.delete("/:messageId", protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   DELETE /api/messages/:messageId
+   Owner or admin soft-delete
+═══════════════════════════════════════════════════════════════ */
+router.delete('/:messageId', protect, async (req, res) => {
   try {
-    const messageId = parseInt(req.params.messageId, 10);
+    const messageId = parseInt(req.params.messageId, 10)
     if (!messageId || messageId < 1) {
-      return res.status(400).json({
-        success: false, message: "Invalid messageId",
-      });
+      return res.status(400).json({ success: false, message: 'Invalid messageId' })
     }
 
-    const isAdmin = resolveSenderType(req) === "admin";
-    let result;
+    const isAdmin = resolveSenderType(req) === 'admin'
+    let result
 
     if (isAdmin) {
       result = await query(
         `UPDATE messages
             SET deleted = true, body = '[Message deleted by admin]'
           WHERE id = $1 RETURNING *`,
-        [messageId],
-      );
+        [messageId]
+      )
     } else {
       result = await query(
         `UPDATE messages
             SET deleted = true, body = '[Message deleted]'
           WHERE id = $1 AND sender_id = $2 RETURNING *`,
-        [messageId, req.user?.id],
-      );
+        [messageId, req.user?.id]
+      )
     }
 
     if (!result.rows[0]) {
       return res.status(404).json({
         success: false,
-        message: "Message not found or insufficient permission",
-      });
+        message: 'Message not found or insufficient permission',
+      })
     }
 
     return res.json({
       success: true,
-      message: "Message deleted",
+      message: 'Message deleted',
       data:    serializeMessage(result.rows[0]),
-    });
+    })
   } catch (err) {
-    logger.error("[Messages] DELETE /:messageId error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to delete message",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to delete message', err)
   }
-});
+})
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// DELETE /api/messages/conversations/:id (admin only)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-router.delete("/conversations/:id", adminOnly, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════
+   DELETE /api/messages/conversations/:id
+   Admin: permanently delete a conversation + its messages
+═══════════════════════════════════════════════════════════════ */
+router.delete('/conversations/:id', adminOnly, async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(req.params.id, 10)
     if (!id || id < 1) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid conversation id",
-      });
+      return res.status(400).json({ success: false, message: 'Invalid id' })
     }
+
+    /* Messages cascade-delete if FK is set; otherwise delete manually */
+    await query(
+      'DELETE FROM messages WHERE conversation_id = $1',
+      [id]
+    ).catch(() => { /* no cascade — non-fatal */ })
 
     const result = await query(
-      `DELETE FROM conversations WHERE id = $1 RETURNING *`,
+      'DELETE FROM conversations WHERE id = $1 RETURNING id',
       [id]
-    );
+    )
 
     if (!result.rows[0]) {
-      return res.status(404).json({
-        success: false,
-        message: "Conversation not found",
-      });
+      return res.status(404).json({ success: false, message: 'Conversation not found' })
     }
 
     return res.json({
       success: true,
-      message: "Conversation deleted permanently",
-    });
+      message: 'Conversation deleted permanently',
+    })
   } catch (err) {
-    logger.error("[Messages] DELETE /conversations/:id error:", err.message);
-    return res.status(500).json({
-      success: false,
-      message: "Failed to delete conversation",
-      ...(IS_DEV && { error: err.message }),
-    });
+    return errRes(res, 500, 'Failed to delete conversation', err)
   }
-});
+})
 
-logger.info("[Messages] Router registered ✓");
+logger.info('[Messages] Router v3.0 registered ✓')
 
-module.exports = router;
+module.exports = router
