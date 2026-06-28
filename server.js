@@ -1,12 +1,13 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.7
+ * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.8
  * "True Adventures In High Places & Deep Culture"
  *
- * Changes from v6.6:
- *   - Email imports: safe dynamic resolution — never crashes on missing export
- *   - verifyEmailConnection / verifyAuthEmail guarded before call
- *   - All other logic preserved from v6.6
+ * Changes from v6.7:
+ *   - Notifications route registered: /api/notifications
+ *   - Socket: users join user-{id}, role-{role}, all-users rooms on connect
+ *   - Socket: notification:new event handler added
+ *   - ensureNotificationsSchema added to boot sequence
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -40,6 +41,7 @@ const {
   ensureGallerySchema,
   ensurePostsSchema,
   ensureBookingsSchema,
+  ensureNotificationsSchema,
 } = require('./config/db')
 
 const logger    = require('./utils/logger')
@@ -47,8 +49,6 @@ const shutdown  = require('./utils/shutdown')
 const socketBus = require('./utils/socketBus')
 
 // ── Email helpers — safe imports ──────────────────────────────────────────────
-// Different projects export these under different names.
-// We try every common name and fall back to null — never crash on import.
 let verifyEmailConnection = null
 let verifyAuthEmail       = null
 
@@ -111,6 +111,7 @@ const countryRatingsRouter      = require('./routes/countryRatings')
 const destinationLikesRouter    = require('./routes/destinationLikes')
 const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
+const notificationsRouter       = require('./routes/notifications')  // ← NEW v6.8
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -120,7 +121,7 @@ const PORT     = parseInt(process.env.PORT || '3000', 10)
 const NODE_ENV = process.env.NODE_ENV || 'development'
 const IS_PROD  = NODE_ENV === 'production'
 
-// ── Connected admins map — declared early so /health can reference it ─────────
+// ── Connected admins map ──────────────────────────────────────────────────────
 const connectedAdmins = new Map()
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -147,8 +148,8 @@ const ALLOWED_ORIGINS = [
 ]
 
 const isOriginAllowed = (origin) => {
-  if (!origin)   return true   // server-to-server
-  if (!IS_PROD)  return true   // dev: allow all
+  if (!origin)   return true
+  if (!IS_PROD)  return true
   if (ALLOWED_ORIGINS.includes(origin)) return true
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   return false
@@ -486,11 +487,11 @@ if (IS_PROD) {
 // ── Request ID ────────────────────────────────────────────────────────────────
 app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
-// ── Cache — skips POST / authenticated / known mutation paths ─────────────────
+// ── Cache ─────────────────────────────────────────────────────────────────────
 app.use(cacheMiddleware(120))
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// HTTP SERVER  (created before Socket.io)
+// HTTP SERVER
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const httpServer = http.createServer(app)
@@ -505,7 +506,7 @@ const io = new Server(httpServer, {
     methods:     ['GET', 'POST'],
     credentials: true,
   },
-  transports:        ['polling', 'websocket'],   // polling FIRST — required for handshake
+  transports:        ['polling', 'websocket'],
   allowEIO3:         true,
   pingTimeout:       60_000,
   pingInterval:      25_000,
@@ -531,7 +532,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '6.7',
+    version:     '6.8',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -561,7 +562,7 @@ app.get('/api', (_req, res) =>
   res.json({
     success: true,
     name:    'Altuvera Travel API',
-    version: '6.7',
+    version: '6.8',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
     routes:  '/api/routes',
@@ -668,12 +669,11 @@ const collectRoutes = (stack, prefix = '') => {
 }
 
 app.get('/api/routes', (req, res) => {
-  const routes            = collectRoutes(app._router?.stack || [])
-  const byMethod          = routes.reduce((acc, r) => {
+  const routes   = collectRoutes(app._router?.stack || [])
+  const byMethod = routes.reduce((acc, r) => {
     acc[r.method] = (acc[r.method] || 0) + 1; return acc
   }, {})
-  const testimonialRoutes = routes.filter(r => r.path.includes('testimonial'))
-  res.json({ success: true, total: routes.length, byMethod, testimonialRoutes, routes })
+  res.json({ success: true, total: routes.length, byMethod, routes })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -710,6 +710,7 @@ app.use('/api/country-ratings',      countryRatingsRouter)
 app.use('/api/destination-likes',    destinationLikesRouter)
 app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
+app.use('/api/notifications',        notificationsRouter)  // ← NEW v6.8
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // JWT SOCKET HELPER
@@ -959,19 +960,19 @@ io.use((socket, next) => {
     next()
   } catch (err) {
     logger.error('[Socket] Auth middleware error:', err.message)
-    next() // allow connection even on auth error
+    next()
   }
 })
 
-// ── Typing indicator cleanup — every 15 s ─────────────────────────────────────
+// ── Typing indicator cleanup ──────────────────────────────────────────────────
 setInterval(async () => {
   try {
     await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`)
-  } catch { /* silent — table may not exist yet */ }
+  } catch { /* silent */ }
 }, 15_000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO — CONNECTION HANDLER
+// SOCKET.IO — CONNECTION HANDLER  v6.8
 // ═══════════════════════════════════════════════════════════════════════════════
 
 io.on('connection', (socket) => {
@@ -979,13 +980,139 @@ io.on('connection', (socket) => {
     `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`,
   )
 
-  if (socket.data.userId) socket.join(`user-${socket.data.userId}`)
+  // ── v6.8: Room setup for authenticated users ─────────────────────────────
+  if (socket.data.userId) {
+    // Individual user room — for targeted notifications and messages
+    socket.join(`user-${socket.data.userId}`)
+
+    // Role-based room — for role-targeted notifications
+    // e.g. 'role-user', 'role-moderator', 'role-editor'
+    const userRole = socket.data.user?.role || 'user'
+    socket.join(`role-${userRole}`)
+
+    // Broadcast room — all authenticated users
+    socket.join('all-users')
+
+    logger.info(
+      `[Socket] User ${socket.data.userId} joined rooms: ` +
+      `user-${socket.data.userId}, role-${userRole}, all-users`,
+    )
+  }
 
   if (socket.data.isAdmin) {
     connectedAdmins.set(socket.id, socket.data.userId)
     io.emit('msg:admin-online', { online: true })
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
+
+  // ── v6.8: Notification socket events ────────────────────────────────────
+
+  /**
+   * Client requests their unread count on connect / focus
+   * Emits back: notification:unread-count { count }
+   */
+  socket.on('notification:get-unread', async (_, cb) => {
+    try {
+      const userId   = socket.data.userId
+      const userRole = socket.data.user?.role || 'user'
+      if (!userId) {
+        if (typeof cb === 'function') cb({ count: 0 })
+        return
+      }
+
+      const { rows } = await query(
+        `SELECT COUNT(*) FROM notifications
+           WHERE (
+             (user_id = $1 AND target_scope = 'individual')
+             OR target_scope = 'all'
+             OR (target_scope = 'role' AND target_role = $2)
+           )
+           AND is_read = false
+           AND deleted_at IS NULL
+           AND (expires_at IS NULL OR expires_at > NOW())`,
+        [userId, userRole],
+      )
+
+      const count = parseInt(rows[0]?.count || 0, 10)
+      socket.emit('notification:unread-count', { count })
+      if (typeof cb === 'function') cb({ count })
+    } catch (err) {
+      logger.warn('[Socket] notification:get-unread error:', err.message)
+      if (typeof cb === 'function') cb({ count: 0 })
+    }
+  })
+
+  /**
+   * Client marks a notification as read via socket (instant UI update)
+   */
+  socket.on('notification:mark-read', async ({ id } = {}, cb) => {
+    try {
+      const userId   = socket.data.userId
+      const userRole = socket.data.user?.role || 'user'
+      if (!userId || !id) return
+
+      await query(
+        `UPDATE notifications
+           SET is_read = true, read_at = NOW(), updated_at = NOW()
+           WHERE id = $1
+             AND (user_id = $2 OR target_scope IN ('all','role'))
+             AND deleted_at IS NULL`,
+        [id, userId],
+      )
+
+      // Re-emit updated count
+      const { rows } = await query(
+        `SELECT COUNT(*) FROM notifications
+           WHERE (
+             (user_id = $1 AND target_scope = 'individual')
+             OR target_scope = 'all'
+             OR (target_scope = 'role' AND target_role = $2)
+           )
+           AND is_read = false AND deleted_at IS NULL
+           AND (expires_at IS NULL OR expires_at > NOW())`,
+        [userId, userRole],
+      )
+
+      const count = parseInt(rows[0]?.count || 0, 10)
+      socket.emit('notification:unread-count', { count })
+      if (typeof cb === 'function') cb({ success: true, count })
+    } catch (err) {
+      logger.warn('[Socket] notification:mark-read error:', err.message)
+      if (typeof cb === 'function') cb({ success: false })
+    }
+  })
+
+  /**
+   * Admin broadcasts a notification to all connected users instantly
+   * (REST API also handles persistence; this is for instant delivery)
+   */
+  socket.on('notification:admin-broadcast', async (payload = {}, cb) => {
+    try {
+      if (!socket.data.isAdmin) throw new Error('Admin only')
+
+      const { title, message, type = 'general', actionUrl, priority = 'normal' } = payload
+      if (!title || !message) throw new Error('title and message required')
+
+      // Persist via controller helper
+      const { createNotificationInternal } = require('./controllers/notificationsController')
+      const notif = await createNotificationInternal({
+        userId:      null,
+        type, title, message,
+        actionUrl:   actionUrl || null,
+        targetScope: 'all',
+        priority,
+        senderType:  'admin',
+        senderId:    socket.data.userId,
+        senderName:  socket.data.user?.full_name || 'Admin',
+      })
+
+      // Socket broadcast handled inside createNotificationInternal via emitNotification
+      if (typeof cb === 'function') cb({ success: true, data: notif })
+    } catch (err) {
+      logger.error('[Socket] notification:admin-broadcast error:', err.message)
+      if (typeof cb === 'function') cb({ success: false, error: err.message })
+    }
+  })
 
   // ── Package rooms ────────────────────────────────────────────────────────
   socket.on('pkg:join', ({ packageId, userId } = {}) => {
@@ -1483,7 +1610,7 @@ io.on('connection', (socket) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS  (must be after all routes)
+// ERROR HANDLERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.use(notFoundHandler)
@@ -1499,7 +1626,6 @@ async function initializeServer () {
     await query('SELECT NOW()')
     logger.info('✅ Database connected')
 
-    // Destination extended schema (optional)
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
@@ -1508,35 +1634,35 @@ async function initializeServer () {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
-    // Core schemas — sequential (some have FK dependencies)
+    // Core schemas — sequential
     const schemas = [
-      { fn: ensureSubscribersSchema, name: 'Subscribers' },
-      { fn: ensureUserSchema,        name: 'Users'        },
-      { fn: ensureContactSchema,     name: 'Contact'      },
-      { fn: ensureGallerySchema,     name: 'Gallery'      },
-      { fn: ensureChatSchema,        name: 'Chat'         },
-      { fn: ensurePostsSchema,       name: 'Posts'        },
-      { fn: ensurePackagesSchema,    name: 'Packages'     },
-      { fn: ensureBookingsSchema,    name: 'Bookings'     },
-      { fn: ensureMessagingSchema,   name: 'Messaging'    },
+      { fn: ensureSubscribersSchema,    name: 'Subscribers'    },
+      { fn: ensureUserSchema,           name: 'Users'          },
+      { fn: ensureContactSchema,        name: 'Contact'        },
+      { fn: ensureGallerySchema,        name: 'Gallery'        },
+      { fn: ensureChatSchema,           name: 'Chat'           },
+      { fn: ensurePostsSchema,          name: 'Posts'          },
+      { fn: ensurePackagesSchema,       name: 'Packages'       },
+      { fn: ensureBookingsSchema,       name: 'Bookings'       },
+      { fn: ensureMessagingSchema,      name: 'Messaging'      },
+      { fn: ensureNotificationsSchema,  name: 'Notifications'  }, // ← NEW v6.8
     ]
 
     for (const { fn, name } of schemas) {
       try {
         await fn()
-        if (!['Packages', 'Messaging'].includes(name))
+        if (!['Packages', 'Messaging', 'Notifications'].includes(name))
           logger.info(`✅ ${name} schema ready`)
       } catch (err) {
         logger.warn(`⚠️  ${name} schema (non-fatal):`, err.message)
       }
     }
 
-    // Start HTTP server
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.7')
+        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.8')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
@@ -1545,14 +1671,9 @@ async function initializeServer () {
         logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
         logger.info(`  Theme        : green-white (#16a34a) 🟢`)
         logger.info(`  DNS          : ipv4first ✅`)
-        logger.info(`  Cache        : POST/auth excluded ✅`)
-        logger.info(`  Socket.io    : polling → websocket | allowEIO3 | cookie=false ✅`)
-        logger.info(`  Conn.Recovery: 2-min window ✅`)
-        logger.info(`  Email checks : ${
-          verifyEmailConnection ? 'emailService ✅' : 'emailService —'
-        } | ${
-          verifyAuthEmail ? 'email ✅' : 'email —'
-        }`)
+        logger.info(`  Socket rooms : user-{id}, role-{role}, all-users ✅`)
+        logger.info(`  Notifications: /api/notifications ✅`)
+        logger.info(`  Socket.io    : polling → websocket ✅`)
         logger.info(`${line}\n`)
         resolve()
       })
@@ -1566,21 +1687,16 @@ async function initializeServer () {
     process.exit(1)
   }
 
-  // ── Background email checks (non-blocking, non-fatal) ─────────────────────
   if (typeof verifyEmailConnection === 'function') {
     verifyEmailConnection().catch(e =>
       logger.warn('[Email] Connection check (non-fatal):', e.message),
     )
-  } else {
-    logger.warn('[Email] verifyEmailConnection not exported from utils/emailService — skipping')
   }
 
   if (typeof verifyAuthEmail === 'function') {
     verifyAuthEmail().catch(e =>
       logger.warn('[Email] Auth SMTP check (non-fatal):', e.message),
     )
-  } else {
-    logger.warn('[Email] verifyTransporter not exported from utils/email — skipping')
   }
 }
 

@@ -77,6 +77,7 @@ const otpLimiter = rateLimit({
 
 // OTP
 router.post("/send-otp",    otpLimiter,     ctrl.sendOtp);
+router.post("/admin", adminOnly, ctrl.adminCreate); // Create by admin
 router.post("/verify-otp",  otpLimiter,     ctrl.verifyOtp);
 
 // Create booking

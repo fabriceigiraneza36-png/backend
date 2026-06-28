@@ -938,6 +938,188 @@ const ensureDestinationsSchema = async () => {
   }
 };
 
+// ─── ADD THIS FUNCTION to backend/config/db.js ───────────────────────────────
+// Place it just before the module.exports block
+
+const ensureNotificationsSchema = async () => {
+  try {
+    // ── Main notifications table ──────────────────────────────────────────────
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id              SERIAL PRIMARY KEY,
+
+        -- Who receives this notification
+        user_id         INTEGER,          -- NULL = broadcast to all users
+        user_email      VARCHAR(255),     -- denormalized for quick lookup
+
+        -- Who sent it
+        sender_type     VARCHAR(20)  NOT NULL DEFAULT 'system',
+                        -- 'admin' | 'system' | 'auto'
+        sender_id       INTEGER,          -- admin_users.id if sender_type='admin'
+        sender_name     VARCHAR(255),
+
+        -- Content
+        type            VARCHAR(50)  NOT NULL DEFAULT 'general',
+                        -- 'booking_created' | 'booking_updated' | 'booking_cancelled'
+                        -- | 'booking_confirmed' | 'booking_deleted'
+                        -- | 'new_destination' | 'new_country' | 'new_post'
+                        -- | 'new_package' | 'promotion' | 'system'
+                        -- | 'warning' | 'alert' | 'general'
+        title           VARCHAR(255) NOT NULL,
+        message         TEXT        NOT NULL,
+        action_url      VARCHAR(500),     -- deep link (e.g. /my-bookings/BK-240101-ABCD)
+        action_label    VARCHAR(100),     -- button label (e.g. "View Booking")
+        image_url       VARCHAR(500),
+
+        -- Metadata (booking ref, destination id, etc.)
+        metadata        JSONB        DEFAULT '{}'::JSONB,
+
+        -- Targeting
+        target_scope    VARCHAR(30)  DEFAULT 'individual',
+                        -- 'individual' | 'all' | 'role' | 'segment'
+        target_role     VARCHAR(50),      -- if scope='role'
+        target_segment  VARCHAR(100),     -- future: 'subscribers', 'premium' etc.
+
+        -- Priority & category
+        priority        VARCHAR(20)  DEFAULT 'normal',
+                        -- 'low' | 'normal' | 'high' | 'urgent'
+        category        VARCHAR(50)  DEFAULT 'general',
+                        -- 'booking' | 'content' | 'account' | 'marketing' | 'system'
+
+        -- Read state
+        is_read         BOOLEAN      DEFAULT false,
+        read_at         TIMESTAMP,
+
+        -- Reaction (user can react)
+        reaction        VARCHAR(20),      -- 'like' | 'dislike' | null
+        reacted_at      TIMESTAMP,
+
+        -- Reply from user
+        reply_text      TEXT,
+        replied_at      TIMESTAMP,
+
+        -- Admin reply to user's reply
+        admin_reply     TEXT,
+        admin_replied_at TIMESTAMP,
+        admin_replied_by INTEGER,
+
+        -- Delivery
+        email_sent      BOOLEAN      DEFAULT false,
+        email_sent_at   TIMESTAMP,
+        push_sent       BOOLEAN      DEFAULT false,
+
+        -- Soft delete
+        deleted_at      TIMESTAMP,        -- user dismissed/deleted
+        archived_at     TIMESTAMP,
+
+        -- Expiry (auto-hide after this date)
+        expires_at      TIMESTAMP,
+
+        created_at      TIMESTAMP    DEFAULT NOW(),
+        updated_at      TIMESTAMP    DEFAULT NOW()
+      )
+    `);
+
+    // ── Columns guard (safe ALTER for upgrades) ───────────────────────────────
+    const cols = [
+      ['user_id',          'INTEGER'],
+      ['user_email',       'VARCHAR(255)'],
+      ['sender_type',      "VARCHAR(20) DEFAULT 'system'"],
+      ['sender_id',        'INTEGER'],
+      ['sender_name',      'VARCHAR(255)'],
+      ['type',             "VARCHAR(50) DEFAULT 'general'"],
+      ['title',            'VARCHAR(255)'],
+      ['message',          'TEXT'],
+      ['action_url',       'VARCHAR(500)'],
+      ['action_label',     'VARCHAR(100)'],
+      ['image_url',        'VARCHAR(500)'],
+      ['metadata',         "JSONB DEFAULT '{}'::JSONB"],
+      ['target_scope',     "VARCHAR(30) DEFAULT 'individual'"],
+      ['target_role',      'VARCHAR(50)'],
+      ['target_segment',   'VARCHAR(100)'],
+      ['priority',         "VARCHAR(20) DEFAULT 'normal'"],
+      ['category',         "VARCHAR(50) DEFAULT 'general'"],
+      ['is_read',          'BOOLEAN DEFAULT false'],
+      ['read_at',          'TIMESTAMP'],
+      ['reaction',         'VARCHAR(20)'],
+      ['reacted_at',       'TIMESTAMP'],
+      ['reply_text',       'TEXT'],
+      ['replied_at',       'TIMESTAMP'],
+      ['admin_reply',      'TEXT'],
+      ['admin_replied_at', 'TIMESTAMP'],
+      ['admin_replied_by', 'INTEGER'],
+      ['email_sent',       'BOOLEAN DEFAULT false'],
+      ['email_sent_at',    'TIMESTAMP'],
+      ['push_sent',        'BOOLEAN DEFAULT false'],
+      ['deleted_at',       'TIMESTAMP'],
+      ['archived_at',      'TIMESTAMP'],
+      ['expires_at',       'TIMESTAMP'],
+      ['updated_at',       'TIMESTAMP DEFAULT NOW()'],
+    ];
+
+    for (const [name, type] of cols) {
+      await pool
+        .query(`ALTER TABLE notifications ADD COLUMN IF NOT EXISTS ${name} ${type}`)
+        .catch(() => {});
+    }
+
+    // ── Indexes ───────────────────────────────────────────────────────────────
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_id
+         ON notifications(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_email
+         ON notifications(user_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_type
+         ON notifications(type)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_is_read
+         ON notifications(is_read)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_created_at
+         ON notifications(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_target_scope
+         ON notifications(target_scope)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_priority
+         ON notifications(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_deleted_at
+         ON notifications(deleted_at) WHERE deleted_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_expires_at
+         ON notifications(expires_at) WHERE expires_at IS NOT NULL`,
+       // Composite: the most common user inbox query
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_unread
+         ON notifications(user_id, is_read, created_at DESC)
+         WHERE deleted_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_broadcast
+         ON notifications(target_scope, created_at DESC)
+         WHERE target_scope != 'individual' AND deleted_at IS NULL`,
+    ];
+
+    for (const idx of indexes) {
+      await pool.query(idx).catch(() => {});
+    }
+
+    // ── updated_at auto-trigger ───────────────────────────────────────────────
+    await pool.query(`
+      CREATE OR REPLACE FUNCTION update_updated_at_column()
+      RETURNS TRIGGER AS $$
+      BEGIN NEW.updated_at = NOW(); RETURN NEW; END;
+      $$ LANGUAGE plpgsql;
+    `).catch(() => {});
+
+    await pool.query(`
+      DROP TRIGGER IF EXISTS trg_notifications_updated_at ON notifications;
+    `).catch(() => {});
+
+    await pool.query(`
+      CREATE TRIGGER trg_notifications_updated_at
+        BEFORE UPDATE ON notifications
+        FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    `).catch(() => {});
+
+    logger.info('[DB] ✅ Notifications schema verified & ensured');
+  } catch (err) {
+    logger.warn('[DB] Notifications schema ensure failed:', err.message);
+  }
+};
+
 const ensureContactSchema = async () => {
   try {
     await pool.query(`
@@ -1172,6 +1354,7 @@ module.exports = {
   closeConnections,
   ensureUserSchema,
   ensureDestinationsSchema,
+  ensureNotificationsSchema,
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,

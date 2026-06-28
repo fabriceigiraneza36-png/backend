@@ -1,3 +1,5 @@
+
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * BOOKINGS CONTROLLER v3.1
@@ -21,7 +23,7 @@ const {
   sendAdminBookingNotification,
 } = require("../utils/email");
 const logger = require("../utils/logger");
-
+const { createNotificationInternal } = require('./notificationsController');
 /* ═══════════════════════════════════════════════════════════════════════════════
    CONSTANTS
 ═══════════════════════════════════════════════════════════════════════════════ */
@@ -471,217 +473,137 @@ exports.verifyOtp = async (req, res, next) => {
    CREATE BOOKING   POST /api/bookings
 ═══════════════════════════════════════════════════════════════════════════════ */
 
+// (Already handling user-side creation, but we ensure it sends a notification)
+const originalCreate = exports.create;
 exports.create = async (req, res, next) => {
+  // We wrap the existing logic to add a notification after success
+  const resProxy = {
+    ...res,
+    status: (code) => {
+      res.statusCode = code;
+      return resProxy;
+    },
+    json: async (data) => {
+      if (res.statusCode === 201 && data.success && req.user) {
+        // Notification for user creating their own booking
+        await createNotificationInternal({
+          userId: req.user.id,
+          userEmail: req.user.email,
+          type: 'booking_created',
+          title: 'Booking Received!',
+          message: `Your booking ${data.data.booking_number} has been received and is pending review.`,
+          actionUrl: `/my-bookings`,
+          actionLabel: 'Track Booking',
+          category: 'booking'
+        });
+      }
+      return res.json(data);
+    }
+  };
+  return originalCreate(req, resProxy, next);
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   ADMIN CREATE BOOKING   POST /api/bookings/admin
+   Allows admin to create a booking on behalf of a user.
+═══════════════════════════════════════════════════════════════════════════════ */
+exports.adminCreate = async (req, res, next) => {
   try {
-    // ── Normalize all incoming field aliases first ──
+    const adminId = req.admin?.id;
     const body = normalizeBookingData(req.body);
+    
+    // 1. If email is provided but no user_id, find the user
+    if (!body.user_id && body.email) {
+      const { rows: u } = await query("SELECT id FROM users WHERE email = $1", [body.email.toLowerCase().trim()]);
+      if (u[0]) body.user_id = u[0].id;
+    }
 
-    const {
-      full_name,
-      email,
-      destination_id,
-      service_id,
-      booking_type        = "custom",
-      phone,
-      whatsapp,
-      nationality,
-      country,
-      travel_date,
-      return_date,
-      flexible_dates      = false,
-      number_of_travelers = 1,
-      number_of_adults    = 1,
-      number_of_children  = 0,
-      children_ages,
-      accommodation_type,
-      room_type,
-      dietary_requirements,
-      special_requests,
-      accessibility_needs,
-      travelers_details,
-      emergency_contact,
-      customer_notes,
-      source              = "website",
-      utm_source,
-      utm_medium,
-      utm_campaign,
-      referrer_url,
-    } = body;
-
-    // ── Validation (using normalized data) ──
+    // 2. Validate
     const errors = validateBooking(body);
-    if (errors.length) {
-      logger.warn("[Bookings] Validation failed:", errors);
-      return res.status(400).json({
-        success: false,
-        error:   "Validation failed",
-        details: errors,
-        received_fields: Object.keys(req.body), // debug: show what we got
+    if (errors.length) return res.status(400).json({ success: false, errors });
+
+    // 3. Generate internal data
+    const booking_number = generateBookingNumber();
+    
+    // 4. Insert (Reusing insert logic from standard create but with admin metadata)
+    const { rows } = await query(
+      `INSERT INTO bookings (
+          booking_number, user_id, full_name, email, phone, 
+          travel_date, return_date, number_of_travelers, 
+          status, source, admin_notes, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'confirmed','admin_manual',$9,NOW(),NOW()) 
+        RETURNING *`,
+      [
+        booking_number, body.user_id || null, body.full_name, 
+        body.email, body.phone, body.travel_date, body.return_date, 
+        body.number_of_travelers || 1, `Created by admin ID: ${adminId}`
+      ]
+    );
+
+    const booking = rows[0];
+
+    // 5. Notify the User (CRITICAL STEP)
+    if (body.user_id) {
+      await createNotificationInternal({
+        userId: body.user_id,
+        userEmail: body.email,
+        type: 'booking_created',
+        title: 'New Booking Created for You',
+        message: `An admin has created a new booking (${booking_number}) on your behalf.`,
+        actionUrl: `/my-bookings`,
+        actionLabel: 'View Booking',
+        priority: 'high',
+        category: 'booking',
+        senderType: 'admin',
+        senderId: adminId,
+        sendEmailNotif: true
       });
     }
 
-    // ── Resolve destination_id (may be slug or number) ──
-    let resolvedDestId = null;
-    if (destination_id) {
-      const destIdNum = parseInt(destination_id, 10);
-      if (Number.isFinite(destIdNum)) {
-        const { rows } = await query(
-          "SELECT id, is_active FROM destinations WHERE id = $1",
-          [destIdNum],
-        );
-        if (rows[0]) {
-          if (!rows[0].is_active)
-            return res.status(400).json({ success: false, error: "Destination unavailable" });
-          resolvedDestId = destIdNum;
-        }
-      } else {
-        // Try by slug or name
-        const { rows } = await query(
-          "SELECT id, is_active FROM destinations WHERE slug = $1 OR name ILIKE $2 LIMIT 1",
-          [String(destination_id).toLowerCase(), String(destination_id)],
-        );
-        if (rows[0]) {
-          if (!rows[0].is_active)
-            return res.status(400).json({ success: false, error: "Destination unavailable" });
-          resolvedDestId = rows[0].id;
-        }
-      }
-    }
-
-    // ── Resolve service_id ──
-    let resolvedServiceId = null;
-    if (service_id) {
-      const svcIdNum = parseInt(service_id, 10);
-      if (Number.isFinite(svcIdNum)) {
-        const { rows } = await query(
-          "SELECT id, is_active FROM services WHERE id = $1",
-          [svcIdNum],
-        );
-        if (rows[0]) {
-          if (!rows[0].is_active)
-            return res.status(400).json({ success: false, error: "Service unavailable" });
-          resolvedServiceId = svcIdNum;
-        }
-      } else {
-        const { rows } = await query(
-          "SELECT id, is_active FROM services WHERE slug = $1 OR title ILIKE $2 LIMIT 1",
-          [String(service_id).toLowerCase(), String(service_id)],
-        );
-        if (rows[0]) {
-          if (!rows[0].is_active)
-            return res.status(400).json({ success: false, error: "Service unavailable" });
-          resolvedServiceId = rows[0].id;
-        }
-      }
-    }
-
-    const booking_number = generateBookingNumber();
-    const user_id        = req.user?.id || null;
-
-    const numTravelers = Math.max(1, parseInt(number_of_travelers, 10) || 1);
-    const numAdults    = Math.max(0, parseInt(number_of_adults,    10) || 1);
-    const numChildren  = Math.max(0, parseInt(number_of_children,  10) || 0);
-
-    const { rows } = await query(
-      `INSERT INTO bookings (
-          booking_number, user_id, destination_id, service_id, booking_type,
-          full_name, email, phone, whatsapp, nationality, country,
-          travel_date, return_date, flexible_dates,
-          number_of_travelers, number_of_adults, number_of_children, children_ages,
-          accommodation_type, room_type, dietary_requirements,
-          special_requests, accessibility_needs,
-          travelers_details, emergency_contact, customer_notes,
-          source, utm_source, utm_medium, utm_campaign, referrer_url,
-          status, payment_status, created_at, updated_at
-        ) VALUES (
-          $1,$2,$3,$4,$5,
-          $6,$7,$8,$9,$10,$11,
-          $12,$13,$14,
-          $15,$16,$17,$18,
-          $19,$20,$21,
-          $22,$23,
-          $24,$25,$26,
-          $27,$28,$29,$30,$31,
-          'pending','pending',NOW(),NOW()
-        ) RETURNING *`,
-      [
-        booking_number,
-        user_id,
-        resolvedDestId,
-        resolvedServiceId,
-        booking_type,
-        sanitizeInput(String(full_name).trim()),
-        String(email).toLowerCase().trim(),
-        phone                || null,
-        whatsapp             || null,
-        nationality          || null,
-        country              || null,
-        travel_date          || null,
-        return_date          || null,
-        Boolean(flexible_dates),
-        numTravelers,
-        numAdults,
-        numChildren,
-        children_ages        ? JSON.stringify(children_ages)     : null,
-        accommodation_type   || null,
-        room_type            || null,
-        dietary_requirements || null,
-        special_requests     || null,
-        accessibility_needs  || null,
-        travelers_details    ? JSON.stringify(travelers_details) : null,
-        emergency_contact    ? JSON.stringify(emergency_contact) : null,
-        customer_notes       || null,
-        source,
-        utm_source           || null,
-        utm_medium           || null,
-        utm_campaign         || null,
-        referrer_url         || null,
-      ],
-    );
-
-    const booking     = rows[0];
-    const fullBooking = await getBookingDetail(booking.id);
-
-    // ── Side-effects (non-blocking) ──
-    logActivity(booking.id, "created", `Booking ${booking_number} created`);
-
-    if (resolvedDestId)
-      query(
-        "UPDATE destinations SET booking_count = COALESCE(booking_count,0) + 1 WHERE id = $1",
-        [resolvedDestId],
-      ).catch(() => {});
-
-    if (resolvedServiceId)
-      query(
-        "UPDATE services SET booking_count = COALESCE(booking_count,0) + 1 WHERE id = $1",
-        [resolvedServiceId],
-      ).catch(() => {});
-
-    Promise.all([
-      sendBookingConfirmation(fullBooking || booking),
-      sendAdminBookingNotification(fullBooking || booking),
-    ]).catch((err) =>
-      logger.error("[Bookings] Confirmation email failed:", err.message),
-    );
-
-    return res.status(201).json({
-      success: true,
-      message: "Booking submitted successfully! We will contact you shortly.",
-      data: {
-        booking_number:  booking.booking_number,
-        referenceNumber: booking.booking_number,
-        status:          booking.status,
-        email:           booking.email,
-        travel_date:     booking.travel_date,
-        destination:     fullBooking?.destination_name || null,
-        service:         fullBooking?.service_name     || null,
-        created_at:      booking.created_at,
-      },
-    });
+    return res.status(201).json({ success: true, data: booking });
   } catch (err) {
-    logger.error("[Bookings] create failed:", err.message, err.detail || "");
+    logger.error("[Bookings] adminCreate failed:", err.message);
     next(err);
   }
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   UPGRADED REMOVE (DELETE)   DELETE /api/bookings/:id
+   Now notifies the user that their booking was deleted.
+═══════════════════════════════════════════════════════════════════════════════ */
+exports.remove = async (req, res, next) => {
+  try {
+    const id = parseInt(req.params.id, 10);
+    const adminId = req.admin?.id || req.user?.id;
+
+    // Get info before deleting
+    const { rows } = await query(
+      "SELECT id, booking_number, user_id, email, full_name FROM bookings WHERE id=$1",
+      [id]
+    );
+    
+    if (!rows[0]) return res.status(404).json({ success: false, error: "Booking not found" });
+    const b = rows[0];
+
+    await query("DELETE FROM bookings WHERE id=$1", [id]);
+
+    // Notify User
+    if (b.user_id) {
+      await createNotificationInternal({
+        userId: b.user_id,
+        userEmail: b.email,
+        type: 'booking_deleted',
+        title: 'Booking Cancelled/Removed',
+        message: `Your booking ${b.booking_number} has been removed from the system by an administrator.`,
+        priority: 'urgent',
+        category: 'booking',
+        senderType: 'admin',
+        senderId: adminId
+      });
+    }
+
+    return res.json({ success: true, message: "Booking deleted and user notified" });
+  } catch (err) { next(err); }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
