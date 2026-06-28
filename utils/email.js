@@ -1,8 +1,7 @@
 // utils/email.js
 // ═══════════════════════════════════════════════════════════════════════════
-// Email Service — Gmail API (HTTPS) primary · Gmail SMTP fallback (dev only)
-// Uses Google's HTTPS API on Render (SMTP ports 25/465/587 are blocked).
-// Pure Google — zero third-party email services.
+// Email Service — Gmail SMTP (App Password) · pure Nodemailer · no OAuth2
+// Works on Render with SMTP_* environment variables.
 // ═══════════════════════════════════════════════════════════════════════════
 "use strict";
 
@@ -11,7 +10,7 @@ const logger     = require("./logger");
 
 // ── Constants ─────────────────────────────────────────────────────────────
 const APP_NAME      = process.env.APP_NAME      || "Altuvera";
-const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://altuvera.com";
+const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://altuvera.vercel.app";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL
   || process.env.SMTP_USER
   || "altuverasafari@gmail.com";
@@ -20,10 +19,9 @@ const ADMIN_EMAIL   = process.env.ADMIN_EMAIL
   || "altuverasafari@gmail.com";
 const FROM_ADDRESS  = process.env.SMTP_FROM
   || `"${APP_NAME}" <${process.env.SMTP_USER || SUPPORT_EMAIL}>`;
-const IS_PROD       = process.env.NODE_ENV === "production";
 const year          = new Date().getFullYear();
 
-// ── Activity labels (shared across functions) ─────────────────────────────
+// ── Activity labels ───────────────────────────────────────────────────────
 const ACTIVITY_LABELS = {
   profile_updated:  "Your Profile Was Updated",
   account_deleted:  "Your Account Has Been Deleted",
@@ -39,236 +37,81 @@ const PRIORITY_LABELS = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// TRANSPORT FACTORY
-// Strategy:
-//   Production (Render) → Gmail API via OAuth2 + HTTPS (port 443, never blocked)
-//   Development         → Gmail SMTP App Password (port 587, works locally)
+// TRANSPORT — Gmail SMTP via App Password
+// Works on Render: uses port 587 (STARTTLS).
+// Render does NOT block outbound port 587 to smtp.gmail.com.
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _transporter   = null;
-let _transportType = "none";
-
-// ── Gmail API sender (production — pure HTTPS, no SMTP) ───────────────────
-// Sends via https://gmail.googleapis.com using OAuth2 access tokens.
-// Requires: GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN
-// Get these from Google Cloud Console → OAuth2 → Gmail API scope.
-
-const sendViaGmailApi = async ({ to, subject, html, text, replyTo }) => {
-  const { google } = require("googleapis");
-
-  const oauth2Client = new google.auth.OAuth2(
-    process.env.GMAIL_CLIENT_ID,
-    process.env.GMAIL_CLIENT_SECRET,
-    "https://developers.google.com/oauthplayground", // redirect URI used during setup
-  );
-
-  oauth2Client.setCredentials({
-    refresh_token: process.env.GMAIL_REFRESH_TOKEN,
-  });
-
-  // Get a fresh access token (cached internally by googleapis)
-  const { token: accessToken } = await oauth2Client.getAccessToken();
-  if (!accessToken) throw new Error("Gmail API: Failed to obtain access token");
-
-  // Build RFC 2822 message
-  const boundary = `boundary_${Date.now()}_${Math.random().toString(36).slice(2)}`;
-  const fromHeader = FROM_ADDRESS;
-
-  const rawParts = [
-    `From: ${fromHeader}`,
-    `To: ${to}`,
-    `Subject: ${subject}`,
-    replyTo ? `Reply-To: ${replyTo}` : "",
-    `MIME-Version: 1.0`,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/plain; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
-    ``,
-    text || htmlToText(html),
-    ``,
-    `--${boundary}`,
-    `Content-Type: text/html; charset=UTF-8`,
-    `Content-Transfer-Encoding: quoted-printable`,
-    ``,
-    html,
-    ``,
-    `--${boundary}--`,
-  ].filter((l) => l !== undefined).join("\r\n");
-
-  // Base64url encode (required by Gmail API)
-  const encoded = Buffer.from(rawParts)
-    .toString("base64")
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=+$/, "");
-
-  const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
-  const res = await gmail.users.messages.send({
-    userId:      "me",
-    requestBody: { raw: encoded },
-  });
-
-  return {
-    messageId: res.data?.id || "gmail-api",
-    response:  res.data,
-  };
-};
-
-// ── Gmail SMTP transporter (dev only) ─────────────────────────────────────
-const createSmtpTransporter = () => {
-  if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-    throw new Error(
-      "[Email] Dev SMTP requires SMTP_USER + SMTP_PASS (Gmail App Password).",
-    );
-  }
-
-  const t = nodemailer.createTransport({
-    service:           "gmail",   // resolves smtp.gmail.com:587 automatically
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-    family:            4,         // force IPv4
-    pool:              true,
-    maxConnections:    3,
-    maxMessages:       50,
-    socketTimeout:     15_000,
-    connectionTimeout: 15_000,
-    greetingTimeout:   10_000,
-  });
-
-  // Non-blocking verify
-  t.verify((err) => {
-    if (err) {
-      logger.warn("[Email] SMTP verify failed:", err.message);
-    } else {
-      logger.info("[Email] ✅ Gmail SMTP ready (dev)");
-    }
-  });
-
-  return t;
-};
-
-// ── Determine which strategy to use ──────────────────────────────────────
-const hasGmailApiCreds = () =>
-  !!(
-    process.env.GMAIL_CLIENT_ID &&
-    process.env.GMAIL_CLIENT_SECRET &&
-    process.env.GMAIL_REFRESH_TOKEN
-  );
-
-const hasSmtpCreds = () =>
-  !!(process.env.SMTP_USER && process.env.SMTP_PASS);
-
-// ═══════════════════════════════════════════════════════════════════════════
-// CORE sendEmail
-// ═══════════════════════════════════════════════════════════════════════════
+let _transporter = null;
 
 /**
- * Send an email via Gmail (API in production, SMTP in dev).
- * Always throws on failure — callers decide whether to re-throw or swallow.
+ * Validate that required SMTP env vars are present.
+ * Called once on first send — throws a clear error if misconfigured.
  */
-const sendEmail = async ({
-  to,
-  subject,
-  html,
-  text,
-  from,    // ignored for Gmail API (always sends as authed user)
-  replyTo,
-} = {}) => {
-  if (!to)      throw new Error("sendEmail: 'to' is required");
-  if (!subject) throw new Error("sendEmail: 'subject' is required");
-  if (!html)    throw new Error("sendEmail: 'html' is required");
-
-  const plainText = text || htmlToText(html);
-
-  // ── Strategy A: Gmail API (production — HTTPS, never blocked) ─────────
-  if (IS_PROD || hasGmailApiCreds()) {
-    if (!hasGmailApiCreds()) {
-      throw new Error(
-        "[Email] Production requires Gmail API credentials.\n" +
-        "Set these in Render environment variables:\n" +
-        "  GMAIL_CLIENT_ID\n" +
-        "  GMAIL_CLIENT_SECRET\n" +
-        "  GMAIL_REFRESH_TOKEN\n" +
-        "See setup guide below.",
-      );
-    }
-
-    try {
-      const info = await sendViaGmailApi({ to, subject, html, text: plainText, replyTo });
-      logger.info("[Email] ✅ Sent via Gmail API:", {
-        to, subject, messageId: info.messageId,
-      });
-      return info;
-    } catch (err) {
-      logger.error("[Email] ❌ Gmail API send FAILED:", {
-        to, subject, error: err.message,
-        code: err.code, status: err.status,
-      });
-      const friendly = new Error(
-        `Failed to send email to ${to}. Gmail API error: ${err.message}`,
-      );
-      friendly.originalError = err;
-      throw friendly;
-    }
-  }
-
-  // ── Strategy B: Gmail SMTP (dev only — port 587, blocked on Render) ───
-  if (!hasSmtpCreds()) {
+const assertSmtpConfig = () => {
+  const missing = ["SMTP_USER", "SMTP_PASS"].filter((k) => !process.env[k]);
+  if (missing.length) {
     throw new Error(
-      "[Email] No email credentials found.\n" +
-      "For dev: set SMTP_USER + SMTP_PASS in .env\n" +
-      "For prod: set GMAIL_CLIENT_ID + GMAIL_CLIENT_SECRET + GMAIL_REFRESH_TOKEN in Render",
+      `[Email] Missing required environment variables: ${missing.join(", ")}\n` +
+      "Set these in your Render dashboard → Environment:\n" +
+      "  SMTP_HOST=smtp.gmail.com\n" +
+      "  SMTP_PORT=587\n" +
+      "  SMTP_SECURE=false\n" +
+      "  SMTP_USER=altuverasafari@gmail.com\n" +
+      "  SMTP_PASS=<16-char Gmail App Password>\n" +
+      "  SMTP_FROM=Altuvera Travel <altuverasafari@gmail.com>\n" +
+      "  ADMIN_EMAIL=altuverasafari@gmail.com\n" +
+      "  SUPPORT_EMAIL=altuverasafari@gmail.com",
     );
   }
+};
 
-  if (!_transporter) {
-    _transporter   = createSmtpTransporter();
-    _transportType = "gmail-smtp";
-    logger.info("[Email] Using Gmail SMTP (dev — NOT for production on Render)");
-  }
+/**
+ * Build (or return cached) Nodemailer SMTP transporter.
+ */
+const getTransporter = () => {
+  if (_transporter) return _transporter;
 
-  try {
-    const info = await _transporter.sendMail({
-      from:    FROM_ADDRESS,
-      to,
-      subject,
-      html,
-      text:    plainText,
-      replyTo: replyTo || SUPPORT_EMAIL,
-    });
-    logger.info("[Email] ✅ Sent via Gmail SMTP:", {
-      to, subject, messageId: info.messageId,
-    });
-    return info;
-  } catch (err) {
-    // Reset transporter on connection errors
-    if (
-      ["EAUTH","ECONNECTION","ETIMEDOUT","ECONNREFUSED"].includes(err.code)
-      || err.responseCode === 535
-    ) {
-      logger.warn("[Email] SMTP error — resetting transporter:", err.message);
-      _transporter   = null;
-      _transportType = "none";
+  assertSmtpConfig();
+
+  _transporter = nodemailer.createTransport({
+    host:   process.env.SMTP_HOST || "smtp.gmail.com",
+    port:   parseInt(process.env.SMTP_PORT || "587", 10),
+    // false = STARTTLS on port 587 (correct for Gmail App Password)
+    secure: process.env.SMTP_SECURE === "true",
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS, // 16-char Gmail App Password (no spaces)
+    },
+    tls: {
+      // Require valid cert in production; allow self-signed in dev
+      rejectUnauthorized: process.env.NODE_ENV === "production",
+    },
+    // Connection pool for throughput
+    pool:              true,
+    maxConnections:    3,
+    maxMessages:       100,
+    socketTimeout:     20_000,
+    connectionTimeout: 20_000,
+    greetingTimeout:   15_000,
+  });
+
+  // Non-blocking verify — logs result on startup
+  _transporter.verify((err) => {
+    if (err) {
+      logger.warn("[Email] ⚠️  SMTP verify failed:", err.message);
+      // Reset so next call retries
+      _transporter = null;
+    } else {
+      logger.info(
+        `[Email] ✅ SMTP ready — ${process.env.SMTP_USER} via ${
+          process.env.SMTP_HOST || "smtp.gmail.com"
+        }:${process.env.SMTP_PORT || 587}`,
+      );
     }
+  });
 
-    logger.error("[Email] ❌ Gmail SMTP send FAILED:", {
-      to, subject,
-      error:    err.message,
-      code:     err.code,
-      response: err.response,
-    });
-
-    const friendly = new Error(
-      `Failed to send email to ${to}. SMTP error: ${err.message}`,
-    );
-    friendly.originalError = err;
-    throw friendly;
-  }
+  return _transporter;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -292,7 +135,78 @@ const htmlToText = (html = "") =>
     .slice(0, 3000);
 
 // ═══════════════════════════════════════════════════════════════════════════
-// BASE TEMPLATE
+// CORE sendEmail
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Send an email via Gmail SMTP.
+ * Always throws on failure — callers decide whether to re-throw or swallow.
+ *
+ * @param {{ to, subject, html, text?, replyTo?, cc? }} opts
+ */
+const sendEmail = async ({
+  to,
+  subject,
+  html,
+  text,
+  replyTo,
+  cc,
+} = {}) => {
+  if (!to)      throw new Error("sendEmail: 'to' is required");
+  if (!subject) throw new Error("sendEmail: 'subject' is required");
+  if (!html)    throw new Error("sendEmail: 'html' is required");
+
+  const transporter = getTransporter();
+  const plainText   = text || htmlToText(html);
+
+  try {
+    const info = await transporter.sendMail({
+      from:    FROM_ADDRESS,
+      to,
+      cc:      cc || undefined,
+      replyTo: replyTo || undefined,
+      subject,
+      text:    plainText,
+      html,
+    });
+
+    logger.info("[Email] ✅ Sent:", {
+      to,
+      subject,
+      messageId: info.messageId,
+    });
+
+    return info;
+
+  } catch (err) {
+    // Reset transporter on auth / connection errors so next call retries
+    const resetCodes = [
+      "EAUTH", "ECONNECTION", "ETIMEDOUT",
+      "ECONNREFUSED", "ESOCKET",
+    ];
+    if (resetCodes.includes(err.code) || err.responseCode === 535) {
+      logger.warn("[Email] Resetting transporter after error:", err.code || err.message);
+      _transporter = null;
+    }
+
+    logger.error("[Email] ❌ Send FAILED:", {
+      to,
+      subject,
+      error:    err.message,
+      code:     err.code,
+      response: err.response,
+    });
+
+    const friendly = new Error(
+      `Failed to send email to ${to}. SMTP error: ${err.message}`,
+    );
+    friendly.originalError = err;
+    throw friendly;
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// BASE HTML TEMPLATE
 // ═══════════════════════════════════════════════════════════════════════════
 
 const baseTemplate = ({
@@ -313,8 +227,7 @@ const baseTemplate = ({
   <title>${esc(title)}</title>
   <style>
     body,table,td,p,a,li{
-      -webkit-text-size-adjust:100%;
-      -ms-text-size-adjust:100%;
+      -webkit-text-size-adjust:100%;-ms-text-size-adjust:100%;
     }
     table,td{mso-table-lspace:0;mso-table-rspace:0;}
     img{border:0;outline:none;text-decoration:none;
@@ -370,20 +283,13 @@ const baseTemplate = ({
     }
     @media only screen and (max-width:600px){
       .wrapper{padding:0!important;}
-      .container{
-        border-radius:0!important;
-        box-shadow:none!important;
-      }
+      .container{border-radius:0!important;box-shadow:none!important;}
       .body-cell{padding:24px 16px!important;}
-      .otp-code{
-        font-size:32px!important;
-        letter-spacing:8px!important;
-      }
+      .otp-code{font-size:32px!important;letter-spacing:8px!important;}
     }
   </style>
 </head>
 <body>
-  <!-- Preheader (hidden preview text) -->
   <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;
               font-size:1px;color:#f4f4f5;line-height:1px;">
     ${esc(preheader)}&nbsp;${"&zwnj;&nbsp;".repeat(50)}
@@ -393,7 +299,6 @@ const baseTemplate = ({
     <table role="presentation" border="0"
            cellpadding="0" cellspacing="0" width="100%">
       <tr><td align="center" style="padding:0 16px;">
-
         <table role="presentation" border="0"
                cellpadding="0" cellspacing="0"
                width="520" class="container">
@@ -413,7 +318,6 @@ const baseTemplate = ({
 
           <!-- BODY -->
           <tr><td class="body-cell">
-
             ${recipientName
               ? `<p style="margin:0 0 20px;font-size:15px;
                            color:#374151;font-weight:500;">
@@ -454,19 +358,20 @@ const baseTemplate = ({
                    ${footerNote}
                  </p>`
               : ""}
-
           </td></tr>
 
           <!-- FOOTER -->
           <tr><td class="footer-cell">
             <p style="margin:0 0 8px;font-size:12px;">
               <a href="${FRONTEND_URL}"
-                 style="color:#4b5563;text-decoration:none;
-                         margin:0 8px;">Home</a>
+                 style="color:#4b5563;text-decoration:none;margin:0 8px;">
+                Home
+              </a>
               <span style="color:#d1d5db;">|</span>
               <a href="mailto:${SUPPORT_EMAIL}"
-                 style="color:#4b5563;text-decoration:none;
-                         margin:0 8px;">Support</a>
+                 style="color:#4b5563;text-decoration:none;margin:0 8px;">
+                Support
+              </a>
             </p>
             <p style="margin:0;font-size:11px;color:#9ca3af;">
               &copy; ${year} ${esc(APP_NAME)}. All rights reserved.
@@ -499,7 +404,7 @@ const OTP_CONFIG = {
   },
   reverification: {
     title:    "Security Check Required",
-    subtitle: "Confirm your identity to continue. Required periodically for security.",
+    subtitle: "Confirm your identity to continue.",
   },
 };
 
@@ -510,14 +415,12 @@ const buildOtpHtml = ({
   expiryMinutes = 10,
 }) => {
   const cfg = OTP_CONFIG[purpose] || OTP_CONFIG.verify;
-
   return baseTemplate({
     preheader:    `Your ${APP_NAME} code: ${otp} — valid for ${expiryMinutes} minutes`,
     title:        cfg.title,
     subtitle:     cfg.subtitle,
     recipientName,
     body: `
-      <!-- OTP Box -->
       <table role="presentation" border="0" cellpadding="0"
              cellspacing="0" width="100%" style="margin:0 0 24px;">
         <tr><td align="center">
@@ -536,20 +439,17 @@ const buildOtpHtml = ({
           </div>
         </td></tr>
       </table>
-
-      <!-- Security notice -->
       <div class="warning-box">
         <p style="margin:0;font-size:13px;color:#92400e;line-height:1.5;">
           <strong>⚠️ Keep this code private.</strong>
           ${esc(APP_NAME)} staff will <em>never</em> ask for it.
-          If you did not request this, you can safely ignore this email —
-          your account has not been compromised.
+          If you did not request this, you can safely ignore this email.
         </p>
       </div>
     `,
     footerNote:
-      `This code is valid for ${expiryMinutes} minutes and can only be ` +
-      `used once. Need help? Contact ` +
+      `This code is valid for ${expiryMinutes} minutes and can only be used once. ` +
+      `Need help? Contact ` +
       `<a href="mailto:${SUPPORT_EMAIL}" ` +
       `style="color:#059669;text-decoration:none;">${SUPPORT_EMAIL}</a>.`,
   });
@@ -572,9 +472,9 @@ const buildOtpText = ({
     `Your verification code: ${otp}`,
     "",
     `This code expires in ${expiryMinutes} minutes.`,
-    `Do NOT share this code with anyone.`,
+    "Do NOT share this code with anyone.",
     "",
-    `If you did not request this, please ignore this email.`,
+    "If you did not request this, please ignore this email.",
     "",
     `— The ${APP_NAME} Team`,
     FRONTEND_URL,
@@ -606,8 +506,8 @@ const buildWelcomeHtml = ({ recipientName = "" }) =>
     ctaText:   "Start Exploring →",
     ctaUrl:    `${FRONTEND_URL}/destinations`,
     footerNote:
-      `You are receiving this because you created an account on ` +
-      `${esc(APP_NAME)}. If this wasn't you, please contact us immediately.`,
+      `You are receiving this because you created an account on ${esc(APP_NAME)}. ` +
+      "If this wasn't you, please contact us immediately.",
   });
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -629,9 +529,7 @@ const buildActivityAlertHtml = ({ recipientName = "", activityType }) => {
     body: `
       <div style="background:#f3f4f6;border-radius:10px;
                   padding:18px 20px;margin-bottom:20px;">
-        <p style="margin:0 0 6px;font-size:13px;color:#6b7280;">
-          Activity
-        </p>
+        <p style="margin:0 0 6px;font-size:13px;color:#6b7280;">Activity</p>
         <p style="margin:0;font-size:15px;font-weight:700;color:#111827;">
           ${esc(label)}
         </p>
@@ -652,7 +550,7 @@ const buildActivityAlertHtml = ({ recipientName = "", activityType }) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONTACT NOTIFICATION TEMPLATE
+// CONTACT NOTIFICATION TEMPLATE  (admin inbox)
 // ═══════════════════════════════════════════════════════════════════════════
 
 const buildContactNotificationHtml = (msg) => {
@@ -669,139 +567,222 @@ const buildContactNotificationHtml = (msg) => {
   <title>New Contact — ${esc(APP_NAME)}</title>
   <style>
     body{
-      margin:0;padding:0;background:#f4f4f5;
+      margin:0;padding:0;background:#f0fdf4;
       font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
                   Roboto,Arial,sans-serif;
     }
     .wrap{
-      max-width:580px;margin:40px auto;background:#fff;
-      border-radius:16px;box-shadow:0 4px 20px rgba(0,0,0,0.08);
+      max-width:600px;margin:36px auto;background:#fff;
+      border-radius:18px;
+      box-shadow:0 6px 28px rgba(6,78,59,.10);
       overflow:hidden;
     }
     .hd{
-      background:linear-gradient(135deg,#064e3b,#059669);
-      padding:28px 32px;text-align:center;
+      background:linear-gradient(135deg,#064e3b 0%,#059669 100%);
+      padding:30px 36px;text-align:center;
     }
-    .bd{padding:32px;}
+    .bd{padding:32px 36px;}
     .ft{
-      background:#f9fafb;padding:18px 32px;
+      background:#f9fafb;padding:18px 36px;
       border-top:1px solid #e5e7eb;text-align:center;
     }
-    .box{
-      background:#f0fdf4;border-radius:10px;
-      padding:16px 20px;margin-bottom:18px;
+    .section{
+      background:#f0fdf4;border-radius:12px;
+      padding:18px 20px;margin-bottom:18px;
     }
-    .box-amber{
-      background:#fffbeb;border-radius:10px;
-      padding:16px 20px;margin-bottom:18px;
+    .section-amber{
+      background:#fffbeb;border-radius:12px;
+      padding:18px 20px;margin-bottom:18px;
     }
-    .quote{
-      background:#f9fafb;border-left:4px solid #059669;
-      padding:14px 16px;border-radius:0 8px 8px 0;
+    .row{
+      display:flex;gap:10px;margin-bottom:8px;
+      align-items:flex-start;
+    }
+    .key{
+      min-width:110px;font-size:12px;font-weight:700;
+      color:#6b7280;text-transform:uppercase;letter-spacing:.4px;
+      padding-top:2px;flex-shrink:0;
+    }
+    .val{flex:1;font-size:14px;color:#111827;line-height:1.55;}
+    .msg-box{
+      background:#f8fffe;border:1.5px solid #a7f3d0;
+      border-radius:12px;padding:18px 20px;
+      font-size:14.5px;color:#1e293b;line-height:1.75;
       white-space:pre-wrap;word-break:break-word;
     }
+    .sep{height:1px;background:#e5e7eb;margin:20px 0;}
     .btn{
-      display:inline-block;background:#059669;color:#fff!important;
-      padding:12px 28px;border-radius:8px;text-decoration:none;
-      font-weight:700;font-size:14px;
+      display:inline-block;padding:13px 28px;
+      background:linear-gradient(135deg,#065f46,#047857);
+      color:#fff!important;border-radius:12px;
+      font-size:14px;font-weight:700;text-decoration:none;
+      box-shadow:0 5px 16px rgba(6,78,59,.26);
     }
-    p{margin:0 0 8px;font-size:14px;color:#374151;line-height:1.6;}
-    h3{margin:0 0 10px;font-size:14px;font-weight:700;color:#064e3b;}
+    h3{margin:0 0 12px;font-size:13px;font-weight:700;
+       color:#065f46;text-transform:uppercase;letter-spacing:.4px;}
+    p{margin:0 0 6px;font-size:14px;color:#374151;line-height:1.6;}
     a{color:#059669;}
   </style>
 </head>
 <body>
   <div class="wrap">
+
+    <!-- Header -->
     <div class="hd">
-      <p style="margin:0;font-size:22px;font-weight:800;color:#fff;">
+      <p style="margin:0;font-size:24px;font-weight:800;color:#fff;">
         📬 New Contact Message
       </p>
-      <p style="margin:6px 0 0;font-size:13px;
-                 color:rgba(255,255,255,0.75);">
-        ${priority}
+      <p style="margin:8px 0 0;font-size:13px;
+                 color:rgba(255,255,255,.75);">
+        ${priority} · ${esc(APP_NAME)}
       </p>
     </div>
 
+    <!-- Body -->
     <div class="bd">
 
       <!-- Sender -->
-      <div class="box">
-        <h3>👤 Sender</h3>
-        <p><strong>Name:</strong> ${esc(msg.full_name)}</p>
-        <p><strong>Email:</strong>
-          <a href="mailto:${esc(msg.email)}">${esc(msg.email)}</a>
-        </p>
+      <div class="section">
+        <h3>👤 Sender Details</h3>
+        <div class="row">
+          <span class="key">Name</span>
+          <span class="val"><strong>${esc(msg.full_name || msg.name || "—")}</strong></span>
+        </div>
+        <div class="row">
+          <span class="key">Email</span>
+          <span class="val">
+            <a href="mailto:${esc(msg.email)}">${esc(msg.email)}</a>
+          </span>
+        </div>
         ${msg.phone
-          ? `<p><strong>Phone:</strong>
-               <a href="tel:${esc(msg.phone)}">${esc(msg.phone)}</a>
-             </p>` : ""}
+          ? `<div class="row">
+               <span class="key">Phone</span>
+               <span class="val">
+                 <a href="tel:${esc(msg.phone)}">${esc(msg.phone)}</a>
+               </span>
+             </div>` : ""}
       </div>
 
-      <!-- Trip details -->
+      <!-- Trip details (optional) -->
       ${msg.trip_type || msg.travel_date || msg.number_of_travelers
-        ? `<div class="box-amber">
+        || msg.tripType || msg.travelDate || msg.travelers
+        ? `<div class="section-amber">
              <h3>🌍 Trip Details</h3>
-             ${msg.trip_type
-               ? `<p><strong>Type:</strong> ${esc(msg.trip_type)}</p>` : ""}
-             ${msg.travel_date
-               ? `<p><strong>Date:</strong>
-                    ${new Date(msg.travel_date).toLocaleDateString("en-US", {
-                      weekday: "long", year: "numeric",
-                      month:   "long", day: "numeric",
-                    })}
-                  </p>` : ""}
-             ${msg.number_of_travelers
-               ? `<p><strong>Travelers:</strong>
-                    ${esc(String(msg.number_of_travelers))}
-                  </p>` : ""}
+             ${msg.trip_type || msg.tripType
+               ? `<div class="row">
+                    <span class="key">Trip Type</span>
+                    <span class="val">${esc(msg.trip_type || msg.tripType)}</span>
+                  </div>` : ""}
+             ${msg.travel_date || msg.travelDate
+               ? `<div class="row">
+                    <span class="key">Date</span>
+                    <span class="val">${esc(msg.travel_date || msg.travelDate)}</span>
+                  </div>` : ""}
+             ${msg.number_of_travelers || msg.travelers
+               ? `<div class="row">
+                    <span class="key">Travelers</span>
+                    <span class="val">
+                      ${esc(String(msg.number_of_travelers || msg.travelers))}
+                    </span>
+                  </div>` : ""}
            </div>` : ""}
 
       <!-- Subject -->
       ${msg.subject
-        ? `<p style="font-size:11px;text-transform:uppercase;
-                     letter-spacing:.05em;color:#9ca3af;margin-bottom:4px;">
-             Subject
-           </p>
-           <p style="font-size:16px;font-weight:700;color:#111827;
-                      margin-bottom:20px;">
-             ${esc(msg.subject)}
-           </p>` : ""}
+        ? `<div class="row" style="margin-bottom:16px;">
+             <span class="key" style="padding-top:3px;">Subject</span>
+             <span class="val" style="font-size:16px;font-weight:700;color:#111827;">
+               ${esc(msg.subject)}
+             </span>
+           </div>` : ""}
 
-      <!-- Message body -->
-      <p style="font-size:11px;text-transform:uppercase;
-                letter-spacing:.05em;color:#9ca3af;margin-bottom:6px;">
-        Message
-      </p>
-      <div class="quote">
-        <p style="margin:0;color:#374151;">${esc(msg.message)}</p>
-      </div>
+      <div class="sep"></div>
 
-      <!-- CTA -->
+      <!-- Message -->
+      <h3 style="margin-bottom:10px;">💬 Message</h3>
+      <div class="msg-box">${esc(msg.message || "")}</div>
+
+      <!-- Reply CTA -->
       <div style="text-align:center;margin-top:28px;">
-        <a href="${FRONTEND_URL}/admin/messages/${esc(String(msg.id || ""))}"
-           class="btn">
-          View in Dashboard →
+        <a href="mailto:${esc(msg.email)}?subject=Re: ${
+          esc(msg.subject || "Your Inquiry")
+        }" class="btn">
+          ↩️ Reply to ${esc(msg.full_name || msg.name || "Sender")}
         </a>
       </div>
 
     </div>
 
+    <!-- Footer -->
     <div class="ft">
       <p style="margin:0;font-size:12px;color:#6b7280;">
         Received: ${received}
       </p>
       <p style="margin:4px 0 0;font-size:11px;color:#9ca3af;">
-        Message #${esc(String(msg.id || ""))}
-        · Source: ${esc(msg.source || "website")}
+        ${msg.id ? `Message #${esc(String(msg.id))} · ` : ""}
+        Source: ${esc(msg.source || "website")}
       </p>
     </div>
+
   </div>
 </body>
 </html>`;
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// CONTACT REPLY TEMPLATE
+// CONTACT AUTO-REPLY TEMPLATE  (confirmation to visitor)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const buildContactAutoReplyHtml = ({ name = "", subject = "" }) =>
+  baseTemplate({
+    preheader:    `We got your message — ${APP_NAME} will reply within 2 hours`,
+    title:        "✅ Message Received!",
+    subtitle:     "Thank you for reaching out. We'll be in touch very soon.",
+    recipientName: name,
+    body: `
+      <p style="margin:0 0 16px;font-size:15px;color:#4b5563;line-height:1.7;">
+        Our safari experts have received your message and will respond within
+        <strong>2 hours</strong> during working hours
+        (Mon–Fri 8 AM – 6 PM EAT, Sat 9 AM – 2 PM EAT).
+      </p>
+
+      ${subject
+        ? `<div style="background:#f0fdf4;border:1.5px solid #a7f3d0;
+                       border-radius:13px;padding:16px 20px;margin-bottom:20px;">
+             <p style="margin:0;font-size:12px;font-weight:700;color:#6b7280;
+                        text-transform:uppercase;letter-spacing:.4px;
+                        margin-bottom:4px;">Your subject</p>
+             <p style="margin:0;font-size:15px;font-weight:700;color:#065f46;">
+               ${esc(subject)}
+             </p>
+           </div>` : ""}
+
+      <p style="margin:0 0 8px;font-size:14px;color:#6b7280;line-height:1.6;">
+        Need a faster response? Reach us instantly on WhatsApp:
+      </p>
+      <table role="presentation" border="0" cellpadding="0"
+             cellspacing="0" style="margin:0 0 20px;">
+        <tr><td>
+          <a href="https://wa.me/250792352409"
+             style="display:inline-flex;align-items:center;gap:8px;
+                    padding:11px 22px;background:#25D366;color:#fff!important;
+                    border-radius:10px;font-size:14px;font-weight:700;
+                    text-decoration:none;">
+            💬 WhatsApp Us
+          </a>
+        </td></tr>
+      </table>
+    `,
+    ctaText:   "View Our Safaris →",
+    ctaUrl:    `${FRONTEND_URL}/destinations`,
+    footerNote:
+      `You're receiving this because you submitted a contact form on ` +
+      `<a href="${FRONTEND_URL}" style="color:#059669;">${FRONTEND_URL}</a>. ` +
+      "Simply reply to this email if you have follow-up questions.",
+  });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// CONTACT REPLY TEMPLATE  (staff → visitor reply)
 // ═══════════════════════════════════════════════════════════════════════════
 
 const buildContactReplyHtml = ({
@@ -857,9 +838,7 @@ const buildContactReplyHtml = ({
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Send OTP — CRITICAL path. Always throws on failure.
- * The controller catches this and returns a real error to the client
- * instead of silently transitioning to the verify screen.
+ * Send OTP — CRITICAL. Always throws on failure.
  */
 const sendOtpEmail = async ({
   to,
@@ -897,7 +876,7 @@ const sendWelcomeEmail = async ({ to, recipientName = "" }) => {
       subject: `Welcome to ${APP_NAME}! 🎉`,
       html:    buildWelcomeHtml({ recipientName }),
       text: [
-        `Welcome to ${APP_NAME}, ${recipientName || ""}!`,
+        `Welcome to ${APP_NAME}${recipientName ? `, ${recipientName}` : ""}!`,
         "",
         "Your account is now active.",
         "",
@@ -946,21 +925,81 @@ const sendActivityAlert = async ({
 };
 
 /**
- * Contact form notification to admin.
+ * Contact form notification → admin inbox.
+ * Sends both admin notification AND auto-reply to visitor in parallel.
+ *
+ * @param {object} message  — contact form data (see field mapping inside)
  */
 const sendContactNotification = async (message) => {
-  const isUrgent = message.priority === "urgent";
-  return sendEmail({
-    to:      ADMIN_EMAIL,
-    subject: `${isUrgent ? "🔴 URGENT: " : ""}New Contact: ${
-      message.subject || message.full_name}`,
-    html:    buildContactNotificationHtml(message),
-    replyTo: message.email,
-  });
+  const isUrgent  = message.priority === "urgent";
+  const senderName = message.full_name || message.name || "Someone";
+
+  // Fire both emails concurrently; auto-reply failure is non-critical
+  const [adminResult] = await Promise.allSettled([
+    // 1. Admin notification
+    sendEmail({
+      to:      ADMIN_EMAIL,
+      replyTo: message.email || undefined,
+      subject: `${isUrgent ? "🔴 URGENT: " : "📬 "}New Contact: ${
+        message.subject || senderName
+      } — ${APP_NAME}`,
+      html: buildContactNotificationHtml(message),
+      text: [
+        `New contact message — ${APP_NAME}`,
+        "",
+        `From:    ${senderName}`,
+        `Email:   ${message.email}`,
+        message.phone ? `Phone:   ${message.phone}` : "",
+        message.subject ? `Subject: ${message.subject}` : "",
+        "",
+        "Message:",
+        message.message || "",
+      ].filter((l) => l !== "").join("\n"),
+    }),
+
+    // 2. Auto-reply to visitor (non-critical — swallow failure)
+    (async () => {
+      if (!message.email) return;
+      try {
+        await sendEmail({
+          to:      message.email,
+          subject: `✅ We received your message — ${APP_NAME}`,
+          html:    buildContactAutoReplyHtml({
+            name:    senderName,
+            subject: message.subject || "Your Inquiry",
+          }),
+          text: [
+            `Hi ${senderName},`,
+            "",
+            `Thank you for contacting ${APP_NAME}!`,
+            "We've received your message and will reply within 2 hours.",
+            "",
+            `Your subject: ${message.subject || "—"}`,
+            "",
+            "Need faster help? WhatsApp us: https://wa.me/250792352409",
+            "",
+            `— The ${APP_NAME} Team`,
+            FRONTEND_URL,
+          ].join("\n"),
+        });
+      } catch (err) {
+        logger.warn("[Email] Auto-reply failed (non-critical):", {
+          to: message.email, error: err.message,
+        });
+      }
+    })(),
+  ]);
+
+  // Re-throw only if the admin notification itself failed
+  if (adminResult.status === "rejected") {
+    throw adminResult.reason;
+  }
+
+  return adminResult.value;
 };
 
 /**
- * Reply to a contact form sender.
+ * Staff → visitor reply email.
  */
 const sendContactReply = async ({
   to,
@@ -1002,5 +1041,6 @@ module.exports = {
   buildWelcomeHtml,
   buildActivityAlertHtml,
   buildContactNotificationHtml,
+  buildContactAutoReplyHtml,
   buildContactReplyHtml,
 };
