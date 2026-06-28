@@ -1,3 +1,11 @@
+
+
+const { setDefaultAutoSelectFamily } = require("net");
+try { setDefaultAutoSelectFamily(false); } catch { /* Node < 18.13 */ }
+
+// For older Node versions use this instead:
+const dns = require("dns");
+dns.setDefaultResultOrder("ipv4first");
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.8

@@ -77,36 +77,37 @@ const getTransporter = () => {
   _transporter = nodemailer.createTransport({
     host:   process.env.SMTP_HOST || "smtp.gmail.com",
     port:   parseInt(process.env.SMTP_PORT || "587", 10),
-    // false = STARTTLS on port 587 (correct for Gmail App Password)
     secure: process.env.SMTP_SECURE === "true",
     auth: {
       user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS, // 16-char Gmail App Password (no spaces)
+      pass: process.env.SMTP_PASS,
     },
+
+    // ── CRITICAL: force IPv4 ──────────────────────────────────────────
+    // Render's network cannot reach Gmail over IPv6.
+    // "smtp.gmail.com" resolves to both IPv4 + IPv6 — we must pin IPv4.
+    family: 4,
+
     tls: {
-      // Require valid cert in production; allow self-signed in dev
       rejectUnauthorized: process.env.NODE_ENV === "production",
     },
-    // Connection pool for throughput
     pool:              true,
     maxConnections:    3,
     maxMessages:       100,
-    socketTimeout:     20_000,
-    connectionTimeout: 20_000,
+    socketTimeout:     30_000,
+    connectionTimeout: 30_000,
     greetingTimeout:   15_000,
   });
 
-  // Non-blocking verify — logs result on startup
   _transporter.verify((err) => {
     if (err) {
       logger.warn("[Email] ⚠️  SMTP verify failed:", err.message);
-      // Reset so next call retries
       _transporter = null;
     } else {
       logger.info(
         `[Email] ✅ SMTP ready — ${process.env.SMTP_USER} via ${
           process.env.SMTP_HOST || "smtp.gmail.com"
-        }:${process.env.SMTP_PORT || 587}`,
+        }:${process.env.SMTP_PORT || 587} (IPv4)`
       );
     }
   });
