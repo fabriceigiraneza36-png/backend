@@ -1,8 +1,6 @@
-
-
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * BOOKINGS CONTROLLER v3.1
+ * BOOKINGS CONTROLLER v3.2 — Full Regeneration
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -17,13 +15,15 @@ const {
 } = require("../utils/helpers");
 const {
   sendEmail,
+  sendOtpEmail,
   sendBookingConfirmation,
   sendBookingStatusUpdate,
   sendBookingCancellation,
   sendAdminBookingNotification,
 } = require("../utils/email");
 const logger = require("../utils/logger");
-const { createNotificationInternal } = require('./notificationsController');
+const { createNotificationInternal } = require("./notificationsController");
+
 /* ═══════════════════════════════════════════════════════════════════════════════
    CONSTANTS
 ═══════════════════════════════════════════════════════════════════════════════ */
@@ -53,11 +53,12 @@ const ALLOWED_SORT_COL = new Set([
 ]);
 
 /* ─── OTP configuration ──────────────────────────────────────────────────── */
-const OTP_EXPIRY_MS    = 10 * 60 * 1000;
-const OTP_RESEND_MS    = 60 * 1000;
+const OTP_EXPIRY_MS    = 10 * 60 * 1000;   // 10 minutes
+const OTP_RESEND_MS    = 60 * 1000;         // 60 seconds
 const OTP_MAX_ATTEMPTS = 5;
 const OTP_LENGTH       = 6;
 
+/* ─── In-memory OTP store (auto-purged every 5 min) ─────────────────────── */
 const OTP_STORE = new Map();
 
 setInterval(() => {
@@ -89,47 +90,41 @@ const getStatusMessage = (status) =>
     refunded:  "This booking has been refunded.",
   }[status] || "Unknown status");
 
-/**
- * Normalize incoming booking data — maps frontend aliases to DB columns.
- * This is the KEY fix for the 400 "Validation failed" error.
- */
+/* ── normalizeBookingData ────────────────────────────────────────────────── */
 const normalizeBookingData = (raw) => {
   const d = { ...raw };
 
-  // ── Name aliases ──
-  if (!d.full_name && d.fullName)       d.full_name = d.fullName;
-  if (!d.full_name && d.name)           d.full_name = d.name;
+  // Name aliases
+  if (!d.full_name && d.fullName)      d.full_name = d.fullName;
+  if (!d.full_name && d.name)          d.full_name = d.name;
 
-  // ── Email aliases ──
-  if (!d.email && d.emailAddress)       d.email = d.emailAddress;
+  // Email aliases
+  if (!d.email && d.emailAddress)      d.email = d.emailAddress;
 
-  // ── Phone aliases ──
-  if (!d.phone && d.phoneNumber)        d.phone = d.phoneNumber;
-  if (!d.phone && d.telephone)          d.phone = d.telephone;
-  if (!d.whatsapp && d.whatsappNumber)  d.whatsapp = d.whatsappNumber;
+  // Phone aliases
+  if (!d.phone && d.phoneNumber)       d.phone = d.phoneNumber;
+  if (!d.phone && d.telephone)         d.phone = d.telephone;
+  if (!d.whatsapp && d.whatsappNumber) d.whatsapp = d.whatsappNumber;
 
-  // ── Destination aliases ──
-  if (!d.destination_id && d.destinationId)   d.destination_id = d.destinationId;
-  if (!d.destination_id && d.destination)     d.destination_id = d.destination;
-  if (!d.service_id && d.serviceId)           d.service_id     = d.serviceId;
-  if (!d.service_id && d.service)             d.service_id     = d.service;
+  // Destination / service / package aliases
+  if (!d.destination_id && d.destinationId)  d.destination_id = d.destinationId;
+  if (!d.destination_id && d.destination)    d.destination_id = d.destination;
+  if (!d.service_id     && d.serviceId)      d.service_id     = d.serviceId;
+  if (!d.service_id     && d.service)        d.service_id     = d.service;
+  if (!d.package_id     && d.packageId)      d.package_id     = d.packageId;
 
-  // ── Package aliases ──
-  if (!d.package_id && d.packageId)           d.package_id     = d.packageId;
-  if (!d.package_id && d.package_id)          d.package_id     = d.package_id;
+  // Booking type aliases
+  if (!d.booking_type && d.bookingType) d.booking_type = d.bookingType;
+  if (!d.booking_type && d.type)        d.booking_type = d.type;
 
-  // ── Booking type aliases ──
-  if (!d.booking_type && d.bookingType)       d.booking_type = d.bookingType;
-  if (!d.booking_type && d.type)              d.booking_type = d.type;
+  // Date aliases
+  if (!d.travel_date && d.travelDate)      d.travel_date = d.travelDate;
+  if (!d.travel_date && d.startDate)       d.travel_date = d.startDate;
+  if (!d.travel_date && d.departureDate)   d.travel_date = d.departureDate;
+  if (!d.return_date && d.returnDate)      d.return_date = d.returnDate;
+  if (!d.return_date && d.endDate)         d.return_date = d.endDate;
 
-  // ── Date aliases ──
-  if (!d.travel_date && d.travelDate)         d.travel_date  = d.travelDate;
-  if (!d.travel_date && d.startDate)          d.travel_date  = d.startDate;
-  if (!d.travel_date && d.departureDate)      d.travel_date  = d.departureDate;
-  if (!d.return_date && d.returnDate)         d.return_date  = d.returnDate;
-  if (!d.return_date && d.endDate)            d.return_date  = d.endDate;
-
-  // ── Traveler count aliases ──
+  // Traveler count aliases
   if (d.number_of_travelers === undefined && d.numberOfTravelers !== undefined)
     d.number_of_travelers = d.numberOfTravelers;
   if (d.number_of_travelers === undefined && d.travelers !== undefined)
@@ -149,27 +144,35 @@ const normalizeBookingData = (raw) => {
   if (d.number_of_children === undefined && d.children !== undefined)
     d.number_of_children = d.children;
 
-  // ── Accommodation aliases ──
-  if (!d.accommodation_type && d.accommodationType) d.accommodation_type = d.accommodationType;
-  if (!d.accommodation_type && d.accommodation)     d.accommodation_type = d.accommodation;
-  if (!d.room_type && d.roomType)                   d.room_type = d.roomType;
+  // Accommodation aliases
+  if (!d.accommodation_type && d.accommodationType)
+    d.accommodation_type = d.accommodationType;
+  if (!d.accommodation_type && d.accommodation)
+    d.accommodation_type = d.accommodation;
+  if (!d.room_type && d.roomType) d.room_type = d.roomType;
 
-  // ── Misc aliases ──
-  if (!d.special_requests && d.specialRequests)         d.special_requests    = d.specialRequests;
-  if (!d.special_requests && d.requests)                d.special_requests    = d.requests;
-  if (!d.dietary_requirements && d.dietaryRequirements) d.dietary_requirements = d.dietaryRequirements;
-  if (!d.dietary_requirements && d.dietary)             d.dietary_requirements = d.dietary;
-  if (!d.accessibility_needs && d.accessibilityNeeds)   d.accessibility_needs = d.accessibilityNeeds;
-  if (!d.customer_notes && d.customerNotes)             d.customer_notes      = d.customerNotes;
-  if (!d.customer_notes && d.notes)                     d.customer_notes      = d.notes;
-  if (!d.customer_notes && d.message)                   d.customer_notes      = d.message;
-  if (!d.nationality && d.citizenship)                  d.nationality         = d.citizenship;
-  if (!d.country && d.countryOfResidence)               d.country             = d.countryOfResidence;
-  if (!d.country && d.residenceCountry)                 d.country             = d.residenceCountry;
+  // Misc aliases
+  if (!d.special_requests && d.specialRequests)
+    d.special_requests = d.specialRequests;
+  if (!d.special_requests && d.requests)
+    d.special_requests = d.requests;
+  if (!d.dietary_requirements && d.dietaryRequirements)
+    d.dietary_requirements = d.dietaryRequirements;
+  if (!d.dietary_requirements && d.dietary)
+    d.dietary_requirements = d.dietary;
+  if (!d.accessibility_needs && d.accessibilityNeeds)
+    d.accessibility_needs = d.accessibilityNeeds;
+  if (!d.customer_notes && d.customerNotes)
+    d.customer_notes = d.customerNotes;
+  if (!d.customer_notes && d.notes)   d.customer_notes = d.notes;
+  if (!d.customer_notes && d.message) d.customer_notes = d.message;
+  if (!d.nationality && d.citizenship)      d.nationality = d.citizenship;
+  if (!d.country && d.countryOfResidence)   d.country = d.countryOfResidence;
+  if (!d.country && d.residenceCountry)     d.country = d.residenceCountry;
   if (d.flexible_dates === undefined && d.flexibleDates !== undefined)
     d.flexible_dates = d.flexibleDates;
 
-  // ── Compute total travelers from adults + children if missing ──
+  // Compute total travelers from adults + children if missing
   if (
     (d.number_of_travelers === undefined || d.number_of_travelers === null) &&
     (d.number_of_adults !== undefined || d.number_of_children !== undefined)
@@ -179,31 +182,23 @@ const normalizeBookingData = (raw) => {
     d.number_of_travelers = adults + children || 1;
   }
 
-  // ── Ensure booking_type default ──
+  // Ensure booking_type default + normalise
   if (!d.booking_type) d.booking_type = "custom";
-
-  // ── Normalise booking_type value ──
   const bt = String(d.booking_type || "").toLowerCase().trim();
-  if (!BOOKING_TYPES.includes(bt)) d.booking_type = "custom";
-  else d.booking_type = bt;
+  d.booking_type = BOOKING_TYPES.includes(bt) ? bt : "custom";
 
   return d;
 };
 
-/**
- * Validate booking payload — returns array of { field, message } errors.
- * Flexible: many fields are truly optional.
- */
+/* ── validateBooking ─────────────────────────────────────────────────────── */
 const validateBooking = (data, isUpdate = false) => {
   const errors = [];
 
   if (!isUpdate) {
-    // full_name is required
     const name = (data.full_name || "").toString().trim();
     if (!name)
       errors.push({ field: "full_name", message: "Full name is required" });
 
-    // email is required and must be valid
     const email = (data.email || "").toString().trim();
     if (!email)
       errors.push({ field: "email", message: "Email is required" });
@@ -211,19 +206,16 @@ const validateBooking = (data, isUpdate = false) => {
       errors.push({ field: "email", message: "Invalid email address" });
   }
 
-  // travel_date must not be in the past
   if (data.travel_date) {
     const td    = new Date(data.travel_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (isNaN(td.getTime())) {
+    if (isNaN(td.getTime()))
       errors.push({ field: "travel_date", message: "Invalid travel date format" });
-    } else if (td < today) {
+    else if (td < today)
       errors.push({ field: "travel_date", message: "Travel date cannot be in the past" });
-    }
   }
 
-  // return_date must be after travel_date
   if (data.travel_date && data.return_date) {
     const td = new Date(data.travel_date);
     const rd = new Date(data.return_date);
@@ -231,7 +223,6 @@ const validateBooking = (data, isUpdate = false) => {
       errors.push({ field: "return_date", message: "Return date must be after travel date" });
   }
 
-  // number_of_travelers: optional but must be valid if provided
   if (data.number_of_travelers !== undefined && data.number_of_travelers !== null) {
     const n = parseInt(data.number_of_travelers, 10);
     if (!Number.isFinite(n) || n < 1 || n > 500)
@@ -241,7 +232,7 @@ const validateBooking = (data, isUpdate = false) => {
   return errors;
 };
 
-/** Log booking activity — never throws. */
+/* ── logActivity — never throws ─────────────────────────────────────────── */
 const logActivity = async (bookingId, action, description, adminId = null) => {
   try {
     await query(
@@ -258,7 +249,7 @@ const logActivity = async (bookingId, action, description, adminId = null) => {
   }
 };
 
-/** Fetch a single booking with all JOIN columns. */
+/* ── getBookingDetail — single booking with all JOINs ───────────────────── */
 const getBookingDetail = async (identifier, type = "id") => {
   const where = type === "id" ? "b.id = $1" : "b.booking_number = $1";
   try {
@@ -272,12 +263,14 @@ const getBookingDetail = async (identifier, type = "id") => {
           c.slug         AS country_slug,
           s.title        AS service_name,
           s.slug         AS service_slug,
+          p.title        AS package_name,
           u.full_name    AS user_name,
           u.email        AS user_email
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
          LEFT JOIN countries    c ON d.country_id     = c.id
          LEFT JOIN services     s ON b.service_id     = s.id
+         LEFT JOIN packages     p ON b.package_id     = p.id
          LEFT JOIN users        u ON b.user_id        = u.id
          WHERE ${where}`,
       [identifier],
@@ -290,13 +283,14 @@ const getBookingDetail = async (identifier, type = "id") => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   OTP — SEND
+   OTP — SEND    POST /api/bookings/send-otp
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.sendOtp = async (req, res, next) => {
   try {
     const rawEmail = (req.body.email || "").toString().toLowerCase().trim();
 
+    /* ── Validate email ── */
     if (!rawEmail || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawEmail)) {
       return res.status(400).json({
         success: false,
@@ -304,6 +298,7 @@ exports.sendOtp = async (req, res, next) => {
       });
     }
 
+    /* ── Enforce per-email resend cooldown ── */
     const existing = OTP_STORE.get(rawEmail);
     if (existing) {
       const elapsed = Date.now() - existing.sentAt;
@@ -317,6 +312,7 @@ exports.sendOtp = async (req, res, next) => {
       }
     }
 
+    /* ── Generate & store OTP ── */
     const code = String(crypto.randomInt(100000, 999999));
     OTP_STORE.set(rawEmail, {
       code,
@@ -326,85 +322,44 @@ exports.sendOtp = async (req, res, next) => {
       verified:  false,
     });
 
-    await sendEmail({
-      to:      rawEmail,
-      subject: "Your Altuvera Booking Verification Code",
-      html: `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"/>
-  <meta name="viewport" content="width=device-width,initial-scale=1"/>
-  <title>Altuvera — Verification Code</title>
-</head>
-<body style="margin:0;padding:0;background:#f0fdf4;font-family:'Inter',Arial,Helvetica,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f0fdf4;padding:40px 20px;">
-    <tr><td align="center">
-      <table width="580" cellpadding="0" cellspacing="0"
-             style="background:#fff;border-radius:24px;overflow:hidden;max-width:100%;
-                    box-shadow:0 8px 40px rgba(5,150,105,0.10);border:1.5px solid #d1fae5;">
-        <tr>
-          <td style="background:linear-gradient(135deg,#059669,#047857);padding:40px;text-align:center;">
-            <h1 style="margin:0;color:#fff;font-size:26px;font-weight:800;">Altuvera Travel</h1>
-            <p style="margin:6px 0 0;color:rgba(255,255,255,0.78);font-size:14px;">Email Verification</p>
-          </td>
-        </tr>
-        <tr>
-          <td style="padding:44px 48px 36px;">
-            <p style="margin:0 0 28px;font-size:15px;color:#6b7280;line-height:1.7;">
-              Enter the verification code below to confirm your email and complete your booking.
-            </p>
-            <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:32px;">
-              <tr>
-                <td align="center">
-                  <div style="display:inline-block;background:linear-gradient(135deg,#f0fdf4,#dcfce7);
-                              border:2px solid #6ee7b7;border-radius:20px;padding:32px 56px;text-align:center;">
-                    <p style="margin:0 0 8px;font-size:11px;color:#059669;font-weight:800;
-                               text-transform:uppercase;letter-spacing:0.14em;">Verification Code</p>
-                    <p style="margin:0;font-size:52px;font-weight:900;color:#047857;
-                               letter-spacing:0.22em;font-family:'Courier New',monospace;line-height:1;">
-                      ${code}
-                    </p>
-                    <p style="margin:10px 0 0;font-size:12px;color:#9ca3af;">
-                      Expires in <strong style="color:#374151;">10 minutes</strong>
-                    </p>
-                  </div>
-                </td>
-              </tr>
-            </table>
-            <p style="margin:0;font-size:13px;color:#92400e;background:#fffbeb;
-                       border:1px solid #fde68a;border-radius:14px;padding:14px 18px;">
-              <strong>Did not request this?</strong> You can safely ignore this email.
-            </p>
-          </td>
-        </tr>
-        <tr>
-          <td style="background:#f9fafb;padding:22px 48px;text-align:center;">
-            <p style="margin:0;font-size:12px;color:#9ca3af;">
-              <strong style="color:#374151;">Altuvera Travel</strong> · True Adventures In High Places &amp; Deep Culture
-            </p>
-          </td>
-        </tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>`,
-    });
+    /* ── Send email — own try/catch so failures return clean 500 ── */
+    try {
+      await sendOtpEmail({
+        to:            rawEmail,
+        otp:           code,
+        recipientName: "",
+        purpose:       "booking",
+        expiryMinutes: OTP_EXPIRY_MS / 60000,
+      });
+    } catch (emailErr) {
+      /* Remove OTP so user can retry immediately */
+      OTP_STORE.delete(rawEmail);
+      logger.error("[Bookings/OTP] Email delivery failed:", {
+        email:   rawEmail,
+        error:   emailErr.message,
+        code:    emailErr.originalError?.code,
+      });
+      return res.status(500).json({
+        success: false,
+        error:   "Failed to send verification code. Please check your email address and try again.",
+        detail:  process.env.NODE_ENV === "development" ? emailErr.message : undefined,
+      });
+    }
 
-    logger.info(`[Bookings/OTP] Code sent to ${rawEmail}`);
+    logger.info(`[Bookings/OTP] Code sent → ${rawEmail}`);
     return res.json({
       success:   true,
       message:   "Verification code sent. Please check your inbox (and spam folder).",
       expiresIn: OTP_EXPIRY_MS / 1000,
     });
   } catch (err) {
-    logger.error("[Bookings/OTP] sendOtp failed:", err.message);
+    logger.error("[Bookings/OTP] sendOtp unexpected error:", err.message);
     next(err);
   }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   OTP — VERIFY
+   OTP — VERIFY   POST /api/bookings/verify-otp
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.verifyOtp = async (req, res, next) => {
@@ -422,7 +377,7 @@ exports.verifyOtp = async (req, res, next) => {
     if (rawCode.length !== OTP_LENGTH || !/^\d+$/.test(rawCode)) {
       return res.status(400).json({
         success: false,
-        error:   `Code must be a ${OTP_LENGTH}-digit number.`,
+        error:   `Code must be exactly ${OTP_LENGTH} digits.`,
       });
     }
 
@@ -444,6 +399,7 @@ exports.verifyOtp = async (req, res, next) => {
     }
 
     record.attempts += 1;
+
     if (record.attempts > OTP_MAX_ATTEMPTS) {
       OTP_STORE.delete(rawEmail);
       return res.status(429).json({
@@ -453,22 +409,26 @@ exports.verifyOtp = async (req, res, next) => {
       });
     }
 
-    const remaining = OTP_MAX_ATTEMPTS - record.attempts;
     if (record.code !== rawCode) {
+      const remaining = Math.max(0, OTP_MAX_ATTEMPTS - record.attempts);
       return res.status(400).json({
         success:           false,
         error:             remaining > 0
           ? `Incorrect code. ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
-          : "Incorrect code. No attempts remaining — please request a new code.",
+          : "No attempts remaining — please request a new code.",
         attemptsRemaining: remaining,
       });
     }
 
     OTP_STORE.delete(rawEmail);
-    logger.info(`[Bookings/OTP] Email verified: ${rawEmail}`);
-    return res.json({ success: true, verified: true, message: "Email address verified successfully." });
+    logger.info(`[Bookings/OTP] ✅ Email verified: ${rawEmail}`);
+    return res.json({
+      success:  true,
+      verified: true,
+      message:  "Email address verified successfully.",
+    });
   } catch (err) {
-    logger.error("[Bookings/OTP] verifyOtp failed:", err.message);
+    logger.error("[Bookings/OTP] verifyOtp error:", err.message);
     next(err);
   }
 };
@@ -477,8 +437,7 @@ exports.verifyOtp = async (req, res, next) => {
    CREATE BOOKING   POST /api/bookings
 ═══════════════════════════════════════════════════════════════════════════════ */
 
-// (Already handling user-side creation, but we ensure it sends a notification)
-const originalCreate = async (req, res, next) => {
+const _createBooking = async (req, res, next) => {
   try {
     const body = normalizeBookingData(req.body);
 
@@ -491,43 +450,63 @@ const originalCreate = async (req, res, next) => {
 
     const { rows } = await query(
       `INSERT INTO bookings (
-          booking_number, user_id, package_id, destination_id, service_id, booking_type,
-          full_name, email, phone, whatsapp, nationality, country,
+          booking_number, user_id, package_id, destination_id, service_id,
+          booking_type, full_name, email, phone, whatsapp, nationality, country,
           travel_date, return_date, flexible_dates,
           number_of_travelers, number_of_adults, number_of_children,
           accommodation_type, dietary_requirements, special_requests,
           source, status, created_at, updated_at
         ) VALUES (
-          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),NOW()
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,
+          $13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NOW(),NOW()
         ) RETURNING *`,
       [
         bookingNumber,
-        req.user?.id || null,
-        body.package_id || null,
-        body.destination_id || null,
-        body.service_id || null,
-        body.booking_type || 'custom',
+        req.user?.id                    || null,
+        body.package_id                 || null,
+        body.destination_id             || null,
+        body.service_id                 || null,
+        body.booking_type               || "custom",
         body.full_name,
         body.email,
-        body.phone || null,
-        body.whatsapp || null,
-        body.nationality || null,
-        body.country || null,
-        body.travel_date || null,
-        body.return_date || null,
-        body.flexible_dates || false,
-        body.number_of_travelers || 1,
-        body.number_of_adults || 1,
-        body.number_of_children || 0,
-        body.accommodation_type || null,
-        body.dietary_requirements || null,
-        body.special_requests || null,
-        body.source || 'website',
-        'pending',
-      ]
+        body.phone                      || null,
+        body.whatsapp                   || null,
+        body.nationality                || null,
+        body.country                    || null,
+        body.travel_date                || null,
+        body.return_date                || null,
+        body.flexible_dates             || false,
+        body.number_of_travelers        || 1,
+        body.number_of_adults           || 1,
+        body.number_of_children         || 0,
+        body.accommodation_type         || null,
+        body.dietary_requirements       || null,
+        body.special_requests           || null,
+        body.source                     || "website",
+        "pending",
+      ],
     );
 
     const booking = rows[0];
+
+    /* ── Fire-and-forget: admin notification email ── */
+    sendAdminBookingNotification(booking).catch((e) =>
+      logger.warn("[Bookings] Admin notification email failed:", e.message)
+    );
+
+    /* ── Fire-and-forget: user notification (if logged in) ── */
+    if (req.user?.id) {
+      createNotificationInternal({
+        userId:      req.user.id,
+        userEmail:   req.user.email,
+        type:        "booking_created",
+        title:       "Booking Received!",
+        message:     `Your booking ${bookingNumber} has been received and is pending review.`,
+        actionUrl:   "/my-bookings",
+        actionLabel: "Track Booking",
+        category:    "booking",
+      }).catch((e) => logger.warn("[Bookings] Notification failed:", e.message));
+    }
 
     return res.status(201).json({ success: true, data: booking });
   } catch (err) {
@@ -536,87 +515,69 @@ const originalCreate = async (req, res, next) => {
   }
 };
 
-exports.create = async (req, res, next) => {
-  const resProxy = {
-    ...res,
-    status: (code) => {
-      res.statusCode = code;
-      return resProxy;
-    },
-    json: async (data) => {
-      if (res.statusCode === 201 && data.success && req.user) {
-        await createNotificationInternal({
-          userId: req.user.id,
-          userEmail: req.user.email,
-          type: 'booking_created',
-          title: 'Booking Received!',
-          message: `Your booking ${data.data.booking_number} has been received and is pending review.`,
-          actionUrl: `/my-bookings`,
-          actionLabel: 'Track Booking',
-          category: 'booking'
-        });
-      }
-      return res.json(data);
-    }
-  };
-  return originalCreate(req, resProxy, next);
-};
+exports.create = _createBooking;
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    ADMIN CREATE BOOKING   POST /api/bookings/admin
-   Allows admin to create a booking on behalf of a user.
 ═══════════════════════════════════════════════════════════════════════════════ */
+
 exports.adminCreate = async (req, res, next) => {
   try {
     const adminId = req.admin?.id;
-    const body = normalizeBookingData(req.body);
-    
-    // 1. If email is provided but no user_id, find the user
+    const body    = normalizeBookingData(req.body);
+
+    /* Resolve user_id from email if not provided */
     if (!body.user_id && body.email) {
-      const { rows: u } = await query("SELECT id FROM users WHERE email = $1", [body.email.toLowerCase().trim()]);
+      const { rows: u } = await query(
+        "SELECT id FROM users WHERE email = $1",
+        [body.email.toLowerCase().trim()],
+      );
       if (u[0]) body.user_id = u[0].id;
     }
 
-    // 2. Validate
     const errors = validateBooking(body);
     if (errors.length) return res.status(400).json({ success: false, errors });
 
-    // 3. Generate internal data
-    const booking_number = generateBookingNumber();
-    
-    // 4. Insert (Reusing insert logic from standard create but with admin metadata)
+    const bookingNumber = generateBookingNumber();
+
     const { rows } = await query(
       `INSERT INTO bookings (
-          booking_number, user_id, full_name, email, phone, 
-          travel_date, return_date, number_of_travelers, 
+          booking_number, user_id, full_name, email, phone,
+          travel_date, return_date, number_of_travelers,
           status, source, admin_notes, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'confirmed','admin_manual',$9,NOW(),NOW()) 
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'confirmed','admin_manual',$9,NOW(),NOW())
         RETURNING *`,
       [
-        booking_number, body.user_id || null, body.full_name, 
-        body.email, body.phone, body.travel_date, body.return_date, 
-        body.number_of_travelers || 1, `Created by admin ID: ${adminId}`
-      ]
+        bookingNumber,
+        body.user_id             || null,
+        body.full_name,
+        body.email,
+        body.phone               || null,
+        body.travel_date         || null,
+        body.return_date         || null,
+        body.number_of_travelers || 1,
+        `Created by admin ID: ${adminId}`,
+      ],
     );
 
     const booking = rows[0];
 
-    // 5. Notify the User (CRITICAL STEP)
+    /* Notify the user */
     if (body.user_id) {
-      await createNotificationInternal({
-        userId: body.user_id,
-        userEmail: body.email,
-        type: 'booking_created',
-        title: 'New Booking Created for You',
-        message: `An admin has created a new booking (${booking_number}) on your behalf.`,
-        actionUrl: `/my-bookings`,
-        actionLabel: 'View Booking',
-        priority: 'high',
-        category: 'booking',
-        senderType: 'admin',
-        senderId: adminId,
-        sendEmailNotif: true
-      });
+      createNotificationInternal({
+        userId:         body.user_id,
+        userEmail:      body.email,
+        type:           "booking_created",
+        title:          "New Booking Created for You",
+        message:        `An admin has created booking ${bookingNumber} on your behalf.`,
+        actionUrl:      "/my-bookings",
+        actionLabel:    "View Booking",
+        priority:       "high",
+        category:       "booking",
+        senderType:     "admin",
+        senderId:       adminId,
+        sendEmailNotif: true,
+      }).catch((e) => logger.warn("[Bookings] Admin-create notification failed:", e.message));
     }
 
     return res.status(201).json({ success: true, data: booking });
@@ -624,45 +585,6 @@ exports.adminCreate = async (req, res, next) => {
     logger.error("[Bookings] adminCreate failed:", err.message);
     next(err);
   }
-};
-
-/* ═══════════════════════════════════════════════════════════════════════════════
-   UPGRADED REMOVE (DELETE)   DELETE /api/bookings/:id
-   Now notifies the user that their booking was deleted.
-═══════════════════════════════════════════════════════════════════════════════ */
-exports.remove = async (req, res, next) => {
-  try {
-    const id = parseInt(req.params.id, 10);
-    const adminId = req.admin?.id || req.user?.id;
-
-    // Get info before deleting
-    const { rows } = await query(
-      "SELECT id, booking_number, user_id, email, full_name FROM bookings WHERE id=$1",
-      [id]
-    );
-    
-    if (!rows[0]) return res.status(404).json({ success: false, error: "Booking not found" });
-    const b = rows[0];
-
-    await query("DELETE FROM bookings WHERE id=$1", [id]);
-
-    // Notify User
-    if (b.user_id) {
-      await createNotificationInternal({
-        userId: b.user_id,
-        userEmail: b.email,
-        type: 'booking_deleted',
-        title: 'Booking Cancelled/Removed',
-        message: `Your booking ${b.booking_number} has been removed from the system by an administrator.`,
-        priority: 'urgent',
-        category: 'booking',
-        senderType: 'admin',
-        senderId: adminId
-      });
-    }
-
-    return res.json({ success: true, message: "Booking deleted and user notified" });
-  } catch (err) { next(err); }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -700,8 +622,8 @@ exports.getAll = async (req, res, next) => {
     if (status)           push("b.status = ?",         status);
     if (payment_status)   push("b.payment_status = ?", payment_status);
     if (booking_type)     push("b.booking_type = ?",   booking_type);
-    if (destination_id)   push("b.destination_id = ?", parseInt(destination_id));
-    if (service_id)       push("b.service_id = ?",     parseInt(service_id));
+    if (destination_id)   push("b.destination_id = ?", parseInt(destination_id, 10));
+    if (service_id)       push("b.service_id = ?",     parseInt(service_id, 10));
     if (date_from)        push("b.created_at >= ?",    date_from);
     if (date_to)          push("b.created_at <= ?",    date_to);
     if (travel_date_from) push("b.travel_date >= ?",   travel_date_from);
@@ -736,12 +658,14 @@ exports.getAll = async (req, res, next) => {
             d.image_url AS destination_image,
             c.name      AS country_name,
             s.title     AS service_name,
+            p.title     AS package_name,
             u.full_name AS user_name,
             u.email     AS user_email
            FROM bookings b
            LEFT JOIN destinations d ON b.destination_id = d.id
            LEFT JOIN countries    c ON d.country_id     = c.id
            LEFT JOIN services     s ON b.service_id     = s.id
+           LEFT JOIN packages     p ON b.package_id     = p.id
            LEFT JOIN users        u ON b.user_id        = u.id
            WHERE ${where}
            ORDER BY b.${sortCol} ${sortDir}
@@ -778,12 +702,10 @@ exports.getAll = async (req, res, next) => {
 exports.track = async (req, res, next) => {
   try {
     const { bookingNumber } = req.params;
-
     if (!bookingNumber?.trim())
       return res.status(400).json({ success: false, error: "Booking number required" });
 
     const booking = await getBookingDetail(bookingNumber.trim().toUpperCase(), "booking_number");
-
     if (!booking)
       return res.status(404).json({ success: false, error: "Booking not found" });
 
@@ -798,13 +720,16 @@ exports.track = async (req, res, next) => {
         number_of_travelers: booking.number_of_travelers,
         destination:         booking.destination_name,
         service:             booking.service_name,
+        package:             booking.package_name,
         country:             booking.country_name,
         created_at:          booking.created_at,
         confirmed_at:        booking.confirmed_at,
         status_message:      getStatusMessage(booking.status),
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -1007,7 +932,9 @@ exports.getOne = async (req, res, next) => {
     } catch { /* non-fatal */ }
 
     return res.json({ success: true, data: { ...booking, activity_history: history } });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
@@ -1125,12 +1052,31 @@ exports.updateStatus = async (req, res, next) => {
 
     const full = await getBookingDetail(id);
 
-    if (notify_customer) {
-      const send =
+    /* Email notification to customer */
+    if (notify_customer && full?.email) {
+      const emailFn =
         status === "confirmed" ? sendBookingConfirmation(full) :
         status === "cancelled" ? sendBookingCancellation(full, reason) :
-                                 sendBookingStatusUpdate(full, current, status);
-      send.catch((e) => logger.error("[Bookings] Status email failed:", e.message));
+                                 sendBookingStatusUpdate(full, current, status, reason);
+
+      emailFn.catch((e) => logger.warn("[Bookings] Status email failed:", e.message));
+    }
+
+    /* In-app notification to user */
+    if (full?.user_id) {
+      createNotificationInternal({
+        userId:      full.user_id,
+        userEmail:   full.email,
+        type:        `booking_${status}`,
+        title:       `Booking ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+        message:     getStatusMessage(status),
+        actionUrl:   "/my-bookings",
+        actionLabel: "View Booking",
+        category:    "booking",
+        priority:    status === "cancelled" ? "urgent" : "normal",
+        senderType:  "admin",
+        senderId:    adminId,
+      }).catch((e) => logger.warn("[Bookings] Status notification failed:", e.message));
     }
 
     return res.json({ success: true, message: `Status updated to ${status}`, data: full });
@@ -1140,8 +1086,15 @@ exports.updateStatus = async (req, res, next) => {
   }
 };
 
-exports.confirm = (req, res, next) => { req.body.status = "confirmed"; return exports.updateStatus(req, res, next); };
-exports.cancel  = (req, res, next) => { req.body.status = "cancelled"; return exports.updateStatus(req, res, next); };
+exports.confirm = (req, res, next) => {
+  req.body.status = "confirmed";
+  return exports.updateStatus(req, res, next);
+};
+
+exports.cancel = (req, res, next) => {
+  req.body.status = "cancelled";
+  return exports.updateStatus(req, res, next);
+};
 
 /* ═══════════════════════════════════════════════════════════════════════════════
    DELETE   DELETE /api/bookings/:id
@@ -1153,33 +1106,53 @@ exports.remove = async (req, res, next) => {
     const adminId = req.admin?.id || req.user?.id || null;
 
     const { rows } = await query(
-      "SELECT id, booking_number, destination_id, service_id FROM bookings WHERE id=$1",
+      "SELECT id, booking_number, user_id, email, full_name, destination_id, service_id FROM bookings WHERE id=$1",
       [id],
     );
     if (!rows[0])
       return res.status(404).json({ success: false, error: "Booking not found" });
 
+    const b = rows[0];
     await query("DELETE FROM bookings WHERE id=$1", [id]);
 
-    if (rows[0].destination_id)
+    /* Decrement counters — fire-and-forget */
+    if (b.destination_id) {
       query(
         "UPDATE destinations SET booking_count=GREATEST(0,booking_count-1) WHERE id=$1",
-        [rows[0].destination_id],
+        [b.destination_id],
       ).catch(() => {});
-
-    if (rows[0].service_id)
+    }
+    if (b.service_id) {
       query(
         "UPDATE services SET booking_count=GREATEST(0,booking_count-1) WHERE id=$1",
-        [rows[0].service_id],
+        [b.service_id],
       ).catch(() => {});
+    }
 
-    logActivity(id, "deleted", `Booking ${rows[0].booking_number} permanently deleted`, adminId);
+    /* Notify user */
+    if (b.user_id) {
+      createNotificationInternal({
+        userId:      b.user_id,
+        userEmail:   b.email,
+        type:        "booking_deleted",
+        title:       "Booking Removed",
+        message:     `Your booking ${b.booking_number} has been removed by an administrator.`,
+        priority:    "urgent",
+        category:    "booking",
+        senderType:  "admin",
+        senderId:    adminId,
+      }).catch((e) => logger.warn("[Bookings] Delete notification failed:", e.message));
+    }
+
+    logActivity(id, "deleted", `Booking ${b.booking_number} permanently deleted`, adminId);
     return res.json({ success: true, message: "Booking deleted successfully" });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   BULK STATUS
+   BULK STATUS UPDATE   POST /api/bookings/bulk-status
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.bulkUpdateStatus = async (req, res, next) => {
@@ -1216,11 +1189,13 @@ exports.bulkUpdateStatus = async (req, res, next) => {
       message: `Updated ${results.success.length} of ${booking_ids.length} bookings`,
       data:    results,
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   EXPORT
+   EXPORT   GET /api/bookings/export
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.export = async (req, res, next) => {
@@ -1251,21 +1226,32 @@ exports.export = async (req, res, next) => {
     );
 
     if (format === "csv") {
-      if (!rows.length) { res.setHeader("Content-Type","text/csv"); return res.status(200).send(""); }
+      if (!rows.length) {
+        res.setHeader("Content-Type", "text/csv");
+        return res.status(200).send("");
+      }
       const headers = Object.keys(rows[0]);
       let csv = headers.join(",") + "\n";
       for (const row of rows) {
         csv += headers.map((h) => {
           const v = row[h] == null ? "" : String(row[h]);
-          return /[,"\n\r]/.test(v) ? `"${v.replace(/"/g,'""')}"` : v;
+          return /[,"\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
         }).join(",") + "\n";
       }
-      res.setHeader("Content-Type","text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition",`attachment; filename="altuvera-bookings-${Date.now()}.csv"`);
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="altuvera-bookings-${Date.now()}.csv"`,
+      );
       return res.send(csv);
     }
 
-    return res.json({ success: true, data: rows, total: rows.length, exported_at: new Date().toISOString() });
+    return res.json({
+      success:     true,
+      data:        rows,
+      total:       rows.length,
+      exported_at: new Date().toISOString(),
+    });
   } catch (err) {
     logger.error("[Bookings] export failed:", err.message);
     next(err);
@@ -1273,7 +1259,7 @@ exports.export = async (req, res, next) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   ADD NOTES
+   ADD NOTES   POST /api/bookings/:id/notes
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.addNotes = async (req, res, next) => {
@@ -1310,11 +1296,13 @@ exports.addNotes = async (req, res, next) => {
 
     logActivity(id, "notes_added", "Admin notes updated", adminId);
     return res.json({ success: true, message: "Notes added", data: rows[0] });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   UPCOMING
+   UPCOMING   GET /api/bookings/upcoming
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getUpcoming = async (req, res, next) => {
@@ -1337,11 +1325,13 @@ exports.getUpcoming = async (req, res, next) => {
     );
 
     return res.json({ success: true, data: rows, period: `Next ${days} days` });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   RECENT
+   RECENT   GET /api/bookings/recent
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getRecent = async (req, res, next) => {
@@ -1355,21 +1345,25 @@ exports.getRecent = async (req, res, next) => {
           b.travel_date, b.number_of_travelers, b.created_at,
           d.name      AS destination_name,
           d.image_url AS destination_image,
-          s.title     AS service_name
+          s.title     AS service_name,
+          p.title     AS package_name
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id=d.id
          LEFT JOIN services     s ON b.service_id=s.id
+         LEFT JOIN packages     p ON b.package_id=p.id
          ORDER BY b.created_at DESC
          LIMIT $1`,
       [limit],
     );
 
     return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   MOST BOOKED DESTINATIONS
+   MOST BOOKED DESTINATIONS   GET /api/bookings/most-booked
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getMostBookedDestinations = async (req, res, next) => {
@@ -1399,11 +1393,13 @@ exports.getMostBookedDestinations = async (req, res, next) => {
     );
 
     return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   BY DESTINATION
+   BY DESTINATION   GET /api/bookings/by-destination/:destinationId
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getBookingsByDestination = async (req, res, next) => {
@@ -1440,12 +1436,17 @@ exports.getBookingsByDestination = async (req, res, next) => {
     if (!destRes.rows[0])
       return res.status(404).json({ success: false, error: "Destination not found" });
 
-    return res.json({ success: true, data: { destination: destRes.rows[0], stats: statsRes.rows[0] } });
-  } catch (err) { next(err); }
+    return res.json({
+      success: true,
+      data: { destination: destRes.rows[0], stats: statsRes.rows[0] },
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   BY COUNTRY
+   BY COUNTRY   GET /api/bookings/by-country/:countryId
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getBookingsByCountry = async (req, res, next) => {
@@ -1479,12 +1480,17 @@ exports.getBookingsByCountry = async (req, res, next) => {
     if (!cRes.rows[0])
       return res.status(404).json({ success: false, error: "Country not found" });
 
-    return res.json({ success: true, data: { country: cRes.rows[0], stats: sRes.rows[0] } });
-  } catch (err) { next(err); }
+    return res.json({
+      success: true,
+      data: { country: cRes.rows[0], stats: sRes.rows[0] },
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   COUNTRIES BOOKING STATS
+   COUNTRIES BOOKING STATS   GET /api/bookings/countries-stats
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getCountriesBookingStats = async (req, res, next) => {
@@ -1510,11 +1516,13 @@ exports.getCountriesBookingStats = async (req, res, next) => {
     `);
 
     return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════════
-   DESTINATIONS BOOKING STATS
+   DESTINATIONS BOOKING STATS   GET /api/bookings/destinations-stats
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getDestinationsBookingStats = async (req, res, next) => {
@@ -1532,7 +1540,7 @@ exports.getDestinationsBookingStats = async (req, res, next) => {
 
     if (country_id) {
       conds.push(`d.country_id=$${pi++}`);
-      params.push(parseInt(country_id));
+      params.push(parseInt(country_id, 10));
     }
 
     const where    = conds.join(" AND ");
@@ -1551,12 +1559,16 @@ exports.getDestinationsBookingStats = async (req, res, next) => {
            LEFT JOIN countries c ON d.country_id=c.id
            LEFT JOIN bookings  b ON b.destination_id=d.id ${df}
            WHERE ${where}
-           GROUP BY d.id,d.name,d.slug,d.image_url,d.difficulty,d.rating,d.review_count,c.id,c.name,c.slug
+           GROUP BY d.id,d.name,d.slug,d.image_url,d.difficulty,d.rating,
+                    d.review_count,c.id,c.name,c.slug
            ORDER BY total_bookings DESC
            LIMIT $${pi} OFFSET $${pi + 1}`,
         [...params, limitNum, offset],
       ),
-      query(`SELECT COUNT(*) FROM destinations d WHERE ${where}`, params),
+      query(
+        `SELECT COUNT(*) FROM destinations d WHERE ${where}`,
+        params,
+      ),
     ]);
 
     const total      = parseInt(countRes.rows[0].count, 10);
@@ -1566,11 +1578,21 @@ exports.getDestinationsBookingStats = async (req, res, next) => {
       success: true,
       data:    dataRes.rows,
       pagination: {
-        total, page: pageNum, limit: limitNum,
-        total_pages: totalPages, has_next: pageNum < totalPages, has_prev: pageNum > 1,
+        total,
+        page:        pageNum,
+        limit:       limitNum,
+        total_pages: totalPages,
+        has_next:    pageNum < totalPages,
+        has_prev:    pageNum > 1,
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   MODULE EXPORTS
+═══════════════════════════════════════════════════════════════════════════════ */
 
 module.exports = exports;

@@ -770,6 +770,7 @@ const ensureSubscribersSchema = async () => {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS subscribers (
         id                SERIAL PRIMARY KEY,
+        user_id           INTEGER       REFERENCES users(id) ON DELETE SET NULL,
         email             VARCHAR(255) UNIQUE NOT NULL,
         name              VARCHAR(255),
         source            VARCHAR(100)  DEFAULT 'website',
@@ -790,6 +791,7 @@ const ensureSubscribersSchema = async () => {
 
     // Add missing columns to existing table safely
     const cols = [
+      { name: 'user_id',            type: 'INTEGER REFERENCES users(id) ON DELETE SET NULL' },
       { name: 'name',             type: 'VARCHAR(255)' },
       { name: 'source',           type: "VARCHAR(100) DEFAULT 'website'" },
       { name: 'ip_address',       type: 'VARCHAR(50)' },

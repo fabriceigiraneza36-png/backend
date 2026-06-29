@@ -690,6 +690,7 @@ CREATE TABLE users (
   avatar_url      VARCHAR(500),
   phone           VARCHAR(50),
   nationality     VARCHAR(100),
+  subscribed      BOOLEAN   DEFAULT false,
   
   -- OAuth providers
   google_id       VARCHAR(255) UNIQUE,

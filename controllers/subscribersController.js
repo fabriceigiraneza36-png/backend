@@ -27,6 +27,7 @@ exports.subscribe = async (req, res, next) => {
       email,
       name   = null,
       source = 'website',
+      userId = null,  // Optional: from authenticated user
     } = req.body;
 
     // ── Validate ─────────────────────────────────────────────────────────────
@@ -51,7 +52,7 @@ exports.subscribe = async (req, res, next) => {
 
     // ── Check existing subscriber ─────────────────────────────────────────────
     const existing = await query(
-      `SELECT id, is_active, welcome_sent, name FROM subscribers WHERE email = $1`,
+      `SELECT id, is_active, welcome_sent, name, user_id FROM subscribers WHERE email = $1`,
       [cleanEmail],
     );
 
@@ -81,12 +82,13 @@ exports.subscribe = async (req, res, next) => {
                unsubscribed_at = NULL,
                name            = COALESCE($2, name),
                source          = COALESCE($3, source),
-               ip_address      = $4,
-               user_agent      = $5,
+               user_id         = COALESCE($4, user_id),
+               ip_address      = $5,
+               user_agent      = $6,
                updated_at      = NOW()
          WHERE email = $1
          RETURNING *`,
-        [cleanEmail, name || null, source, ipAddress, userAgent],
+        [cleanEmail, name || null, source, userId || null, ipAddress, userAgent],
       );
       subscriberRow = result.rows[0];
       logger.info(`[Subscribers] Re-subscribed: ${cleanEmail}`);
@@ -94,14 +96,22 @@ exports.subscribe = async (req, res, next) => {
       // Brand new subscriber
       const result = await query(
         `INSERT INTO subscribers
-           (email, name, source, ip_address, user_agent,
+           (email, name, source, user_id, ip_address, user_agent,
             is_active, welcome_sent, subscribed_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, true, false, NOW(), NOW(), NOW())
+         VALUES ($1, $2, $3, $4, $5, $6, true, false, NOW(), NOW(), NOW())
          RETURNING *`,
-        [cleanEmail, name || null, source, ipAddress, userAgent],
+        [cleanEmail, name || null, source, userId || null, ipAddress, userAgent],
       );
       subscriberRow = result.rows[0];
       logger.info(`[Subscribers] New subscriber: ${cleanEmail}`);
+    }
+
+    // ── Update user profile to mark as subscribed (if user_id provided) ──────────
+    if (userId) {
+      await query(
+        `UPDATE users SET subscribed = true, updated_at = NOW() WHERE id = $1`,
+        [userId],
+      ).catch((err) => logger.warn(`[Subscribers] Failed to update user subscribed flag: ${err.message}`));
     }
 
     // ── Send welcome email ────────────────────────────────────────────────────

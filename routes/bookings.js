@@ -1,9 +1,4 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * BOOKING ROUTES v2.1
- * ═══════════════════════════════════════════════════════════════════════════════
- */
-
+// routes/bookingRoutes.js — OTP rate limiter adjusted
 "use strict";
 
 const express   = require("express");
@@ -13,7 +8,7 @@ const ctrl      = require("../controllers/bookingsController");
 const { protect, adminOnly, optionalAuth } = require("../middleware/auth");
 const logger    = require("../utils/logger");
 
-// ── Try to import ensureBookingsSchema (non-fatal if missing) ─────────────────
+/* ── Schema init (non-blocking) ─────────────────────────────────────────── */
 let ensureBookingsSchema = null;
 try {
   const db = require("../config/db");
@@ -21,7 +16,7 @@ try {
     ensureBookingsSchema = db.ensureBookingsSchema;
 } catch (_) {}
 
-let _schemaReady = false;
+let _schemaReady = !ensureBookingsSchema;
 
 if (ensureBookingsSchema) {
   (async () => {
@@ -31,31 +26,27 @@ if (ensureBookingsSchema) {
       logger.info("[Bookings] Schema ready");
     } catch (err) {
       logger.error("[Bookings] Schema init failed:", err.message);
-      _schemaReady = true; // Don't block requests on schema failure
+      _schemaReady = true;
     }
   })();
-} else {
-  _schemaReady = true;
 }
 
-// Schema middleware — non-blocking
 router.use(async (_req, _res, next) => {
-  if (_schemaReady || !ensureBookingsSchema) return next();
+  if (_schemaReady) return next();
   try {
-    await ensureBookingsSchema();
-    _schemaReady = true;
-    next();
+    if (ensureBookingsSchema) await ensureBookingsSchema();
   } catch (err) {
-    logger.error("[Bookings] Schema ensure failed:", err.message);
-    _schemaReady = true; // Don't block forever
+    logger.warn("[Bookings] Schema ensure:", err.message);
+  } finally {
+    _schemaReady = true;
     next();
   }
 });
 
-// ── Rate limiters ─────────────────────────────────────────────────────────────
+/* ── Rate limiters ───────────────────────────────────────────────────────── */
 
 const bookingLimiter = rateLimit({
-  windowMs:        15 * 60 * 1000,
+  windowMs:        15 * 60 * 1000,   // 15 min
   max:             10,
   message:         { success: false, error: "Too many booking requests. Please try again later." },
   standardHeaders: true,
@@ -63,25 +54,42 @@ const bookingLimiter = rateLimit({
   skip:            (req) => req.method === "GET",
 });
 
-const otpLimiter = rateLimit({
+/* ── OTP limiter — generous enough for real users ──
+   Max 5 send-otp calls per IP per 5 minutes.
+   The controller itself enforces the 60-second per-email cooldown.         ── */
+const otpSendLimiter = rateLimit({
+  windowMs:        5 * 60 * 1000,    // 5 min window
+  max:             5,                 // 5 requests per IP per window
+  message:         { success: false, error: "Too many verification code requests. Please wait a few minutes." },
+  standardHeaders: true,
+  legacyHeaders:   false,
+  // Skip rate-limit for authenticated users (they skip OTP entirely)
+  skip: (req) => !!req.headers.authorization,
+  keyGenerator: (req) => {
+    // Key by IP + email so one IP can help multiple users
+    const email = (req.body?.email || "").toLowerCase().trim();
+    return `${req.ip}:${email}`;
+  },
+});
+
+const otpVerifyLimiter = rateLimit({
   windowMs:        5 * 60 * 1000,
-  max:             5,
-  message:         { success: false, error: "Too many OTP requests. Please wait before trying again." },
+  max:             10,               // more generous — user may mis-type
+  message:         { success: false, error: "Too many verification attempts. Please wait." },
   standardHeaders: true,
   legacyHeaders:   false,
 });
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// PUBLIC ROUTES — named routes BEFORE /:id wildcard
-// ═══════════════════════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════
+   PUBLIC — named routes BEFORE /:id wildcard
+   ══════════════════════════════════════════════════════════════════════════ */
 
 // OTP
-router.post("/send-otp",    otpLimiter,     ctrl.sendOtp);
-router.post("/admin", adminOnly, ctrl.adminCreate); // Create by admin
-router.post("/verify-otp",  otpLimiter,     ctrl.verifyOtp);
+router.post("/send-otp",   otpSendLimiter,   ctrl.sendOtp);
+router.post("/verify-otp", otpVerifyLimiter, ctrl.verifyOtp);
 
-// Create booking
-router.post("/",            bookingLimiter, optionalAuth, ctrl.create);
+// Create booking (public + optional auth)
+router.post("/", bookingLimiter, optionalAuth, ctrl.create);
 
 // Tracking (public)
 router.get("/track/:bookingNumber", ctrl.track);
@@ -93,28 +101,25 @@ router.get("/destinations-stats",            ctrl.getDestinationsBookingStats);
 router.get("/by-destination/:destinationId", ctrl.getBookingsByDestination);
 router.get("/by-country/:countryId",         ctrl.getBookingsByCountry);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// AUTHENTICATED USER ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
-
+/* ══════════════════════════════════════════════════════════════════════════
+   AUTHENTICATED USER
+   ══════════════════════════════════════════════════════════════════════════ */
 router.get("/my-bookings", protect, ctrl.getMyBookings);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ADMIN ROUTES — named, before /:id
-// ═══════════════════════════════════════════════════════════════════════════════
-
+/* ══════════════════════════════════════════════════════════════════════════
+   ADMIN — named, before /:id wildcard
+   ══════════════════════════════════════════════════════════════════════════ */
 router.get ("/stats",       adminOnly, ctrl.getStats);
 router.get ("/upcoming",    adminOnly, ctrl.getUpcoming);
 router.get ("/recent",      adminOnly, ctrl.getRecent);
 router.get ("/export",      adminOnly, ctrl.export);
 router.get ("/",            adminOnly, ctrl.getAll);
-
+router.post("/admin",       adminOnly, ctrl.adminCreate);
 router.post("/bulk-status", adminOnly, ctrl.bulkUpdateStatus);
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// WILDCARD /:id — MUST be last
-// ═══════════════════════════════════════════════════════════════════════════════
-
+/* ══════════════════════════════════════════════════════════════════════════
+   WILDCARD /:id — MUST be last
+   ══════════════════════════════════════════════════════════════════════════ */
 router.get   ("/:id",         adminOnly, ctrl.getOne);
 router.put   ("/:id",         adminOnly, ctrl.update);
 router.delete("/:id",         adminOnly, ctrl.remove);
