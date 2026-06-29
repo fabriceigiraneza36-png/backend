@@ -114,6 +114,10 @@ const normalizeBookingData = (raw) => {
   if (!d.service_id && d.serviceId)           d.service_id     = d.serviceId;
   if (!d.service_id && d.service)             d.service_id     = d.service;
 
+  // ── Package aliases ──
+  if (!d.package_id && d.packageId)           d.package_id     = d.packageId;
+  if (!d.package_id && d.package_id)          d.package_id     = d.package_id;
+
   // ── Booking type aliases ──
   if (!d.booking_type && d.bookingType)       d.booking_type = d.bookingType;
   if (!d.booking_type && d.type)              d.booking_type = d.type;
@@ -474,9 +478,65 @@ exports.verifyOtp = async (req, res, next) => {
 ═══════════════════════════════════════════════════════════════════════════════ */
 
 // (Already handling user-side creation, but we ensure it sends a notification)
-const originalCreate = exports.create;
+const originalCreate = async (req, res, next) => {
+  try {
+    const body = normalizeBookingData(req.body);
+
+    const errors = validateBooking(body);
+    if (errors.length) {
+      return res.status(400).json({ success: false, errors });
+    }
+
+    const bookingNumber = generateBookingNumber();
+
+    const { rows } = await query(
+      `INSERT INTO bookings (
+          booking_number, user_id, package_id, destination_id, service_id, booking_type,
+          full_name, email, phone, whatsapp, nationality, country,
+          travel_date, return_date, flexible_dates,
+          number_of_travelers, number_of_adults, number_of_children,
+          accommodation_type, dietary_requirements, special_requests,
+          source, status, created_at, updated_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW(),NOW()
+        ) RETURNING *`,
+      [
+        bookingNumber,
+        req.user?.id || null,
+        body.package_id || null,
+        body.destination_id || null,
+        body.service_id || null,
+        body.booking_type || 'custom',
+        body.full_name,
+        body.email,
+        body.phone || null,
+        body.whatsapp || null,
+        body.nationality || null,
+        body.country || null,
+        body.travel_date || null,
+        body.return_date || null,
+        body.flexible_dates || false,
+        body.number_of_travelers || 1,
+        body.number_of_adults || 1,
+        body.number_of_children || 0,
+        body.accommodation_type || null,
+        body.dietary_requirements || null,
+        body.special_requests || null,
+        body.source || 'website',
+        'pending',
+      ]
+    );
+
+    const booking = rows[0];
+
+    return res.status(201).json({ success: true, data: booking });
+  } catch (err) {
+    logger.error("[Bookings] create failed:", err.message);
+    next(err);
+  }
+};
+
 exports.create = async (req, res, next) => {
-  // We wrap the existing logic to add a notification after success
   const resProxy = {
     ...res,
     status: (code) => {
@@ -485,7 +545,6 @@ exports.create = async (req, res, next) => {
     },
     json: async (data) => {
       if (res.statusCode === 201 && data.success && req.user) {
-        // Notification for user creating their own booking
         await createNotificationInternal({
           userId: req.user.id,
           userEmail: req.user.email,
@@ -789,11 +848,13 @@ exports.getMyBookings = async (req, res, next) => {
             c.name      AS country_name,
             c.slug      AS country_slug,
             s.title     AS service_name,
-            s.slug      AS service_slug
+            s.slug      AS service_slug,
+            p.title     AS package_name
            FROM bookings b
            LEFT JOIN destinations d ON b.destination_id = d.id
            LEFT JOIN countries    c ON d.country_id     = c.id
            LEFT JOIN services     s ON b.service_id     = s.id
+           LEFT JOIN packages     p ON b.package_id     = p.id
            WHERE ${where}
            ORDER BY b.created_at DESC
            LIMIT $${pi} OFFSET $${pi + 1}`,

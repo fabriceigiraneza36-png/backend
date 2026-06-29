@@ -276,6 +276,7 @@ const ensureBookingsSchema = async () => {
         user_id              INTEGER,
         destination_id       INTEGER,
         service_id           INTEGER,
+        package_id           INTEGER,
         booking_type         VARCHAR(100) DEFAULT 'destination',
 
         -- Guest info
@@ -370,6 +371,15 @@ const ensureBookingsSchema = async () => {
       ['cancelled_at',        'TIMESTAMP'],
       ['completed_at',        'TIMESTAMP'],
       ['updated_at',          'TIMESTAMP DEFAULT NOW()'],
+      ['package_id',          'INTEGER'],
+      ['package_title',       'VARCHAR(500)'],
+      ['package_price',       'DECIMAL(12,2)'],
+      ['total_price',         'DECIMAL(12,2)'],
+      ['currency',            'VARCHAR(10) DEFAULT \'USD\''],
+      ['deposit_paid',        'DECIMAL(12,2) DEFAULT 0'],
+      ['pickup_location',     'VARCHAR(500)'],
+      ['priority',            'VARCHAR(20) DEFAULT \'normal\''],
+      ['booking_ref',         'VARCHAR(100)'],
     ];
 
     for (const [name, type] of columns) {

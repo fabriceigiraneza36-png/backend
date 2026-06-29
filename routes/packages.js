@@ -178,7 +178,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
           COUNT(*) FILTER (WHERE status = 'cancelled')     AS cancelled,
           COUNT(*) FILTER (WHERE status = 'needs_info')    AS needs_info,
           COALESCE(SUM(total_price),0)                     AS total_revenue
-        FROM package_bookings
+        FROM bookings b WHERE b.booking_type = 'package'
       `),
       db(`
         SELECT
@@ -206,9 +206,9 @@ router.get('/bookings/all', requireAdmin, async (req, res) => {
     const offset = (parseInt(page) - 1) * parseInt(limit)
     const params = []; const filters = []; let pi = 1
 
-    if (status) { filters.push(`pb.status = $${pi++}`); params.push(status) }
+    if (status) { filters.push(`b.status = $${pi++}`); params.push(status) }
     if (search) {
-      filters.push(`(pb.guest_name ILIKE $${pi} OR pb.guest_email ILIKE $${pi} OR pb.booking_ref ILIKE $${pi})`)
+      filters.push(`(b.full_name ILIKE $${pi} OR b.email ILIKE $${pi} OR b.booking_number ILIKE $${pi})`)
       params.push(`%${search}%`); pi++
     }
 
@@ -216,15 +216,15 @@ router.get('/bookings/all', requireAdmin, async (req, res) => {
 
     const [rows, cnt] = await Promise.all([
       db(`
-        SELECT pb.*, p.title AS package_title, p.slug AS package_slug,
+        SELECT b.*, p.title AS package_title, p.slug AS package_slug,
                p.thumbnail_url AS package_image
-        FROM package_bookings pb
-        LEFT JOIN packages p ON pb.package_id = p.id
-        ${where}
-        ORDER BY pb.created_at DESC
+        FROM bookings b
+        LEFT JOIN packages p ON b.package_id = p.id
+        WHERE b.booking_type = 'package' AND ${where.length > 5 ? where.replace('WHERE ', '') : '1=1'}
+        ORDER BY b.created_at DESC
         LIMIT $${pi++} OFFSET $${pi++}
       `, [...params, parseInt(limit), offset]),
-      db(`SELECT COUNT(*) FROM package_bookings pb ${where}`, params),
+      db(`SELECT COUNT(*) FROM bookings b WHERE b.booking_type = 'package' AND ${where.length > 5 ? where.replace('WHERE ', '') : '1=1'}`, params),
     ])
 
     res.json({
@@ -262,12 +262,12 @@ router.get('/my/messages', authenticate, async (req, res) => {
 router.get('/my/bookings', authenticate, async (req, res) => {
   try {
     const { rows } = await db(`
-      SELECT pb.*, p.title AS package_title, p.slug AS package_slug,
+      SELECT b.*, p.title AS package_title, p.slug AS package_slug,
              p.thumbnail_url AS package_image, p.duration_days
-      FROM package_bookings pb
-      LEFT JOIN packages p ON pb.package_id = p.id
-      WHERE pb.user_id = $1
-      ORDER BY pb.created_at DESC
+      FROM bookings b
+      LEFT JOIN packages p ON b.package_id = p.id
+      WHERE b.booking_type = 'package' AND b.user_id = $1
+      ORDER BY b.created_at DESC
     `, [req.user.id])
     res.json({ success: true, data: rows })
   } catch (err) {
@@ -363,7 +363,7 @@ router.get('/admin/all', requireAdmin, async (req, res) => {
       db(`
         SELECT
           p.*,
-          (SELECT COUNT(*) FROM package_bookings pb WHERE pb.package_id = p.id) AS actual_bookings,
+          (SELECT COUNT(*) FROM bookings b WHERE b.booking_type = 'package' AND b.package_id = p.id) AS actual_bookings,
           (SELECT COUNT(*) FROM package_messages pm WHERE pm.package_id = p.id AND pm.sender_type != 'admin') AS actual_messages
         FROM packages p
         WHERE ${where}
@@ -715,11 +715,13 @@ router.delete('/:id/messages/:msgId', requireAdmin, async (req, res) => {
 router.get('/:id/bookings', requireAdmin, async (req, res) => {
   try {
     const { rows } = await db(`
-      SELECT pb.*, u.full_name AS user_full_name, u.avatar_url AS user_avatar
-      FROM package_bookings pb
-      LEFT JOIN users u ON pb.user_id = u.id
-      WHERE pb.package_id = $1
-      ORDER BY pb.created_at DESC
+      SELECT b.*, u.full_name AS user_full_name, u.avatar_url AS user_avatar,
+             p.title AS package_title, p.slug AS package_slug
+      FROM bookings b
+      LEFT JOIN users u ON b.user_id = u.id
+      LEFT JOIN packages p ON b.package_id = p.id
+      WHERE b.booking_type = 'package' AND b.package_id = $1
+      ORDER BY b.created_at DESC
     `, [req.params.id])
     res.json({ success: true, data: rows })
   } catch (err) {
@@ -742,40 +744,45 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     if (!pkg.rows.length) return res.status(404).json({ error: 'Package not found' })
     const p = pkg.rows[0]
 
-    const name  = req.user?.full_name || req.user?.name || guest_name
+    const fullName = req.user?.full_name || req.user?.name || guest_name
     const email = req.user?.email || guest_email
-    const uid   = req.user?.id || null
+    const phone = req.user?.phone || guest_phone
+    const uid = req.user?.id || null
 
-    if (!name?.trim()) return res.status(400).json({ error: 'Name is required' })
+    if (!fullName?.trim()) return res.status(400).json({ error: 'Name is required' })
     if (!email?.trim()) return res.status(400).json({ error: 'Email is required' })
 
     const calcTotal = total_price || (p.price * parseInt(travelers_count || adults || 1))
+    const bookingType = 'package'
 
     const { rows } = await db(`
-      INSERT INTO package_bookings (
-        package_id, package_title, package_price,
-        user_id, guest_name, guest_email, guest_phone,
-        travelers_count, adults, children,
-        travel_date, end_date, special_requests, dietary_needs,
-        pickup_location, total_price, currency, deposit_paid,
-        source
-      ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
-      RETURNING *
+      INSERT INTO bookings (
+          booking_number, user_id, package_id, booking_type,
+          package_title, package_price,
+          full_name, email, phone,
+          number_of_travelers, number_of_adults, number_of_children,
+          travel_date, return_date,
+          special_requests, dietary_requirements,
+          pickup_location, total_price, currency, deposit_paid,
+          source, status, created_at, updated_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,'package_page',$21,NOW(),NOW()
+        ) RETURNING *
     `, [
-      pkgId, p.title, p.price,
-      uid, name.trim(), email.trim(), guest_phone,
+      genBookingRef(0), uid, pkgId, bookingType,
+      p.title, p.price,
+      fullName.trim(), email.trim(), phone,
       parseInt(travelers_count), parseInt(adults), parseInt(children),
       travel_date || null, end_date || null,
-      special_requests, dietary_needs, pickup_location,
-      calcTotal, p.currency, parseFloat(deposit_paid) || 0,
-      'package_page',
+      special_requests, dietary_needs,
+      pickup_location, calcTotal, p.currency, parseFloat(deposit_paid) || 0,
+      'pending',
     ])
 
-    // Fix booking_ref (trigger may not fire on first insert without id)
     const bk = rows[0]
-    if (!bk.booking_ref) {
-      await db(`UPDATE package_bookings SET booking_ref = $1 WHERE id = $2`, [genBookingRef(bk.id), bk.id])
-      bk.booking_ref = genBookingRef(bk.id)
+    if (!bk.booking_number) {
+      await db(`UPDATE bookings SET booking_number = $1 WHERE id = $2`, [genBookingRef(bk.id), bk.id])
+      bk.booking_number = genBookingRef(bk.id)
     }
 
     await db(`UPDATE packages SET booking_count = booking_count + 1 WHERE id = $1`, [pkgId]).catch(() => {})
@@ -808,7 +815,7 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
 
     params.push(bId)
     const { rows } = await db(
-      `UPDATE package_bookings SET ${sets.join(', ')} WHERE id = $${pi} RETURNING *`,
+      `UPDATE bookings SET ${sets.join(', ')} WHERE id = $${pi} AND booking_type = 'package' RETURNING *`,
       params
     )
     if (!rows.length) return res.status(404).json({ error: 'Booking not found' })
@@ -827,9 +834,9 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
 router.post('/:id/bookings/:bId/confirm', requireAdmin, async (req, res) => {
   try {
     const { rows } = await db(`
-      UPDATE package_bookings
+      UPDATE bookings
       SET status = 'confirmed', confirmed_at = NOW(), updated_at = NOW()
-      WHERE id = $1 RETURNING *
+      WHERE id = $1 AND booking_type = 'package' RETURNING *
     `, [req.params.bId])
     if (!rows.length) return res.status(404).json({ error: 'Booking not found' })
     if (rows[0].user_id) emitToUser(req, rows[0].user_id, 'pkg:booking-confirmed', rows[0])
@@ -844,9 +851,9 @@ router.post('/:id/bookings/:bId/cancel', requireAdmin, async (req, res) => {
   try {
     const { reason } = req.body
     const { rows } = await db(`
-      UPDATE package_bookings
+      UPDATE bookings
       SET status = 'cancelled', cancelled_at = NOW(), admin_notes = $2, updated_at = NOW()
-      WHERE id = $1 RETURNING *
+      WHERE id = $1 AND booking_type = 'package' RETURNING *
     `, [req.params.bId, reason || null])
     if (!rows.length) return res.status(404).json({ error: 'Booking not found' })
     if (rows[0].user_id) emitToUser(req, rows[0].user_id, 'pkg:booking-cancelled', rows[0])

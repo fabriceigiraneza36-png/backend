@@ -3,9 +3,10 @@
 const { setDefaultAutoSelectFamily } = require("net");
 try { setDefaultAutoSelectFamily(false); } catch { /* Node < 18.13 */ }
 
-// For older Node versions use this instead:
-const dns = require("dns");
-dns.setDefaultResultOrder("ipv4first");
+// ── IPv4 DNS preference — MUST be first line ──────────────────────────────────
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
+
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.8
@@ -20,10 +21,6 @@ dns.setDefaultResultOrder("ipv4first");
  */
 
 'use strict'
-
-// ── IPv4 DNS preference — MUST be first line ──────────────────────────────────
-const dns = require('dns')
-dns.setDefaultResultOrder('ipv4first')
 
 // ── Environment ───────────────────────────────────────────────────────────────
 require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') })
