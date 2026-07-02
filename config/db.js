@@ -339,7 +339,7 @@ const ensureBookingsSchema = async () => {
 
     // ── 2. Add any columns missing from an older table ───────────────────────
     const columns = [
-      // New names (controller uses these)
+      ['user_id',              'INTEGER'],
       ['booking_number',      'VARCHAR(50)'],
       ['booking_type',        "VARCHAR(100) DEFAULT 'destination'"],
       ['return_date',         'DATE'],
