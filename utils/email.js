@@ -4,6 +4,8 @@
 const nodemailer = require("nodemailer");
 const dns        = require("dns").promises;
 const logger     = require("./logger");
+const { send: sendGridSend } = require("./sendgrid");
+const { send: sendResendSend } = require("./resend");
 
 /* ── Env constants ─────────────────────────────────────────────────────── */
 const APP_NAME      = process.env.APP_NAME      || "Altuvera";
@@ -140,14 +142,49 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
   const RESET_CODES = ["EAUTH", "ECONNECTION", "ETIMEDOUT", "ECONNREFUSED", "ESOCKET", "ENETUNREACH"];
 
   try {
-    logger.info(`[Email] Sending → ${to} | "${subject}"`);
+    if (process.env.SENDGRID_API_KEY) {
+      try {
+        const result = await sendGridSend({
+          to,
+          subject,
+          html,
+          text: plainText,
+          ...(cc      ? { cc }      : {}),
+          ...(replyTo ? { replyTo } : {}),
+        });
+        logger.info(`[Email] ✅ SendGrid delivered → ${to} | msgId: ${result.messageId || 'unknown'}`);
+        return result;
+      } catch (sgErr) {
+        logger.warn(`[Email] SendGrid failed, falling back to Resend: ${sgErr.message}`);
+      }
+    }
+
+    if (process.env.RESEND_API_KEY) {
+      try {
+        const result = await sendResendSend({
+          to,
+          subject,
+          html,
+          text: plainText,
+          from: FROM_ADDRESS,
+          ...(cc      ? { cc }      : {}),
+          ...(replyTo ? { replyTo } : {}),
+        });
+        logger.info(`[Email] ✅ Resend delivered → ${to} | msgId: ${result.messageId || 'unknown'}`);
+        return result;
+      } catch (reErr) {
+        logger.warn(`[Email] Resend failed, falling back to SMTP: ${reErr.message}`);
+      }
+    }
+
+    logger.info(`[Email] Sending via SMTP → ${to} | "${subject}"`);
     const t = await getTransporter();
     const info = await t.sendMail({
       from: FROM_ADDRESS, to, subject, text: plainText, html,
       ...(cc      ? { cc }      : {}),
       ...(replyTo ? { replyTo } : {}),
     });
-    logger.info(`[Email] ✅ Delivered → ${to} | msgId: ${info.messageId}`);
+    logger.info(`[Email] ✅ SMTP delivered → ${to} | msgId: ${info.messageId}`);
     return info;
   } catch (err) {
     logger.error(`[Email] ❌ FAILED → ${to} | ${err.message}`, {
@@ -156,7 +193,7 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
     if (RESET_CODES.includes(err.code) || err.responseCode === 535) {
       logger.warn("[Email] Resetting transporter after error");
       resetTransporter();
-      _smtpIp = null;       // also invalidate cached IP
+      _smtpIp = null;
     }
     const friendly = new Error(`Email delivery failed: ${err.message}`);
     friendly.originalError = err;
