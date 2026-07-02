@@ -37,7 +37,6 @@ const CODE_COOLDOWN_MS       = 60_000;
 const SOCIAL_HTTP_TIMEOUT_MS = parseInt(
   process.env.SOCIAL_AUTH_TIMEOUT_MS || "8000", 10,
 );
-const REVERIFICATION_THRESHOLD = 3;
 
 const ipv4HttpsAgent = new https.Agent({ family: 4, keepAlive: true });
 const ipv4HttpAgent  = new http.Agent({  family: 4, keepAlive: true });
@@ -129,9 +128,6 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
     message: err.message || message,
   });
 };
-
-const requiresReverification = (user) =>
-  (user.login_counter ?? 0) >= REVERIFICATION_THRESHOLD;
 
 const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
   res.status(statusCode).json({
@@ -267,17 +263,6 @@ const incrementLoginCounter = async (userId) => {
   return result.rows[0];
 };
 
-const resetLoginCounter = async (userId) => {
-  const result = await query(
-    `UPDATE users
-        SET login_counter = 0
-      WHERE id = $1
-      RETURNING *`,
-    [userId],
-  );
-  return result.rows[0];
-};
-
 // ═══════════════════════════════════════════════════════════════════════════
 // REGISTER
 // ═══════════════════════════════════════════════════════════════════════════
@@ -386,7 +371,7 @@ exports.register = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// LOGIN
+// LOGIN  — always sends OTP, no reverification gate
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.login = async (req, res) => {
@@ -412,8 +397,13 @@ exports.login = async (req, res) => {
     }
 
     const user = result.rows[0];
+
     if (!user.is_active)
-      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+      return res.status(401).json({
+        success: false,
+        message: "Account deactivated. Contact support.",
+      });
+
     if (isRateLimited(user))
       return res.status(429).json({
         success: false,
@@ -421,9 +411,7 @@ exports.login = async (req, res) => {
       });
 
     const otp     = generateOTP();
-    const purpose = isNew ? "verify"
-      : requiresReverification(user) ? "reverification"
-      : "login";
+    const purpose = isNew ? "verify" : "login";
 
     await query(
       `UPDATE users SET
@@ -447,10 +435,8 @@ exports.login = async (req, res) => {
       success: true,
       message: "Verification code sent to your inbox.",
       data: {
-        email:        normalizedEmail,
-        isNewUser:    isNew,
-        loginCounter: user.login_counter ?? 0,
-        requiresReverification: requiresReverification(user),
+        email:     normalizedEmail,
+        isNewUser: isNew,
       },
     });
   } catch (err) {
@@ -490,7 +476,6 @@ exports.verifyCode = async (req, res) => {
       });
     }
 
-    // Check code match AND expiry
     const codeMatches = user.verification_code === sanitizedCode;
     const notExpired  = user.code_expiry && new Date(user.code_expiry) > new Date();
 
@@ -517,8 +502,6 @@ exports.verifyCode = async (req, res) => {
     }
 
     const isFirstVerification = !user.is_verified;
-    const wasReverification   = requiresReverification(user);
-    const newCounter          = wasReverification ? 1 : (user.login_counter ?? 0) + 1;
 
     const updated = await query(
       `UPDATE users SET
@@ -527,10 +510,10 @@ exports.verifyCode = async (req, res) => {
          code_expiry       = NULL,
          code_attempts     = 0,
          last_login        = NOW(),
-         login_counter     = $1
-       WHERE id = $2
+         login_counter     = COALESCE(login_counter, 0) + 1
+       WHERE id = $1
        RETURNING *`,
-      [newCounter, user.id],
+      [user.id],
     );
 
     const freshUser = updated.rows[0];
@@ -551,7 +534,6 @@ exports.verifyCode = async (req, res) => {
         user:         sanitizeUser(freshUser),
         isNewUser:    isFirstVerification,
         loginCounter: freshUser.login_counter,
-        wasReverification,
       },
     });
   } catch (err) {
@@ -570,7 +552,7 @@ exports.resendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required" });
 
     const result = await query(
-      `SELECT id, email, full_name, last_code_sent_at, login_counter, is_active
+      `SELECT id, email, full_name, last_code_sent_at, is_active
          FROM users WHERE email = $1`,
       [normalizedEmail],
     );
@@ -593,8 +575,7 @@ exports.resendCode = async (req, res) => {
         message: `Please wait ${getRemainingCooldown(user)} seconds before requesting again.`,
       });
 
-    const otp     = generateOTP();
-    const purpose = requiresReverification(user) ? "reverification" : "resend";
+    const otp = generateOTP();
 
     await query(
       `UPDATE users SET
@@ -610,7 +591,7 @@ exports.resendCode = async (req, res) => {
       to:            user.email,
       recipientName: user.full_name || "",
       otp,
-      purpose,
+      purpose:       "resend",
       expiryMinutes: 15,
     });
 
@@ -651,7 +632,7 @@ exports.checkEmail = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GOOGLE AUTH
+// GOOGLE AUTH  — no reverification gate
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.googleAuth = async (req, res) => {
@@ -689,44 +670,6 @@ exports.googleAuth = async (req, res) => {
     const providerId = String(payload.sub).trim();
     const name       = (payload.name || email.split("@")[0] || "User").trim();
 
-    // Re-verification check
-    const existingResult = await query(
-      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
-      [providerId, email],
-    );
-
-    if (existingResult.rows.length > 0) {
-      const existingUser = existingResult.rows[0];
-      if (requiresReverification(existingUser)) {
-        const otp = generateOTP();
-        if (!isRateLimited(existingUser)) {
-          await query(
-            `UPDATE users SET
-               verification_code = $1,
-               code_expiry       = NOW() + ($2 || ' minutes')::interval,
-               code_attempts     = 0,
-               last_code_sent_at = NOW()
-             WHERE id = $3`,
-            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
-          );
-          await sendOtpEmail({
-            to:            existingUser.email,
-            recipientName: existingUser.full_name || "",
-            otp,
-            purpose:       "reverification",
-            expiryMinutes: OTP_EXPIRY_MINUTES,
-          }).catch(() => {});
-        }
-        return res.status(403).json({
-          success:                false,
-          message:                "For your security, please verify your email to continue.",
-          code:                   "REVERIFICATION_REQUIRED",
-          requiresReVerification: true,
-          email:                  existingUser.email,
-        });
-      }
-    }
-
     const { user, isNew } = await upsertSocialUser({
       provider: "google", providerId, email, name,
       avatar: avatar || payload.picture, phone, bio,
@@ -741,7 +684,7 @@ exports.googleAuth = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// COMPLETE GOOGLE SIGN-UP
+// COMPLETE GOOGLE SIGN-UP  — no reverification gate
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.completeGoogleSignUp = async (req, res) => {
@@ -773,43 +716,6 @@ exports.completeGoogleSignUp = async (req, res) => {
     const providerId = String(payload.sub).trim();
     const name       = (fullName || payload.name || email.split("@")[0] || "User").trim();
 
-    const existingResult = await query(
-      `SELECT * FROM users WHERE google_id = $1 OR email = $2 LIMIT 1`,
-      [providerId, email],
-    );
-
-    if (existingResult.rows.length > 0) {
-      const existingUser = existingResult.rows[0];
-      if (requiresReverification(existingUser)) {
-        const otp = generateOTP();
-        if (!isRateLimited(existingUser)) {
-          await query(
-            `UPDATE users SET
-               verification_code = $1,
-               code_expiry       = NOW() + ($2 || ' minutes')::interval,
-               code_attempts     = 0,
-               last_code_sent_at = NOW()
-             WHERE id = $3`,
-            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
-          );
-          await sendOtpEmail({
-            to:            existingUser.email,
-            recipientName: existingUser.full_name || "",
-            otp,
-            purpose:       "reverification",
-            expiryMinutes: OTP_EXPIRY_MINUTES,
-          }).catch(() => {});
-        }
-        return res.status(403).json({
-          success:                false,
-          message:                "For your security, please verify your email to continue.",
-          code:                   "REVERIFICATION_REQUIRED",
-          requiresReVerification: true,
-          email,
-        });
-      }
-    }
-
     const { user, isNew } = await upsertSocialUser({
       provider: "google", providerId, email, name,
       avatar: avatar || payload.picture,
@@ -826,7 +732,7 @@ exports.completeGoogleSignUp = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
-// GITHUB AUTH
+// GITHUB AUTH  — no reverification gate
 // ═══════════════════════════════════════════════════════════════════════════
 
 exports.githubAuth = async (req, res) => {
@@ -860,12 +766,16 @@ exports.githubAuth = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
+    const gh = await fetchJsonOrThrow(
+      "https://api.github.com/user", { headers: ghHeaders }, "GitHub profile",
+    );
 
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
-      const list   = Array.isArray(emails) ? emails : [];
+      const emails = await fetchJsonOrThrow(
+        "https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails",
+      );
+      const list = Array.isArray(emails) ? emails : [];
       ghEmail = list.find((e) => e.primary && e.verified)?.email
              || list.find((e) => e.verified)?.email
              || list[0]?.email;
@@ -877,43 +787,6 @@ exports.githubAuth = async (req, res) => {
     const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
     const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
-
-    const existingResult = await query(
-      `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
-      [providerId, email],
-    );
-
-    if (existingResult.rows.length > 0) {
-      const existingUser = existingResult.rows[0];
-      if (requiresReverification(existingUser)) {
-        const otp = generateOTP();
-        if (!isRateLimited(existingUser)) {
-          await query(
-            `UPDATE users SET
-               verification_code = $1,
-               code_expiry       = NOW() + ($2 || ' minutes')::interval,
-               code_attempts     = 0,
-               last_code_sent_at = NOW()
-             WHERE id = $3`,
-            [otp, OTP_EXPIRY_MINUTES, existingUser.id],
-          );
-          await sendOtpEmail({
-            to:            existingUser.email,
-            recipientName: existingUser.full_name || "",
-            otp,
-            purpose:       "reverification",
-            expiryMinutes: OTP_EXPIRY_MINUTES,
-          }).catch(() => {});
-        }
-        return res.status(403).json({
-          success:                false,
-          message:                "For your security, please verify your email to continue.",
-          code:                   "REVERIFICATION_REQUIRED",
-          requiresReVerification: true,
-          email,
-        });
-      }
-    }
 
     const { user, isNew } = await upsertSocialUser({
       provider: "github", providerId, email, name,
@@ -978,12 +851,16 @@ exports.githubCallback = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
+    const gh = await fetchJsonOrThrow(
+      "https://api.github.com/user", { headers: ghHeaders }, "GitHub profile",
+    );
 
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
-      const list   = Array.isArray(emails) ? emails : [];
+      const emails = await fetchJsonOrThrow(
+        "https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails",
+      );
+      const list = Array.isArray(emails) ? emails : [];
       ghEmail = list.find((e) => e.primary && e.verified)?.email
              || list.find((e) => e.verified)?.email
              || list[0]?.email;
@@ -995,20 +872,6 @@ exports.githubCallback = async (req, res) => {
     const email      = ghEmail.toLowerCase();
     const providerId = String(gh.id).trim();
     const name       = (gh.name || gh.login || email.split("@")[0] || "User").trim();
-
-    const existingResult = await query(
-      `SELECT * FROM users WHERE github_id = $1 OR email = $2 LIMIT 1`,
-      [providerId, email],
-    );
-
-    if (existingResult.rows.length > 0) {
-      const existingUser = existingResult.rows[0];
-      if (requiresReverification(existingUser))
-        return res.redirect(
-          `${FRONTEND}/auth/github/callback?error=reverification_required` +
-          `&email=${encodeURIComponent(email)}`,
-        );
-    }
 
     const { user, isNew } = await upsertSocialUser({
       provider: "github", providerId, email, name,
@@ -1130,7 +993,10 @@ exports.refreshToken = async (req, res) => {
       typeof entity.token_version === "number" &&
       decoded.tokenVersion !== entity.token_version
     ) {
-      return res.status(401).json({ success: false, message: "Session invalidated. Please sign in again." });
+      return res.status(401).json({
+        success: false,
+        message: "Session invalidated. Please sign in again.",
+      });
     }
 
     return res.json({
@@ -1250,7 +1116,10 @@ exports.changePassword = async (req, res) => {
       return res.status(401).json({ success: false, message: "Current password is incorrect." });
 
     const newHash = await bcrypt.hash(newPassword, 12);
-    await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [newHash, req.user.id]);
+    await query(
+      "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
+      [newHash, req.user.id],
+    );
     return res.json({ success: true, message: "Password updated successfully." });
   } catch (err) {
     handleError(res, err, "Password change failed");
@@ -1306,5 +1175,5 @@ exports.deleteAccount = async (req, res) => {
   }
 };
 
-// ── Export email builders for admin use ───────────────────────────────────
+// ── Export email builders for admin use ──────────────────────────────────
 exports._emailBuilders = require("../utils/email");

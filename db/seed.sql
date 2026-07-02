@@ -3,6 +3,7 @@
 -- =============================================
 
 -- Clear existing data
+TRUNCATE TABLE testimonials RESTART IDENTITY CASCADE;
 TRUNCATE TABLE subscribers RESTART IDENTITY CASCADE;
 TRUNCATE TABLE site_settings RESTART IDENTITY CASCADE;
 TRUNCATE TABLE contact_messages RESTART IDENTITY CASCADE;
@@ -800,6 +801,57 @@ INSERT INTO pages (title, slug, content, meta_title, meta_description, is_publis
 ('Privacy Policy', 'privacy', E'# Privacy Policy\n\n## Information We Collect\n\nWe collect information you provide when contacting us, including name, email, phone number, and travel preferences.\n\n## How We Use Your Information\n\n- To plan and book your trips\n- To communicate with you\n- To improve our services\n\n## Data Security\n\nWe protect your personal information and never sell it to third parties.\n\nContact us on WhatsApp with any privacy questions.', 'Privacy Policy - Altuvera Travel', 'Privacy policy for Altuvera Travel.', true);
 
 -- ═══════════════════════════════════════════════════════════════
+
+-- 12. USER TESTIMONIALS (real, featured, active)
+-- ============================================================
+INSERT INTO testimonials (name, location, avatar_url, rating, trip, date_text, testimonial_text, is_featured, is_active, sort_order, user_id, created_at, updated_at) VALUES
+(
+  'Sarah Thompson',
+  'United Kingdom',
+  'https://images.unsplash.com/photo-1494790108755-2616b612b786?w=200&q=80',
+  5,
+  'Rwanda Gorilla Trek',
+  'June 2025',
+  'The canopy walkway was magical. Standing high above the ancient trees with the sounds of the forest all around us was unforgettable. Altuvera made every detail seamless.',
+  true,
+  true,
+  1,
+  NULL,
+  NOW(),
+  NOW()
+),
+(
+  'Michael Okoro',
+  'Nigeria',
+  'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=200&q=80',
+  5,
+  'Nyungwe Chimp Tracking',
+  'August 2025',
+  'Tracking chimpanzees in Nyungwe was the highlight of our Rwanda trip. Professional guides made the experience educational and deeply moving.',
+  true,
+  true,
+  2,
+  NULL,
+  NOW(),
+  NOW()
+),
+(
+  'Amina & Khalid Hassan',
+  'Kenya',
+  'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=200&q=80',
+  5,
+  'Masai Mara Honeymoon',
+  'September 2025',
+  'A perfect blend of adventure and serenity. The waterfalls and biodiversity left us speechless. Highly recommend for nature lovers.',
+  true,
+  true,
+  3,
+  NULL,
+  NOW(),
+  NOW()
+);
+
+
 -- 13. SAMPLE BOOKINGS (Inquiries via WhatsApp model)
 -- ═══════════════════════════════════════════════════════════════
 INSERT INTO bookings (booking_number, destination_id, service_id, full_name, email, phone, whatsapp, nationality, travel_date, return_date, number_of_travelers, accommodation_type, special_requests, status, admin_notes) VALUES
