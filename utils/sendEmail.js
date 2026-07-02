@@ -1,40 +1,43 @@
-const nodemailer = require("nodemailer");
+const { Resend } = require("resend");
 
 // ============================================================
 // CONFIGURATION & UTILITIES
 // ============================================================
 
 const getEmailConfig = () => {
-  const smtpHost = process.env.SMTP_HOST || "smtp.gmail.com";
-  const smtpPort = parseInt(process.env.SMTP_PORT, 10) || 587;
-  const smtpUser = process.env.SMTP_USER || "";
-  const smtpPass = (process.env.SMTP_PASS || "").replace(/\s+/g, "");
+  const resendApiKey = process.env.RESEND_API_KEY || "";
+  const fromDomain   = process.env.RESEND_FROM_DOMAIN || "altuvera.com";
   const isConfigured = Boolean(
-    smtpUser &&
-      smtpPass &&
-      !smtpUser.includes("your-email") &&
-      !smtpPass.includes("your-app-password")
+    resendApiKey &&
+    resendApiKey.startsWith("re_") &&
+    !resendApiKey.includes("your-api-key")
   );
   const devFallback =
     process.env.NODE_ENV !== "production" &&
     process.env.AUTH_ALLOW_DEV_OTP_FALLBACK === "true";
 
-  return { smtpHost, smtpPort, smtpUser, smtpPass, isConfigured, devFallback };
+  return { resendApiKey, fromDomain, isConfigured, devFallback };
 };
 
-const createTransporter = (config) =>
-  nodemailer.createTransport({
-    host: config.smtpHost,
-    port: config.smtpPort,
-    secure: config.smtpPort === 465,
-    auth: config.isConfigured
-      ? { user: config.smtpUser, pass: config.smtpPass }
-      : undefined,
-  });
+// Singleton Resend client
+let _resendClient = null;
+const getResendClient = () => {
+  const config = getEmailConfig();
+  if (!config.isConfigured) return null;
+  if (!_resendClient) {
+    _resendClient = new Resend(config.resendApiKey);
+  }
+  return _resendClient;
+};
+
+// Reset client (e.g. after key rotation)
+const resetResendClient = () => { _resendClient = null; };
 
 const validateEmail = (email) => {
   if (email === null || email === undefined) {
-    throw new TypeError("Email parameter is required and cannot be null or undefined");
+    throw new TypeError(
+      "Email parameter is required and cannot be null or undefined"
+    );
   }
   if (typeof email !== "string") {
     throw new TypeError(`Email must be a string, received ${typeof email}`);
@@ -60,7 +63,10 @@ const safeEncodeURI = (str) => {
 
 const getEnvVar = (key, fallback) => {
   try {
-    return (typeof process !== "undefined" && process.env && process.env[key]) || fallback;
+    return (
+      (typeof process !== "undefined" && process.env && process.env[key]) ||
+      fallback
+    );
   } catch {
     return fallback;
   }
@@ -68,11 +74,11 @@ const getEnvVar = (key, fallback) => {
 
 const escapeHtml = (str) =>
   String(str)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
+    .replace(/&/g,  "&amp;")
+    .replace(/</g,  "&lt;")
+    .replace(/>/g,  "&gt;")
+    .replace(/"/g,  "&quot;")
+    .replace(/'/g,  "&#039;");
 
 const getCurrentYear = () => {
   try {
@@ -87,25 +93,25 @@ const getCurrentYear = () => {
 // ============================================================
 
 const sharedStyles = {
-  bodyBg: "#f0fdf4",
-  cardBg: "#ffffff",
-  cardRadius: "28px",
-  cardShadow: "0 8px 40px rgba(22,163,74,0.10)",
+  bodyBg:         "#f0fdf4",
+  cardBg:         "#ffffff",
+  cardRadius:     "28px",
+  cardShadow:     "0 8px 40px rgba(22,163,74,0.10)",
   bannerGradient: "linear-gradient(135deg,#14532d 0%,#15803d 40%,#22c55e 100%)",
-  greenDark: "#14532d",
-  greenMid: "#15803d",
-  greenLight: "#22c55e",
-  greenPale: "#f0fdf4",
-  greenMint: "#dcfce7",
-  greenBorder: "#bbf7d0",
-  textPrimary: "#0f1b0f",
-  textSecondary: "#4a6b52",
-  textMuted: "#6b8f72",
-  white: "#ffffff",
-  warningBg: "#fef3c7",
-  warningBorder: "#fde68a",
-  warningText: "#92400e",
-  footerBg: "#0c3b1e",
+  greenDark:      "#14532d",
+  greenMid:       "#15803d",
+  greenLight:     "#22c55e",
+  greenPale:      "#f0fdf4",
+  greenMint:      "#dcfce7",
+  greenBorder:    "#bbf7d0",
+  textPrimary:    "#0f1b0f",
+  textSecondary:  "#4a6b52",
+  textMuted:      "#6b8f72",
+  white:          "#ffffff",
+  warningBg:      "#fef3c7",
+  warningBorder:  "#fde68a",
+  warningText:    "#92400e",
+  footerBg:       "#0c3b1e",
 };
 
 const buildOuterWrapper = (content) => `
@@ -126,11 +132,9 @@ const buildOuterWrapper = (content) => `
   <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background-color:${sharedStyles.bodyBg};min-height:100vh;">
     <tr>
       <td align="center" valign="top" style="padding:48px 20px;">
-
         <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="max-width:620px;background-color:${sharedStyles.cardBg};border-radius:${sharedStyles.cardRadius};overflow:hidden;box-shadow:${sharedStyles.cardShadow};border:1px solid rgba(22,163,74,0.06);">
           ${content}
         </table>
-
       </td>
     </tr>
   </table>
@@ -330,9 +334,9 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
 
 const buildWelcomeSubscriberEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
-  const siteUrl = getEnvVar("SITE_URL", "http://localhost:3000");
+  const siteUrl        = getEnvVar("SITE_URL", "http://localhost:3000");
   const unsubscribeUrl = `${siteUrl}/api/subscribers/unsubscribe/${safeEncodeURI(validatedEmail)}`;
-  const exploreUrl = `${siteUrl}/explore`;
+  const exploreUrl     = `${siteUrl}/explore`;
 
   const content = `
     ${buildBanner("🌿", "East Africa Explorer", "Premium Safari & Adventures")}
@@ -409,9 +413,9 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
 
 const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
-  const siteUrl = getEnvVar("SITE_URL", "http://localhost:3000");
+  const siteUrl        = getEnvVar("SITE_URL", "http://localhost:3000");
   const resubscribeUrl = `${siteUrl}/explore`;
-  const supportEmail = getEnvVar("ADMIN_EMAIL", "fabriceigiraneza36@gmail.com");
+  const supportEmail   = getEnvVar("ADMIN_EMAIL", "fabriceigiraneza36@gmail.com");
 
   const content = `
     ${buildBanner("🌿", "East Africa Explorer", "Premium Safari & Adventures")}
@@ -489,64 +493,129 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
 };
 
 // ============================================================
-// EMAIL SENDING FUNCTIONS
+// CORE SEND FUNCTION (Resend HTTP API — no SMTP ports needed)
 // ============================================================
 
+/**
+ * @param {{ to: string, subject: string, html: string,
+ *           text?: string, from?: string }} mailOptions
+ * @param {string} logMessage
+ * @returns {Promise<{ delivered: boolean, id?: string, fallback?: string }>}
+ */
 async function sendEmail(mailOptions, logMessage) {
-  const emailConfig = getEmailConfig();
-  const transporter = createTransporter(emailConfig);
+  const config = getEmailConfig();
 
-  if (!emailConfig.isConfigured) {
-    if (emailConfig.devFallback) {
-      console.warn(`[DEV FALLBACK] SMTP not configured. Email to: ${mailOptions.to}`);
-      return { delivered: false, fallback: "console" };
-    }
-    const configError = new Error(
-      "Email service is not configured. Set valid SMTP_USER and SMTP_PASS."
-    );
-    configError.statusCode = 503;
-    configError.code = "EMAIL_NOT_CONFIGURED";
-    throw configError;
-  }
-
-  try {
-    await transporter.sendMail(mailOptions);
-    console.log(logMessage);
-    return { delivered: true };
-  } catch (error) {
-    console.error("❌ Email send error:", error.message);
-
-    if (emailConfig.devFallback) {
+  // ── Dev fallback: just log, don't crash ──────────────────
+  if (!config.isConfigured) {
+    if (config.devFallback) {
       console.warn(
-        `[DEV FALLBACK] SMTP error (${error.message}). Email to: ${mailOptions.to}`
+        `[DEV FALLBACK] Resend not configured. Email to: ${mailOptions.to}`
       );
       return { delivered: false, fallback: "console" };
     }
-
-    const deliveryError = new Error("Failed to send email. Please try again.");
-    deliveryError.statusCode = 503;
-    deliveryError.code = "EMAIL_DELIVERY_FAILED";
-    throw deliveryError;
+    const configError = new Error(
+      "Email service is not configured. Set a valid RESEND_API_KEY."
+    );
+    configError.statusCode = 503;
+    configError.code       = "EMAIL_NOT_CONFIGURED";
+    throw configError;
   }
+
+  const client = getResendClient();
+
+  const fromAddress =
+    mailOptions.from ||
+    `Altuvera <noreply@${config.fromDomain}>`;
+
+  // ── Retry loop (3 attempts) ──────────────────────────────
+  const MAX_ATTEMPTS = 3;
+  let lastError;
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const { data, error } = await client.emails.send({
+        from:    fromAddress,
+        to:      mailOptions.to,
+        subject: mailOptions.subject,
+        html:    mailOptions.html,
+        ...(mailOptions.text ? { text: mailOptions.text } : {}),
+      });
+
+      if (error) {
+        // Resend returns errors in { error } shape — treat as thrown
+        throw Object.assign(
+          new Error(error.message || "Resend API error"),
+          { statusCode: error.statusCode, code: "RESEND_API_ERROR" }
+        );
+      }
+
+      console.log(`${logMessage} [id: ${data?.id}]`);
+      return { delivered: true, id: data?.id };
+
+    } catch (err) {
+      lastError = err;
+      console.warn(
+        `[Email] Attempt ${attempt}/${MAX_ATTEMPTS} failed for ${mailOptions.to}: ${err.message}`
+      );
+
+      // Don't retry on config/auth errors — they won't self-heal
+      const fatalCodes = ["RESEND_API_ERROR", "EMAIL_NOT_CONFIGURED"];
+      const fatalStatuses = [401, 403, 422];
+      if (
+        fatalCodes.includes(err.code) ||
+        fatalStatuses.includes(err.statusCode)
+      ) {
+        break;
+      }
+
+      // Exponential back-off: 1 s, 2 s
+      if (attempt < MAX_ATTEMPTS) {
+        await new Promise((res) => setTimeout(res, 1000 * attempt));
+      }
+    }
+  }
+
+  // ── All attempts exhausted ───────────────────────────────
+  console.error(`❌ Email send failed after ${MAX_ATTEMPTS} attempts:`, lastError?.message);
+
+  if (config.devFallback) {
+    console.warn(
+      `[DEV FALLBACK] All attempts failed. Email to: ${mailOptions.to}`
+    );
+    return { delivered: false, fallback: "console" };
+  }
+
+  const deliveryError = new Error("Email delivery failed. Please try again.");
+  deliveryError.statusCode = 503;
+  deliveryError.code       = "EMAIL_DELIVERY_FAILED";
+  throw deliveryError;
 }
 
+// ============================================================
+// PUBLIC SENDING FUNCTIONS
+// ============================================================
+
 async function sendVerificationCode(email, code, fullName) {
-  const emailConfig = getEmailConfig();
-  const supportEmail = getEnvVar("ADMIN_EMAIL", "fabriceigiraneza36@gmail.com");
+  const config       = getEmailConfig();
+  const supportEmail = getEnvVar("ADMIN_EMAIL", "support@altuvera.com");
 
-  const mailOptions = {
-    from: `"Altuvera" <${getEnvVar("SMTP_FROM", emailConfig.smtpUser || "verify@altuvera.com")}>`,
-    to: email,
-    subject: "🔐 Your Altuvera Verification Code",
-    html: buildVerificationEmailHtml(code, fullName, supportEmail),
-  };
-
-  if (!emailConfig.isConfigured && emailConfig.devFallback) {
-    console.warn(`[DEV FALLBACK] SMTP not configured. Code for ${email}: ${code}`);
+  if (!config.isConfigured && config.devFallback) {
+    console.warn(
+      `[DEV FALLBACK] Resend not configured. Code for ${email}: ${code}`
+    );
     return { delivered: false, fallback: "console", code };
   }
 
-  const result = await sendEmail(mailOptions, `✅ Verification code sent to ${email}`);
+  const result = await sendEmail(
+    {
+      to:      email,
+      subject: "🔐 Your Altuvera Verification Code",
+      html:    buildVerificationEmailHtml(code, fullName, supportEmail),
+      text:    `Your Altuvera verification code is: ${code}\n\nValid for 10 minutes. Do not share this code.`,
+    },
+    `✅ Verification code sent to ${email}`
+  );
+
   if (!result.delivered && result.fallback) {
     result.code = code;
   }
@@ -555,30 +624,32 @@ async function sendVerificationCode(email, code, fullName) {
 
 async function sendWelcomeEmail(email) {
   const validatedEmail = validateEmail(email);
-  const emailConfig = getEmailConfig();
 
-  const mailOptions = {
-    from: `"East Africa Explorer" <${getEnvVar("SMTP_FROM", emailConfig.smtpUser || "hello@eastafricaexplorer.com")}>`,
-    to: validatedEmail,
-    subject: "🌿 Welcome to East Africa Explorer! Your Adventure Begins",
-    html: buildWelcomeSubscriberEmailHtml(validatedEmail),
-  };
-
-  return sendEmail(mailOptions, `✅ Welcome email sent to ${validatedEmail}`);
+  return sendEmail(
+    {
+      from:    `East Africa Explorer <hello@${getEmailConfig().fromDomain}>`,
+      to:      validatedEmail,
+      subject: "🌿 Welcome to East Africa Explorer! Your Adventure Begins",
+      html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
+      text:    `Welcome to East Africa Explorer! Visit us at ${getEnvVar("SITE_URL", "http://localhost:3000")}/explore`,
+    },
+    `✅ Welcome email sent to ${validatedEmail}`
+  );
 }
 
 async function sendUnsubscribeConfirmation(email) {
   const validatedEmail = validateEmail(email);
-  const emailConfig = getEmailConfig();
 
-  const mailOptions = {
-    from: `"East Africa Explorer" <${getEnvVar("SMTP_FROM", emailConfig.smtpUser || "hello@eastafricaexplorer.com")}>`,
-    to: validatedEmail,
-    subject: "👋 You've Been Unsubscribed • East Africa Explorer",
-    html: buildUnsubscribeConfirmationEmailHtml(validatedEmail),
-  };
-
-  return sendEmail(mailOptions, `✅ Unsubscribe confirmation sent to ${validatedEmail}`);
+  return sendEmail(
+    {
+      from:    `East Africa Explorer <hello@${getEmailConfig().fromDomain}>`,
+      to:      validatedEmail,
+      subject: "👋 You've Been Unsubscribed • East Africa Explorer",
+      html:    buildUnsubscribeConfirmationEmailHtml(validatedEmail),
+      text:    "You have been successfully unsubscribed from East Africa Explorer emails.",
+    },
+    `✅ Unsubscribe confirmation sent to ${validatedEmail}`
+  );
 }
 
 // ============================================================
@@ -586,15 +657,19 @@ async function sendUnsubscribeConfirmation(email) {
 // ============================================================
 
 module.exports = {
+  // Sending functions
   sendVerificationCode,
   sendWelcomeEmail,
   sendUnsubscribeConfirmation,
 
+  // Template builders (for testing / custom use)
   buildVerificationEmailHtml,
   buildWelcomeSubscriberEmailHtml,
   buildUnsubscribeConfirmationEmailHtml,
 
+  // Utilities
   validateEmail,
   getEmailConfig,
   escapeHtml,
-};d
+  resetResendClient,
+};
