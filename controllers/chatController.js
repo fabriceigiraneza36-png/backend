@@ -1,4 +1,9 @@
-const { query } = require("../config/db");
+/**
+ * controllers/chatController.js
+ * Fixed: socket room naming, message delivery to users
+ */
+
+const { query } = require('../config/db');
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SERIALIZERS
@@ -9,12 +14,11 @@ const serializeSession = (row) => ({
   userId:         row.user_id      ?? null,
   email:          row.email        ?? null,
   fullName:       row.full_name    ?? null,
-  // Aliases expected by Chat.jsx
   userEmail:      row.email        ?? null,
   userFullName:   row.full_name    ?? null,
   userAvatar:     row.avatar_url   ?? null,
   source:         row.source       ?? null,
-  status:         row.status       ?? "open",
+  status:         row.status       ?? 'open',
   lastActive:     row.last_active  ?? null,
   createdAt:      row.created_at   ?? null,
   updatedAt:      row.updated_at   ?? null,
@@ -41,11 +45,6 @@ const serializeMessage = (row) => ({
 // INTERNAL HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Upsert a chat session row.
- * - If session_id already exists → touch last_active, backfill missing fields
- * - If not → insert a new row
- */
 const getOrCreateSession = async ({
   sessionId,
   userId,
@@ -53,18 +52,18 @@ const getOrCreateSession = async ({
   fullName,
   source,
 }) => {
-  const normalizedId = String(sessionId || "").trim();
-  if (!normalizedId) throw new Error("sessionId is required");
+  const normalizedId = String(sessionId || '').trim();
+  if (!normalizedId) throw new Error('sessionId is required');
 
   const result = await query(
     `INSERT INTO chat_sessions
        (session_id, user_id, email, full_name, source, last_active)
      VALUES ($1, $2, $3, $4, $5, NOW())
      ON CONFLICT (session_id) DO UPDATE SET
-       user_id   = COALESCE(EXCLUDED.user_id,   chat_sessions.user_id),
-       email     = COALESCE(NULLIF(EXCLUDED.email,     ''), chat_sessions.email),
-       full_name = COALESCE(NULLIF(EXCLUDED.full_name, ''), chat_sessions.full_name),
-       source    = COALESCE(NULLIF(EXCLUDED.source,    ''), chat_sessions.source),
+       user_id     = COALESCE(EXCLUDED.user_id,                  chat_sessions.user_id),
+       email       = COALESCE(NULLIF(EXCLUDED.email,     ''),    chat_sessions.email),
+       full_name   = COALESCE(NULLIF(EXCLUDED.full_name, ''),    chat_sessions.full_name),
+       source      = COALESCE(NULLIF(EXCLUDED.source,    ''),    chat_sessions.source),
        last_active = NOW(),
        updated_at  = NOW()
      RETURNING *`,
@@ -73,16 +72,13 @@ const getOrCreateSession = async ({
       userId   || null,
       email    || null,
       fullName || null,
-      source   || "frontend",
+      source   || 'frontend',
     ],
   );
 
   return result.rows[0];
 };
 
-/**
- * Insert a chat message and touch the parent session timestamp.
- */
 const createChatMessage = async ({
   sessionId,
   senderType,
@@ -109,7 +105,7 @@ const createChatMessage = async ({
     ],
   );
 
-  // Keep session fresh
+  // Keep session timestamp fresh
   await query(
     `UPDATE chat_sessions
         SET last_active = NOW(),
@@ -122,19 +118,55 @@ const createChatMessage = async ({
 };
 
 /**
- * Emit a socket event if Socket.IO is attached to the Express app.
- * Falls back silently if not configured.
+ * Emit to a socket room safely.
+ *
+ * ✅ KEY FIX: We emit to BOTH room naming conventions:
+ *   - `session:${sessionId}`  — what MessagingContext.jsx listens on
+ *   - `${sessionId}`          — direct session room
+ *   - `admin-room`            — for admin panel sidebar updates
  */
 const emit = (req, event, room, payload) => {
   try {
-    const io = req.app.get("io");
-    if (io) io.to(room).emit(event, payload);
-  } catch { /* socket not configured */ }
+    const io = req.app.get('io');
+    if (io) {
+      io.to(room).emit(event, payload);
+      // ── Debug log in development ──────────────────────────────────────────
+      if (process.env.NODE_ENV !== 'production') {
+        console.log(`[Socket] emit "${event}" → room "${room}"`);
+      }
+    }
+  } catch {
+    /* Socket.IO not configured — HTTP-only mode */
+  }
+};
+
+/**
+ * Emit a message to ALL rooms the user session might be in.
+ * This guarantees delivery regardless of which room the client joined.
+ */
+const emitToSession = (req, sessionId, event, payload) => {
+  const io = req.app.get('io');
+  if (!io) return;
+
+  try {
+    // Room 1: MessagingContext joins "session:${sessionId}"
+    io.to(`session:${sessionId}`).emit(event, payload);
+
+    // Room 2: Direct session ID (some socket setups)
+    io.to(sessionId).emit(event, payload);
+
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(
+        `[Socket] emitToSession "${event}" → "session:${sessionId}" + "${sessionId}"`,
+      );
+    }
+  } catch (err) {
+    console.error('[Socket] emitToSession error:', err.message);
+  }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/chat/sessions
-// List all sessions with unread counts + last message
+// GET /api/chat/sessions — Admin: list all sessions
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.getSessions = async (req, res, next) => {
@@ -186,9 +218,7 @@ exports.getSessions = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/chat/sessions
-// Admin creates or reopens a session with a registered user
-// Body: { userId, message? }
+// POST /api/chat/sessions — Admin: create or reopen session with user
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.createSession = async (req, res, next) => {
@@ -198,11 +228,11 @@ exports.createSession = async (req, res, next) => {
     if (!userId) {
       return res.status(400).json({
         success: false,
-        message: "userId is required",
+        message: 'userId is required',
       });
     }
 
-    // ── Verify the user exists ───────────────────────────────────────────────
+    // ── Verify user ───────────────────────────────────────────────────────────
     const userResult = await query(
       `SELECT id, full_name, email, avatar_url
          FROM users
@@ -214,27 +244,24 @@ exports.createSession = async (req, res, next) => {
     if (!userResult.rows[0]) {
       return res.status(404).json({
         success: false,
-        message: "User not found",
+        message: 'User not found',
       });
     }
 
-    const user = userResult.rows[0];
-
-    // ── Use user's id as the sessionId (stable, 1-per-user convention) ───────
-    // If you prefer UUID sessions, swap this for a uuid() call.
+    const user      = userResult.rows[0];
     const sessionId = `user_${user.id}`;
 
-    // ── Upsert the session ────────────────────────────────────────────────────
+    // ── Upsert session ────────────────────────────────────────────────────────
     const session = await getOrCreateSession({
       sessionId,
       userId:   user.id,
       email:    user.email,
       fullName: user.full_name,
-      source:   "admin-panel",
+      source:   'admin-panel',
     });
 
-    // Re-open if it was closed
-    if (session.status === "closed") {
+    // Re-open if closed
+    if (session.status === 'closed') {
       await query(
         `UPDATE chat_sessions
             SET status     = 'open',
@@ -242,33 +269,41 @@ exports.createSession = async (req, res, next) => {
           WHERE session_id = $1`,
         [sessionId],
       );
-      session.status = "open";
+      session.status = 'open';
     }
 
-    // ── Optional first message ────────────────────────────────────────────────
+    // ── Optional first admin message ──────────────────────────────────────────
     let messages = [];
-    const admin = req.user || {};
+    const admin  = req.user || {};
 
     if (message?.trim()) {
       const msg = await createChatMessage({
         sessionId,
-        senderType:  "admin",
-        senderId:    admin.id    || null,
-        senderName:  admin.full_name || admin.name || "Admin",
-        senderEmail: admin.email || null,
+        senderType:  'admin',
+        senderId:    admin.id       || null,
+        senderName:  admin.full_name || admin.name || 'Admin',
+        senderEmail: admin.email    || null,
         body:        message.trim(),
-        metadata:    { source: "admin-panel" },
+        metadata:    { source: 'admin-panel' },
       });
 
       messages = [serializeMessage(msg)];
 
-      // Real-time: push the message to the user's widget
-      emit(req, "msg:message", `session:${sessionId}`, {
-        ...serializeMessage(msg),
+      const serialized = serializeMessage(msg);
+
+      // ✅ FIXED: Emit to all session rooms so user widget receives it
+      emitToSession(req, sessionId, 'msg:message', {
+        ...serialized,
         sessionId,
       });
+
+      // Also emit legacy event names for compatibility
+      emitToSession(req, sessionId, 'message', {
+        ...serialized,
+        sessionId,
+      });
+
     } else {
-      // Load existing messages so the admin sees the thread immediately
       const existing = await query(
         `SELECT * FROM chat_messages
           WHERE session_id = $1
@@ -279,10 +314,10 @@ exports.createSession = async (req, res, next) => {
       messages = existing.rows.map(serializeMessage);
     }
 
-    // Real-time: notify admin sidebar
-    emit(req, "msg:session-updated", "admin-room", {
+    // Notify admin sidebar
+    emit(req, 'msg:session-updated', 'admin-room', {
       sessionId,
-      status: "open",
+      status: 'open',
     });
 
     return res.status(201).json({
@@ -298,7 +333,7 @@ exports.createSession = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/chat/sessions/:sessionId/messages
+// GET /api/chat/sessions/:sessionId/messages — Get session messages
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.getMessages = async (req, res, next) => {
@@ -306,10 +341,13 @@ exports.getMessages = async (req, res, next) => {
     const { sessionId } = req.params;
 
     if (!sessionId) {
-      return res.status(400).json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+      });
     }
 
-    // Auto-mark messages as read when admin opens the session
+    // Auto-mark as read when admin opens the session
     await query(
       `UPDATE chat_messages
           SET is_read = true
@@ -336,8 +374,7 @@ exports.getMessages = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// POST /api/chat/sessions/:sessionId/messages
-// Admin sends a message into an existing session
+// POST /api/chat/sessions/:sessionId/messages — Admin sends message
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.sendAdminMessage = async (req, res, next) => {
@@ -346,31 +383,55 @@ exports.sendAdminMessage = async (req, res, next) => {
     const { body }      = req.body;
 
     if (!sessionId) {
-      return res.status(400).json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+      });
     }
     if (!body?.trim()) {
-      return res.status(400).json({ success: false, message: "Message body is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'Message body is required',
+      });
     }
 
-    const session = await getOrCreateSession({ sessionId, source: "admin" });
+    const session = await getOrCreateSession({
+      sessionId,
+      source: 'admin',
+    });
+
     const admin   = req.user || {};
 
     const message = await createChatMessage({
       sessionId:   session.session_id,
-      senderType:  "admin",
+      senderType:  'admin',
       senderId:    admin.id         || null,
-      senderName:  admin.full_name  || admin.name || "Admin",
+      senderName:  admin.full_name  || admin.name || 'Admin',
       senderEmail: admin.email      || null,
       body:        body.trim(),
-      metadata:    { source: "admin-panel" },
+      metadata:    { source: 'admin-panel' },
     });
 
     const serialized = serializeMessage(message);
 
-    // Real-time delivery to widget
-    emit(req, "msg:message", `session:${sessionId}`, {
+    // ✅ FIXED: Emit to all rooms the user widget might be listening on
+    emitToSession(req, sessionId, 'msg:message', {
       ...serialized,
       sessionId,
+    });
+
+    // Legacy event name fallback
+    emitToSession(req, sessionId, 'message', {
+      ...serialized,
+      sessionId,
+    });
+
+    // Notify admin sidebar too
+    emit(req, 'msg:session-updated', 'admin-room', {
+      sessionId,
+      lastMessage:   serialized.body,
+      lastMessageAt: serialized.createdAt,
+      lastSenderType: 'admin',
     });
 
     return res.status(201).json({
@@ -383,8 +444,7 @@ exports.sendAdminMessage = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/chat/sessions/:sessionId/read
-// Mark all non-admin messages as read
+// PATCH /api/chat/sessions/:sessionId/read — Mark messages as read
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.markSessionRead = async (req, res, next) => {
@@ -392,7 +452,10 @@ exports.markSessionRead = async (req, res, next) => {
     const { sessionId } = req.params;
 
     if (!sessionId) {
-      return res.status(400).json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+      });
     }
 
     await query(
@@ -404,8 +467,8 @@ exports.markSessionRead = async (req, res, next) => {
       [sessionId],
     );
 
-    // Notify the widget that messages were read
-    emit(req, "msg:read", `session:${sessionId}`, { sessionId });
+    // ✅ FIXED: Notify user widget that messages were read
+    emitToSession(req, sessionId, 'msg:read', { sessionId });
 
     return res.json({ success: true });
   } catch (err) {
@@ -414,9 +477,7 @@ exports.markSessionRead = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PATCH /api/chat/sessions/:sessionId/status
-// Update session status: open | closed
-// Body: { status: 'open' | 'closed' }
+// PATCH /api/chat/sessions/:sessionId/status — Update session status
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.updateSessionStatus = async (req, res, next) => {
@@ -425,10 +486,16 @@ exports.updateSessionStatus = async (req, res, next) => {
     const { status }    = req.body;
 
     if (!sessionId) {
-      return res.status(400).json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+      });
     }
-    if (!["open", "closed"].includes(status)) {
-      return res.status(400).json({ success: false, message: 'status must be "open" or "closed"' });
+    if (!['open', 'closed'].includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'status must be "open" or "closed"',
+      });
     }
 
     const result = await query(
@@ -441,12 +508,21 @@ exports.updateSessionStatus = async (req, res, next) => {
     );
 
     if (!result.rows[0]) {
-      return res.status(404).json({ success: false, message: "Session not found" });
+      return res.status(404).json({
+        success: false,
+        message: 'Session not found',
+      });
     }
 
-    // Real-time notification
-    emit(req, "msg:session-updated", `session:${sessionId}`, { sessionId, status });
-    emit(req, "msg:session-updated", "admin-room",            { sessionId, status });
+    // ✅ FIXED: Notify both user and admin
+    emitToSession(req, sessionId, 'msg:session-updated', {
+      sessionId,
+      status,
+    });
+    emit(req, 'msg:session-updated', 'admin-room', {
+      sessionId,
+      status,
+    });
 
     return res.json({
       success: true,
@@ -458,7 +534,7 @@ exports.updateSessionStatus = async (req, res, next) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// GET /api/chat/history/:sessionId   (PUBLIC — for the chat widget)
+// GET /api/chat/history/:sessionId — Public: chat widget history
 // ═══════════════════════════════════════════════════════════════════════════════
 
 exports.getHistory = async (req, res, next) => {
@@ -466,7 +542,10 @@ exports.getHistory = async (req, res, next) => {
     const { sessionId } = req.params;
 
     if (!sessionId) {
-      return res.status(400).json({ success: false, message: "sessionId is required" });
+      return res.status(400).json({
+        success: false,
+        message: 'sessionId is required',
+      });
     }
 
     const sessionResult = await query(
@@ -475,7 +554,10 @@ exports.getHistory = async (req, res, next) => {
     );
 
     if (!sessionResult.rows[0]) {
-      return res.status(404).json({ success: false, message: "Chat session not found" });
+      return res.status(404).json({
+        success: false,
+        message: 'Chat session not found',
+      });
     }
 
     const messagesResult = await query(

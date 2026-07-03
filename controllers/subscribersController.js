@@ -12,7 +12,6 @@ const logger                       = require('../utils/logger');
 // ── Helper: generate unsubscribe URL ─────────────────────────────────────────
 
 const getUnsubscribeUrl = (email) => {
-  // Use BACKEND_URL for the actual unsubscribe API endpoint
   const base = process.env.BACKEND_URL || 'http://localhost:3000';
   return `${base}/api/subscribers/unsubscribe/${encodeURIComponent(email)}`;
 };
@@ -27,7 +26,7 @@ exports.subscribe = async (req, res, next) => {
       email,
       name   = null,
       source = 'website',
-      userId = null,  // Optional: from authenticated user
+      userId = null,
     } = req.body;
 
     // ── Validate ─────────────────────────────────────────────────────────────
@@ -56,15 +55,15 @@ exports.subscribe = async (req, res, next) => {
       [cleanEmail],
     );
 
-    const isExisting    = existing.rows.length > 0;
-    const wasActive     = isExisting && existing.rows[0].is_active;
-    const welcomeSent   = isExisting && existing.rows[0].welcome_sent;
+    const isExisting  = existing.rows.length > 0;
+    const wasActive   = isExisting && existing.rows[0].is_active;
+    const welcomeSent = isExisting && existing.rows[0].welcome_sent;
 
     // Already active — don't spam them
     if (wasActive) {
       return res.status(200).json({
-        success: true,
-        message: 'You are already subscribed!',
+        success:           true,
+        message:           'You are already subscribed!',
         alreadySubscribed: true,
       });
     }
@@ -93,12 +92,34 @@ exports.subscribe = async (req, res, next) => {
       subscriberRow = result.rows[0];
       logger.info(`[Subscribers] Re-subscribed: ${cleanEmail}`);
     } else {
-      // Brand new subscriber
+      // ✅ FIX 1: Removed created_at from INSERT — column does not exist in table
       const result = await query(
         `INSERT INTO subscribers
-           (email, name, source, user_id, ip_address, user_agent,
-            is_active, welcome_sent, subscribed_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, $6, true, false, NOW(), NOW(), NOW())
+         (
+           email,
+           name,
+           source,
+           user_id,
+           ip_address,
+           user_agent,
+           is_active,
+           welcome_sent,
+           subscribed_at,
+           updated_at
+         )
+         VALUES
+         (
+           $1,
+           $2,
+           $3,
+           $4,
+           $5,
+           $6,
+           true,
+           false,
+           NOW(),
+           NOW()
+         )
          RETURNING *`,
         [cleanEmail, name || null, source, userId || null, ipAddress, userAgent],
       );
@@ -106,18 +127,18 @@ exports.subscribe = async (req, res, next) => {
       logger.info(`[Subscribers] New subscriber: ${cleanEmail}`);
     }
 
-    // ── Update user profile to mark as subscribed (if user_id provided) ──────────
+    // ── Update user profile to mark as subscribed (if user_id provided) ──────
     if (userId) {
       await query(
         `UPDATE users SET subscribed = true, updated_at = NOW() WHERE id = $1`,
         [userId],
-      ).catch((err) => logger.warn(`[Subscribers] Failed to update user subscribed flag: ${err.message}`));
+      ).catch((err) =>
+        logger.warn(`[Subscribers] Failed to update user subscribed flag: ${err.message}`),
+      );
     }
 
     // ── Send welcome email ────────────────────────────────────────────────────
-    // Only send if welcome has never been sent to this address
     if (!welcomeSent) {
-      // Don't await — send async so response is instant
       sendWelcomeEmail(subscriberRow.id, cleanEmail, name).catch((err) => {
         logger.error(`[Subscribers] sendWelcomeEmail threw: ${err.message}`);
       });
@@ -125,8 +146,8 @@ exports.subscribe = async (req, res, next) => {
 
     // ── Respond immediately ───────────────────────────────────────────────────
     return res.status(201).json({
-      success:       true,
-      message:       'Subscribed successfully! Please check your inbox for a welcome email.',
+      success: true,
+      message: 'Subscribed successfully! Please check your inbox for a welcome email.',
       subscriber: {
         id:           subscriberRow.id,
         email:        subscriberRow.email,
@@ -155,7 +176,6 @@ async function sendWelcomeEmail(subscriberId, email, name) {
     );
 
     if (result.success) {
-      // Mark welcome as sent in DB
       await query(
         `UPDATE subscribers
            SET welcome_sent    = true,
@@ -167,7 +187,6 @@ async function sendWelcomeEmail(subscriberId, email, name) {
       );
       logger.info(`[Subscribers] ✅ Welcome email sent to ${email} | msgId: ${result.messageId}`);
     } else {
-      // Store the error in DB for debugging
       await query(
         `UPDATE subscribers
            SET welcome_sent  = false,
@@ -181,10 +200,10 @@ async function sendWelcomeEmail(subscriberId, email, name) {
 
     return result;
   } catch (err) {
-    // Store error in DB
     await query(
       `UPDATE subscribers
-         SET welcome_error = $2, updated_at = NOW()
+         SET welcome_error = $2,
+             updated_at    = NOW()
        WHERE id = $1`,
       [subscriberId, err.message],
     ).catch(() => {});
@@ -226,7 +245,6 @@ exports.unsubscribe = async (req, res, next) => {
 
     logger.info(`[Subscribers] Unsubscribed: ${email}`);
 
-    // Browser click (GET from email link)
     if (req.method === 'GET') {
       return res.send(unsubscribeHtml(email, true));
     }
@@ -334,12 +352,23 @@ exports.getAll = async (req, res, next) => {
 
     params.push(pagination.limit, pagination.offset);
 
+    // ✅ FIX 2: Removed created_at from SELECT — replaced with updated_at
     const dataRes = await query(
       `SELECT
-         id, email, name, source, is_active,
-         welcome_sent, welcome_sent_at, welcome_error,
-         subscribed_at, unsubscribed_at, resubscribed_at,
-         ip_address, tags, created_at
+         id,
+         email,
+         name,
+         source,
+         is_active,
+         welcome_sent,
+         welcome_sent_at,
+         welcome_error,
+         subscribed_at,
+         unsubscribed_at,
+         resubscribed_at,
+         updated_at,
+         ip_address,
+         tags
        FROM subscribers
        ${whereClause}
        ORDER BY subscribed_at DESC
@@ -353,7 +382,7 @@ exports.getAll = async (req, res, next) => {
       pagination,
       stats: {
         total,
-        active:   dataRes.rows.filter((r) => r.is_active).length,
+        active: dataRes.rows.filter((r) => r.is_active).length,
       },
     });
   } catch (err) {
@@ -368,17 +397,24 @@ exports.getAll = async (req, res, next) => {
 
 exports.getStats = async (req, res, next) => {
   try {
+    // ✅ FIX 3: Replaced created_at with subscribed_at in all FILTER clauses
     const { rows } = await query(`
       SELECT
-        COUNT(*)                                                    AS total,
-        COUNT(*) FILTER (WHERE is_active = true)                   AS active,
-        COUNT(*) FILTER (WHERE is_active = false)                  AS unsubscribed,
-        COUNT(*) FILTER (WHERE welcome_sent = true)                AS welcome_sent,
-        COUNT(*) FILTER (WHERE welcome_sent = false AND is_active) AS welcome_pending,
-        COUNT(*) FILTER (WHERE welcome_error IS NOT NULL)          AS welcome_failed,
-        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)         AS today,
-        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '7 days')  AS this_week,
-        COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE - INTERVAL '30 days') AS this_month
+        COUNT(*)                                                         AS total,
+        COUNT(*) FILTER (WHERE is_active = true)                        AS active,
+        COUNT(*) FILTER (WHERE is_active = false)                       AS unsubscribed,
+        COUNT(*) FILTER (WHERE welcome_sent = true)                     AS welcome_sent,
+        COUNT(*) FILTER (WHERE welcome_sent = false AND is_active)      AS welcome_pending,
+        COUNT(*) FILTER (WHERE welcome_error IS NOT NULL)               AS welcome_failed,
+        COUNT(*) FILTER (
+          WHERE subscribed_at >= CURRENT_DATE
+        )                                                                AS today,
+        COUNT(*) FILTER (
+          WHERE subscribed_at >= CURRENT_DATE - INTERVAL '7 days'
+        )                                                                AS this_week,
+        COUNT(*) FILTER (
+          WHERE subscribed_at >= CURRENT_DATE - INTERVAL '30 days'
+        )                                                                AS this_month
       FROM subscribers
     `);
 
@@ -427,13 +463,14 @@ exports.resendWelcome = async (req, res, next) => {
 
     const subscriber = rows[0];
 
-    // Reset welcome_sent so the send function updates it
     await query(
-      `UPDATE subscribers SET welcome_sent = false, welcome_error = NULL WHERE id = $1`,
+      `UPDATE subscribers
+         SET welcome_sent  = false,
+             welcome_error = NULL
+       WHERE id = $1`,
       [subscriber.id],
     );
 
-    // Send synchronously so admin gets result
     const result = await sendWelcomeEmail(subscriber.id, subscriber.email, subscriber.name);
 
     return res.json({
