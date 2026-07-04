@@ -941,6 +941,31 @@ const serializeChatMsg = (row) => ({
   createdAt:   row.created_at,
 })
 
+const broadcastConversationMessage = ({
+  io,
+  conversationId,
+  sessionId,
+  userId,
+  payload,
+  adminPayload = null,
+}) => {
+  if (conversationId) {
+    io.to(`conv:${conversationId}`).emit('msg:message', payload)
+  }
+
+  if (sessionId) {
+    io.to(`session:${sessionId}`).emit('msg:message', payload)
+  }
+
+  if (userId) {
+    io.to(`user-${userId}`).emit('msg:message', payload)
+  }
+
+  if (adminPayload) {
+    io.to('admins').emit('msg:new-from-user', adminPayload)
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SOCKET.IO — AUTH MIDDLEWARE
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1229,14 +1254,20 @@ io.on('connection', (socket) => {
       const serialized  = serializeConvMessage(msg)
       const unreadAdmin = await countUnreadAdmin(convId)
 
-      io.to(`conv:${convId}`).emit('msg:message', serialized)
-      io.to('admins').emit('msg:new-from-user', {
+      broadcastConversationMessage({
+        io,
         conversationId: convId,
         sessionId:      sid,
-        message:        serialized,
-        senderName:     msg.sender_name  || 'Guest',
-        senderEmail:    msg.sender_email || '',
-        unreadCount:    unreadAdmin,
+        userId:         socket.data.userId,
+        payload:        serialized,
+        adminPayload: {
+          conversationId: convId,
+          sessionId:      sid,
+          message:        serialized,
+          senderName:     msg.sender_name  || 'Guest',
+          senderEmail:    msg.sender_email || '',
+          unreadCount:    unreadAdmin,
+        },
       })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
@@ -1300,10 +1331,13 @@ io.on('connection', (socket) => {
       })
 
       const serialized = serializeConvMessage(msg)
-      io.to(`conv:${convId}`).emit('msg:message', serialized)
-      if (conv.session_id) {
-        io.to(`session:${conv.session_id}`).emit('msg:message', serialized)
-      }
+      broadcastConversationMessage({
+        io,
+        conversationId: convId,
+        sessionId:      conv.session_id,
+        userId:         conv.user_id,
+        payload:        serialized,
+      })
       socket.to('admins').emit('msg:admin-sent', {
         conversationId: convId,
         message:        serialized,
