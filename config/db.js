@@ -876,6 +876,9 @@ const ensureDestinationsSchema = async () => {
 };
 
 
+// Add this to your ensureCountriesSchema in config/db.js
+// Find the ensureCountriesSchema function and add these columns:
+
 const ensureCountriesSchema = async () => {
   try {
     await query(`
@@ -949,6 +952,118 @@ const ensureCountriesSchema = async () => {
 // ensureNotificationsSchema
 // ════════════════════════════════════════════════════════════════════════════
 
+const ensureNotificationsSchema = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS notifications (
+        id               SERIAL PRIMARY KEY,
+        user_id          INTEGER,
+        user_email       VARCHAR(255),
+        sender_type      VARCHAR(20)  NOT NULL DEFAULT 'system',
+        sender_id        INTEGER,
+        sender_name      VARCHAR(255),
+        type             VARCHAR(50)  NOT NULL DEFAULT 'general',
+        title            VARCHAR(255) NOT NULL,
+        message          TEXT         NOT NULL,
+        action_url       VARCHAR(500),
+        action_label     VARCHAR(100),
+        image_url        VARCHAR(500),
+        metadata         JSONB        DEFAULT '{}'::JSONB,
+        target_scope     VARCHAR(30)  DEFAULT 'individual',
+        target_role      VARCHAR(50),
+        target_segment   VARCHAR(100),
+        priority         VARCHAR(20)  DEFAULT 'normal',
+        category         VARCHAR(50)  DEFAULT 'general',
+        is_read          BOOLEAN      DEFAULT false,
+        read_at          TIMESTAMP,
+        reaction         VARCHAR(20),
+        reacted_at       TIMESTAMP,
+        reply_text       TEXT,
+        replied_at       TIMESTAMP,
+        admin_reply      TEXT,
+        admin_replied_at TIMESTAMP,
+        admin_replied_by INTEGER,
+        email_sent       BOOLEAN      DEFAULT false,
+        email_sent_at    TIMESTAMP,
+        push_sent        BOOLEAN      DEFAULT false,
+        deleted_at       TIMESTAMP,
+        archived_at      TIMESTAMP,
+        expires_at       TIMESTAMP,
+        created_at       TIMESTAMP    DEFAULT NOW(),
+        updated_at       TIMESTAMP    DEFAULT NOW()
+      )
+    `);
+
+    await addColumns("notifications", [
+      { name: "user_id",          type: "INTEGER" },
+      { name: "user_email",       type: "VARCHAR(255)" },
+      { name: "sender_type",      type: "VARCHAR(20) DEFAULT 'system'" },
+      { name: "sender_id",        type: "INTEGER" },
+      { name: "sender_name",      type: "VARCHAR(255)" },
+      { name: "type",             type: "VARCHAR(50) DEFAULT 'general'" },
+      { name: "title",            type: "VARCHAR(255)" },
+      { name: "message",          type: "TEXT" },
+      { name: "action_url",       type: "VARCHAR(500)" },
+      { name: "action_label",     type: "VARCHAR(100)" },
+      { name: "image_url",        type: "VARCHAR(500)" },
+      { name: "metadata",         type: "JSONB DEFAULT '{}'::JSONB" },
+      { name: "target_scope",     type: "VARCHAR(30) DEFAULT 'individual'" },
+      { name: "target_role",      type: "VARCHAR(50)" },
+      { name: "target_segment",   type: "VARCHAR(100)" },
+      { name: "priority",         type: "VARCHAR(20) DEFAULT 'normal'" },
+      { name: "category",         type: "VARCHAR(50) DEFAULT 'general'" },
+      { name: "is_read",          type: "BOOLEAN DEFAULT false" },
+      { name: "read_at",          type: "TIMESTAMP" },
+      { name: "reaction",         type: "VARCHAR(20)" },
+      { name: "reacted_at",       type: "TIMESTAMP" },
+      { name: "reply_text",       type: "TEXT" },
+      { name: "replied_at",       type: "TIMESTAMP" },
+      { name: "admin_reply",      type: "TEXT" },
+      { name: "admin_replied_at", type: "TIMESTAMP" },
+      { name: "admin_replied_by", type: "INTEGER" },
+      { name: "email_sent",       type: "BOOLEAN DEFAULT false" },
+      { name: "email_sent_at",    type: "TIMESTAMP" },
+      { name: "push_sent",        type: "BOOLEAN DEFAULT false" },
+      { name: "deleted_at",       type: "TIMESTAMP" },
+      { name: "archived_at",      type: "TIMESTAMP" },
+      { name: "expires_at",       type: "TIMESTAMP" },
+      { name: "updated_at",       type: "TIMESTAMP DEFAULT NOW()" },
+    ]);
+
+    await createIndexes([
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_id
+         ON notifications(user_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_email
+         ON notifications(user_email)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_type
+         ON notifications(type)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_is_read
+         ON notifications(is_read)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_created_at
+         ON notifications(created_at DESC)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_target_scope
+         ON notifications(target_scope)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_priority
+         ON notifications(priority)`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_deleted_at
+         ON notifications(deleted_at) WHERE deleted_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_expires_at
+         ON notifications(expires_at) WHERE expires_at IS NOT NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_user_unread
+         ON notifications(user_id, is_read, created_at DESC)
+         WHERE deleted_at IS NULL`,
+      `CREATE INDEX IF NOT EXISTS idx_notif_broadcast
+         ON notifications(target_scope, created_at DESC)
+         WHERE target_scope != 'individual' AND deleted_at IS NULL`,
+    ]);
+
+    await ensureUpdatedAtTrigger("notifications");
+
+    logger.info("[DB] ✅ Notifications schema verified & ensured");
+  } catch (err) {
+    logger.warn("[DB] Notifications schema ensure failed:", err.message);
+  }
+};
 
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -1158,6 +1273,7 @@ module.exports = {
   closeConnections,
   ensureUserSchema,
   ensureDestinationsSchema,
+  ensureNotificationsSchema,
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
