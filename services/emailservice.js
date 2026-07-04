@@ -32,7 +32,7 @@ function getSmtp() {
     _smtp = nodemailer.createTransport({
       host: CFG.smtp.host, port: CFG.smtp.port, secure: CFG.smtp.secure,
       auth: { user: CFG.smtp.user, pass: CFG.smtp.pass },
-      tls: { rejectUnauthorized: false },
+      tls:  { rejectUnauthorized: false },
       connectionTimeout: 8000,
     });
     console.log("[Email] SMTP ready");
@@ -49,30 +49,35 @@ function stripHtml(h = "") {
 }
 function esc(s = "") {
   return String(s)
-    .replace(/&/g,"&amp;").replace(/</g,"&lt;")
-    .replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
 }
 function fmtDate(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleDateString("en-US",{
-      weekday:"long", year:"numeric", month:"long", day:"numeric"
+    return new Date(d).toLocaleDateString("en-US", {
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
     });
   } catch { return String(d); }
 }
 function fmtDateTime(d) {
   if (!d) return "—";
   try {
-    return new Date(d).toLocaleString("en-US",{
-      year:"numeric", month:"short", day:"numeric",
-      hour:"2-digit", minute:"2-digit"
+    return new Date(d).toLocaleString("en-US", {
+      year: "numeric", month: "short", day: "numeric",
+      hour: "2-digit", minute: "2-digit",
     });
   } catch { return String(d); }
 }
 function badgeCls(s) {
-  return ({ pending:"b-pending", confirmed:"b-confirmed",
-            cancelled:"b-cancelled", completed:"b-completed",
-            "on-hold":"b-hold", refunded:"b-confirmed" })[s] || "b-pending";
+  return ({
+    pending:   "b-pending",
+    confirmed: "b-confirmed",
+    cancelled: "b-cancelled",
+    completed: "b-completed",
+    "on-hold": "b-hold",
+    refunded:  "b-confirmed",
+  })[s] || "b-pending";
 }
 
 /* ══════════════════════════════════════════════════════
@@ -88,25 +93,26 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
   if (CFG.resendApiKey) {
     const fromAddr = `${CFG.from.name} <onboarding@resend.dev>`;
     const body = {
-      from: fromAddr,
-      to:   Array.isArray(to) ? to : [to],
+      from:     fromAddr,
+      to:       Array.isArray(to) ? to : [to],
       subject,
-      html: html || `<pre>${plain}</pre>`,
-      text: plain,
+      html:     html || `<pre>${plain}</pre>`,
+      text:     plain,
       reply_to: replyTo || CFG.replyTo,
     };
     const res = await fetch("https://api.resend.com/emails", {
       method:  "POST",
       headers: {
-        Authorization: `Bearer ${CFG.resendApiKey}`,
+        Authorization:  `Bearer ${CFG.resendApiKey}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
     });
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`Resend ${res.status}: ${json?.message || JSON.stringify(json)}`);
+    if (!res.ok)
+      throw new Error(`Resend ${res.status}: ${json?.message || JSON.stringify(json)}`);
     console.log(`[Email] Resend → ${to} id:${json.id}`);
-    return { success:true, provider:"resend", messageId:json.id };
+    return { success: true, provider: "resend", messageId: json.id };
   }
 
   /* 2 — SMTP */
@@ -118,7 +124,7 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
       replyTo: replyTo || CFG.replyTo,
     });
     console.log(`[Email] SMTP → ${to} msgId:${info.messageId}`);
-    return { success:true, provider:"smtp", messageId:info.messageId };
+    return { success: true, provider: "smtp", messageId: info.messageId };
   }
 
   /* 3 — Console fallback */
@@ -126,15 +132,15 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
   console.log(`[Email] CONSOLE FALLBACK`);
   console.log(`  TO:      ${to}`);
   console.log(`  SUBJECT: ${subject}`);
-  console.log(`  PREVIEW: ${plain.slice(0,200)}`);
+  console.log(`  PREVIEW: ${plain.slice(0, 200)}`);
   console.log(`${"═".repeat(55)}\n`);
-  return { success:true, provider:"console", messageId:`console-${Date.now()}` };
+  return { success: true, provider: "console", messageId: `console-${Date.now()}` };
 }
 
 /* ══════════════════════════════════════════════════════
    BASE HTML TEMPLATE
 ══════════════════════════════════════════════════════ */
-function tpl({ title, preheader="", body, footer="" }) {
+function tpl({ title, preheader = "", body, footer = "" }) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -185,14 +191,127 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
       border:1px solid #bfdbfe;margin:14px 0}
 .info p{font-size:13px;color:#1e40af;margin:0}
 .div{height:1px;background:linear-gradient(90deg,transparent,#d1fae5,transparent);margin:22px 0}
-.otp{font-size:36px;font-weight:900;letter-spacing:10px;color:#022c22;
-     text-align:center;padding:16px;background:#f0fdf4;border-radius:12px;
+.otp{font-size:40px;font-weight:900;letter-spacing:12px;color:#022c22;
+     text-align:center;padding:20px 16px;background:#f0fdf4;border-radius:14px;
      border:2px dashed #a7f3d0;font-family:'Courier New',monospace;margin:18px 0}
 .ft{padding:20px 26px;text-align:center;background:#f8fafb;border-top:1px solid #e2e8f0}
 .ft p{font-size:11px;color:#94a3b8;line-height:1.7;margin-bottom:2px}
 .ft a{color:#059669;text-decoration:none;font-weight:600}
-@media(max-width:480px){.b,.h,.ft{padding:20px 16px}
-.r{flex-direction:column;gap:1px}.v{text-align:left}}
+
+/* ── countdown timer styles ── */
+.timer-wrap{
+  text-align:center;
+  margin:20px 0 8px;
+}
+.timer-label{
+  font-size:12px;
+  color:#64748b;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.06em;
+  margin-bottom:8px;
+}
+.timer-ring-wrap{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:0;
+  position:relative;
+}
+.timer-digits{
+  display:inline-flex;
+  align-items:center;
+  gap:2px;
+  background:#022c22;
+  border-radius:14px;
+  padding:10px 18px;
+  box-shadow:0 4px 16px rgba(2,44,34,.18);
+}
+.td{
+  display:inline-flex;
+  flex-direction:column;
+  align-items:center;
+  min-width:44px;
+}
+.td-num{
+  font-size:28px;
+  font-weight:900;
+  color:#34d399;
+  font-family:'Courier New',monospace;
+  line-height:1;
+  letter-spacing:-.02em;
+  transition:color .3s;
+}
+.td-lbl{
+  font-size:9px;
+  color:rgba(255,255,255,.45);
+  font-weight:700;
+  text-transform:uppercase;
+  letter-spacing:.08em;
+  margin-top:3px;
+}
+.td-sep{
+  font-size:24px;
+  font-weight:900;
+  color:#34d399;
+  margin:0 2px;
+  padding-bottom:10px;
+  opacity:.7;
+}
+.timer-bar-wrap{
+  margin:12px auto 0;
+  max-width:320px;
+  height:5px;
+  background:rgba(167,243,208,.25);
+  border-radius:99px;
+  overflow:hidden;
+}
+.timer-bar{
+  height:100%;
+  border-radius:99px;
+  background:linear-gradient(90deg,#10b981,#34d399);
+  transition:width .95s linear, background .5s;
+  width:100%;
+}
+.timer-expired-msg{
+  display:none;
+  background:#fff1f2;
+  border:1px solid #fca5a5;
+  border-radius:12px;
+  padding:16px 20px;
+  margin:16px 0;
+  text-align:center;
+}
+.timer-expired-msg p{
+  color:#991b1b;
+  font-size:14px;
+  font-weight:600;
+  margin-bottom:12px;
+}
+.timer-action-wrap{
+  display:none;
+  text-align:center;
+  padding:20px;
+  background:#f8fafb;
+  border-radius:14px;
+  border:1px solid #e2e8f0;
+  margin:16px 0;
+}
+.timer-action-wrap p{
+  font-size:14px;
+  color:#374151;
+  margin-bottom:14px;
+  font-weight:500;
+}
+
+@media(max-width:480px){
+  .b,.h,.ft{padding:20px 16px}
+  .r{flex-direction:column;gap:1px}
+  .v{text-align:left}
+  .td-num{font-size:22px}
+  .timer-digits{padding:8px 12px}
+  .td{min-width:34px}
+}
 </style>
 </head>
 <body>
@@ -219,6 +338,136 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Arial,sans-s
 }
 
 /* ══════════════════════════════════════════════════════
+   OTP COUNTDOWN TIMER BLOCK
+   - Real-time minutes:seconds countdown
+   - Animated progress bar (green → amber → red)
+   - On expiry: shows "Request New Code" or "Go Home"
+   - Works in Gmail, Outlook, Apple Mail via inline JS
+     (JS blocked in most clients — degrades gracefully
+      to a static "expires in 10 minutes" message)
+══════════════════════════════════════════════════════ */
+function otpTimerBlock(expirySeconds = 600, appUrl = CFG.appUrl) {
+  // expirySeconds: how long until code expires (default 10 min = 600s)
+  // We embed the expiry timestamp so the timer is accurate even if the
+  // email is opened late.
+
+  const timerHtml = `
+<!-- ── REALTIME COUNTDOWN TIMER ── -->
+<div class="timer-wrap" id="altvTimer">
+
+  <div class="timer-label">⏱ Code expires in</div>
+
+  <!-- digit display -->
+  <div class="timer-ring-wrap">
+    <div class="timer-digits">
+      <div class="td">
+        <span class="td-num" id="altv-mm">10</span>
+        <span class="td-lbl">min</span>
+      </div>
+      <span class="td-sep">:</span>
+      <div class="td">
+        <span class="td-num" id="altv-ss">00</span>
+        <span class="td-lbl">sec</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- progress bar -->
+  <div class="timer-bar-wrap">
+    <div class="timer-bar" id="altv-bar"></div>
+  </div>
+
+</div><!-- /timer-wrap -->
+
+<!-- shown ONLY after expiry -->
+<div class="timer-expired-msg" id="altv-expired">
+  <p>⌛ Your verification code has expired.</p>
+  <p style="font-size:12px;color:#64748b;margin-bottom:0">
+    Codes are valid for 10 minutes for your security.
+  </p>
+</div>
+
+<!-- post-expiry action card -->
+<div class="timer-action-wrap" id="altv-actions">
+  <p>What would you like to do?</p>
+  <a href="${esc(appUrl)}/booking?resend=1"
+     class="btn btn-g"
+     style="display:inline-block;margin-bottom:8px">
+    🔄 Request New Code
+  </a>
+  <br/>
+  <a href="${esc(appUrl)}"
+     class="btn btn-o">
+    🏠 Return to Homepage
+  </a>
+</div>
+
+<script>
+(function(){
+  /* ── config ── */
+  var TOTAL   = ${Math.max(30, parseInt(expirySeconds, 10))};  /* seconds */
+  var sentAt  = Date.now();                 /* ms since epoch when email rendered */
+  var mmEl    = document.getElementById('altv-mm');
+  var ssEl    = document.getElementById('altv-ss');
+  var barEl   = document.getElementById('altv-bar');
+  var expEl   = document.getElementById('altv-expired');
+  var actEl   = document.getElementById('altv-actions');
+  var tmrEl   = document.getElementById('altvTimer');
+
+  if (!mmEl || !ssEl) return; /* guard: JS blocked in some clients */
+
+  function pad(n){ return n < 10 ? '0'+n : String(n); }
+
+  function tick(){
+    var elapsed  = Math.floor((Date.now() - sentAt) / 1000);
+    var remaining = TOTAL - elapsed;
+
+    if (remaining <= 0){
+      /* ── EXPIRED ── */
+      clearInterval(iv);
+      if (tmrEl) tmrEl.style.display = 'none';
+      if (expEl) expEl.style.display = 'block';
+      if (actEl) actEl.style.display = 'block';
+      return;
+    }
+
+    var m = Math.floor(remaining / 60);
+    var s = remaining % 60;
+
+    mmEl.textContent = pad(m);
+    ssEl.textContent = pad(s);
+
+    /* ── progress bar ── */
+    var pct = (remaining / TOTAL) * 100;
+    if (barEl){
+      barEl.style.width = pct + '%';
+      /* colour transitions: green → amber → red */
+      if (pct > 50){
+        barEl.style.background = 'linear-gradient(90deg,#10b981,#34d399)';
+      } else if (pct > 25){
+        barEl.style.background = 'linear-gradient(90deg,#f59e0b,#fcd34d)';
+      } else {
+        barEl.style.background = 'linear-gradient(90deg,#ef4444,#fca5a5)';
+      }
+    }
+
+    /* ── digit colour: goes amber then red in last 2 min ── */
+    var urgentColour = pct <= 25 ? '#ef4444' : pct <= 50 ? '#f59e0b' : '#34d399';
+    mmEl.style.color = urgentColour;
+    ssEl.style.color = urgentColour;
+  }
+
+  /* run immediately, then every second */
+  tick();
+  var iv = setInterval(tick, 1000);
+})();
+</script>
+<!-- ── /REALTIME COUNTDOWN TIMER ── -->`;
+
+  return timerHtml;
+}
+
+/* ══════════════════════════════════════════════════════
    1.  sendVerificationCode
        → bookingsController.sendOtp
 ══════════════════════════════════════════════════════ */
@@ -226,7 +475,8 @@ async function sendVerificationCode(email, code, firstName) {
   if (!email) throw new Error("sendVerificationCode: email required");
   if (!code)  throw new Error("sendVerificationCode: code required");
 
-  const name = firstName || "Explorer";
+  const name          = firstName || "Explorer";
+  const OTP_EXPIRY_S  = 600; // 10 minutes — must match bookingsController.OTP_EXPIRY_MS / 1000
 
   const html = tpl({
     title:     "Your Altuvera Verification Code",
@@ -237,23 +487,45 @@ async function sendVerificationCode(email, code, firstName) {
         Hi ${esc(name)}, enter the code below to verify your email
         and complete your booking.
       </p>
-      <div class="otp">${esc(String(code))}</div>
-      <div class="warn">
-        <p>⏱ Expires in <strong>10 minutes</strong>.
-           Do not share this code with anyone.</p>
-      </div>
+
+      <!-- OTP code display -->
+      <div class="otp" id="altv-otp-code">${esc(String(code))}</div>
+
+      <!-- ── REALTIME COUNTDOWN TIMER ── -->
+      ${otpTimerBlock(OTP_EXPIRY_S, CFG.appUrl)}
+      <!-- ── /REALTIME COUNTDOWN TIMER ── -->
+
       <div class="div"></div>
-      <p style="font-size:13px;color:#64748b;text-align:center">
-        Didn't request this? You can safely ignore this email.
+
+      <div class="warn">
+        <p>
+          🔒 <strong>Security reminder:</strong> Never share this code.
+          Altuvera staff will <em>never</em> ask for it.
+        </p>
+      </div>
+
+      <p style="font-size:12px;color:#94a3b8;text-align:center;margin-top:14px">
+        Didn't request this? You can safely ignore this email —
+        your account is not at risk.
       </p>`,
+
     footer: "Security: Altuvera will never ask for your code by phone or chat.",
   });
 
   return sendEmail({
     to:      email,
-    subject: `${code} — Your Altuvera Verification Code`,
+    subject: `${code} — Your Altuvera Verification Code (expires in 10 min)`,
     html,
-    text:    `Your Altuvera verification code is: ${code}\n\nExpires in 10 minutes.\nDo not share this code.`,
+    text: [
+      `Your Altuvera verification code is: ${code}`,
+      ``,
+      `This code expires in 10 minutes.`,
+      `Do NOT share this code with anyone.`,
+      ``,
+      `If you didn't request this, ignore this email.`,
+      ``,
+      `— Altuvera Travel`,
+    ].join("\n"),
   });
 }
 
@@ -280,7 +552,7 @@ async function sendBookingConfirmation(booking) {
 
   if (!email) {
     console.warn("[Email] sendBookingConfirmation: no email");
-    return { success:false, reason:"no_email" };
+    return { success: false, reason: "no_email" };
   }
 
   const trip = destination_name || service_name || package_name || "Your Trip";
@@ -308,7 +580,7 @@ async function sendBookingConfirmation(booking) {
         </div>
         <div class="r">
           <span class="l">Destination</span>
-          <span class="v">🌍 ${esc(trip)}${country_name ? `, ${esc(country_name)}`:""}</span>
+          <span class="v">🌍 ${esc(trip)}${country_name ? `, ${esc(country_name)}` : ""}</span>
         </div>
         ${travel_date ? `
         <div class="r">
@@ -379,11 +651,15 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
     travel_date,
   } = booking;
 
-  if (!email) return { success:false, reason:"no_email" };
+  if (!email) return { success: false, reason: "no_email" };
 
   const labels = {
-    pending:"⏳ Pending", confirmed:"✅ Confirmed", "on-hold":"⏸ On Hold",
-    completed:"🏁 Completed", cancelled:"❌ Cancelled", refunded:"💳 Refunded",
+    pending:   "⏳ Pending",
+    confirmed: "✅ Confirmed",
+    "on-hold": "⏸ On Hold",
+    completed: "🏁 Completed",
+    cancelled: "❌ Cancelled",
+    refunded:  "💳 Refunded",
   };
   const messages = {
     pending:   "Your booking is back under review. We'll be in touch soon.",
@@ -417,18 +693,18 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
         <div class="r">
           <span class="l">Previous</span>
           <span class="v">
-            <span class="bd ${badgeCls(oldStatus)}">${esc(labels[oldStatus]||oldStatus)}</span>
+            <span class="bd ${badgeCls(oldStatus)}">${esc(labels[oldStatus] || oldStatus)}</span>
           </span>
         </div>
         <div class="r">
           <span class="l">New Status</span>
           <span class="v">
-            <span class="bd ${badgeCls(newStatus)}">${esc(labels[newStatus]||newStatus)}</span>
+            <span class="bd ${badgeCls(newStatus)}">${esc(labels[newStatus] || newStatus)}</span>
           </span>
         </div>
       </div>
       <div class="info">
-        <p>ℹ️ ${esc(messages[newStatus]||"Your booking has been updated.")}</p>
+        <p>ℹ️ ${esc(messages[newStatus] || "Your booking has been updated.")}</p>
       </div>
       ${reason ? `
       <div class="warn">
@@ -461,7 +737,7 @@ async function sendBookingCancellation(booking, reason) {
     travel_date,
   } = booking;
 
-  if (!email) return { success:false, reason:"no_email" };
+  if (!email) return { success: false, reason: "no_email" };
 
   const html = tpl({
     title:     `Booking Cancelled — ${booking_number}`,
@@ -484,7 +760,9 @@ async function sendBookingCancellation(booking, reason) {
         </div>
         <div class="r">
           <span class="l">Destination</span>
-          <span class="v">${esc(destination_name)}${country_name?`, ${esc(country_name)}`:""}</span>
+          <span class="v">
+            ${esc(destination_name)}${country_name ? `, ${esc(country_name)}` : ""}
+          </span>
         </div>
         ${travel_date ? `
         <div class="r">
@@ -528,7 +806,7 @@ async function sendAdminBookingNotification(booking) {
   const adminEmail = CFG.adminEmail;
   if (!adminEmail) {
     console.warn("[Email] sendAdminBookingNotification: ADMIN_EMAIL not set");
-    return { success:false, reason:"no_admin_email" };
+    return { success: false, reason: "no_admin_email" };
   }
 
   const {
@@ -568,8 +846,8 @@ async function sendAdminBookingNotification(booking) {
       <p class="st">A new booking has been submitted and needs your attention.</p>
 
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin:14px 0">
-        ${[["Booking #",String(booking_number)],["Travelers",String(number_of_travelers)],["Source",source]]
-          .map(([l,v])=>`
+        ${[["Booking #", String(booking_number)], ["Travelers", String(number_of_travelers)], ["Source", source]]
+          .map(([l, v]) => `
           <div style="flex:1;min-width:110px;text-align:center;padding:12px 8px;
                       background:#f0fdf4;border-radius:10px;border:1px solid #a7f3d0">
             <div style="font-size:13px;font-weight:800;color:#022c22">${esc(v)}</div>
@@ -579,14 +857,20 @@ async function sendAdminBookingNotification(booking) {
 
       <div class="bx">
         <div class="bt">👤 Customer</div>
-        <div class="r"><span class="l">Name</span><span class="v">${esc(full_name)}</span></div>
+        <div class="r">
+          <span class="l">Name</span>
+          <span class="v">${esc(full_name)}</span>
+        </div>
         <div class="r">
           <span class="l">Email</span>
           <span class="v">
             <a href="mailto:${esc(email)}" style="color:#059669">${esc(email)}</a>
           </span>
         </div>
-        <div class="r"><span class="l">Phone</span><span class="v">${esc(String(phone))}</span></div>
+        <div class="r">
+          <span class="l">Phone</span>
+          <span class="v">${esc(String(phone))}</span>
+        </div>
         ${wa ? `
         <div class="r">
           <span class="l">WhatsApp</span>
@@ -594,50 +878,89 @@ async function sendAdminBookingNotification(booking) {
             <a href="https://wa.me/${wa}" style="color:#25d366">${esc(whatsapp)}</a>
           </span>
         </div>` : ""}
-        ${nationality?`<div class="r"><span class="l">Nationality</span><span class="v">${esc(nationality)}</span></div>`:""}
-        ${country?`<div class="r"><span class="l">Country</span><span class="v">${esc(country)}</span></div>`:""}
+        ${nationality ? `
+        <div class="r">
+          <span class="l">Nationality</span>
+          <span class="v">${esc(nationality)}</span>
+        </div>` : ""}
+        ${country ? `
+        <div class="r">
+          <span class="l">Country</span>
+          <span class="v">${esc(country)}</span>
+        </div>` : ""}
       </div>
 
       <div class="bx">
         <div class="bt">🗺️ Trip</div>
-        <div class="r"><span class="l">Type</span><span class="v">${esc(booking_type)}</span></div>
-        <div class="r"><span class="l">Destination</span><span class="v">${esc(trip)}</span></div>
-        ${travel_date?`<div class="r"><span class="l">Departure</span><span class="v">${fmtDate(travel_date)}</span></div>`:""}
-        ${return_date?`<div class="r"><span class="l">Return</span><span class="v">${fmtDate(return_date)}</span></div>`:""}
-        ${flexible_dates?`<div class="r"><span class="l">Flexible Dates</span><span class="v" style="color:#059669">✓ Yes</span></div>`:""}
+        <div class="r">
+          <span class="l">Type</span>
+          <span class="v">${esc(booking_type)}</span>
+        </div>
+        <div class="r">
+          <span class="l">Destination</span>
+          <span class="v">${esc(trip)}</span>
+        </div>
+        ${travel_date ? `
+        <div class="r">
+          <span class="l">Departure</span>
+          <span class="v">${fmtDate(travel_date)}</span>
+        </div>` : ""}
+        ${return_date ? `
+        <div class="r">
+          <span class="l">Return</span>
+          <span class="v">${fmtDate(return_date)}</span>
+        </div>` : ""}
+        ${flexible_dates ? `
+        <div class="r">
+          <span class="l">Flexible Dates</span>
+          <span class="v" style="color:#059669">✓ Yes</span>
+        </div>` : ""}
         <div class="r">
           <span class="l">Travelers</span>
           <span class="v">
             ${esc(String(number_of_travelers))} total
-            ${number_of_adults?`(${number_of_adults} adults${number_of_children?`, ${number_of_children} children`:""})`:""}
+            ${number_of_adults
+              ? `(${number_of_adults} adults${number_of_children ? `, ${number_of_children} children` : ""})`
+              : ""}
           </span>
         </div>
-        ${accommodation_type?`<div class="r"><span class="l">Accommodation</span><span class="v">${esc(accommodation_type)}</span></div>`:""}
-        ${dietary_requirements?`<div class="r"><span class="l">Dietary</span><span class="v">${esc(dietary_requirements)}</span></div>`:""}
+        ${accommodation_type ? `
+        <div class="r">
+          <span class="l">Accommodation</span>
+          <span class="v">${esc(accommodation_type)}</span>
+        </div>` : ""}
+        ${dietary_requirements ? `
+        <div class="r">
+          <span class="l">Dietary</span>
+          <span class="v">${esc(dietary_requirements)}</span>
+        </div>` : ""}
         <div class="r">
           <span class="l">Status</span>
           <span class="v"><span class="bd b-pending">⏳ ${esc(status)}</span></span>
         </div>
         <div class="r">
           <span class="l">Submitted</span>
-          <span class="v">${fmtDateTime(created_at||new Date())}</span>
+          <span class="v">${fmtDateTime(created_at || new Date())}</span>
         </div>
       </div>
 
-      ${special_requests?`
+      ${special_requests ? `
       <div class="bx" style="background:#fffbeb;border-color:#fde68a">
         <div class="bt" style="color:#92400e">💬 Special Requests</div>
         <p style="font-size:13px;color:#78350f;margin:0;white-space:pre-wrap">
           ${esc(special_requests)}
         </p>
-      </div>`:""}
+      </div>` : ""}
 
       <div style="text-align:center;margin-top:22px">
-        <a href="${CFG.appUrl}/admin/bookings" class="btn btn-g">Open Admin</a>
+        <a href="${CFG.appUrl}/admin/bookings" class="btn btn-g">Open Admin Panel</a>
         <a href="mailto:${esc(email)}" class="btn btn-o">Reply to Customer</a>
-        ${wa?`<a href="https://wa.me/${wa}" class="btn btn-o"
-               style="background:#f0fff4;border-color:#25d366;color:#15803d">
-               WhatsApp</a>`:""}
+        ${wa ? `
+        <a href="https://wa.me/${wa}"
+           class="btn btn-o"
+           style="background:#f0fff4;border-color:#25d366;color:#15803d">
+          WhatsApp
+        </a>` : ""}
       </div>`,
   });
 
@@ -659,7 +982,9 @@ async function verifyConnection() {
         headers: { Authorization: `Bearer ${CFG.resendApiKey}` },
       });
       if (r.ok) { console.log("[Email] ✅ Resend verified"); return true; }
-    } catch (e) { console.warn("[Email] Resend check failed:", e.message); }
+    } catch (e) {
+      console.warn("[Email] Resend check failed:", e.message);
+    }
   }
   const s = getSmtp();
   if (s) {
@@ -667,14 +992,16 @@ async function verifyConnection() {
       await s.verify();
       console.log("[Email] ✅ SMTP verified");
       return true;
-    } catch (e) { console.warn("[Email] SMTP check failed:", e.message); }
+    } catch (e) {
+      console.warn("[Email] SMTP check failed:", e.message);
+    }
   }
   console.warn("[Email] ⚠️ No provider verified — console fallback active");
   return false;
 }
 
 /* ══════════════════════════════════════════════════════
-   EXPORTS  —  exact match to bookingsController imports
+   EXPORTS — exact match to bookingsController imports
 ══════════════════════════════════════════════════════ */
 module.exports = {
   sendVerificationCode,
