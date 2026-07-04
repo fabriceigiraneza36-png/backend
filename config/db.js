@@ -876,9 +876,6 @@ const ensureDestinationsSchema = async () => {
 };
 
 
-// Add this to your ensureCountriesSchema in config/db.js
-// Find the ensureCountriesSchema function and add these columns:
-
 const ensureCountriesSchema = async () => {
   try {
     await query(`
@@ -1161,7 +1158,6 @@ module.exports = {
   closeConnections,
   ensureUserSchema,
   ensureDestinationsSchema,
-  ensureNotificationsSchema,
   ensureContactSchema,
   ensureChatSchema,
   ensureGallerySchema,
