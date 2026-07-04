@@ -857,6 +857,37 @@ const serializeConvMessage = (row) => ({
   createdAt:      row.created_at,
 })
 
+const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
+  const convId = parseInt(conversationId, 10)
+  if (convId) {
+    const { rows } = await query(
+      `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+      [convId],
+    )
+    return rows[0] || null
+  }
+
+  const sid = String(sessionId || '').trim()
+  if (!sid) return null
+
+  const { rows } = await query(
+    `SELECT * FROM conversations WHERE session_id = $1 LIMIT 1`,
+    [sid],
+  )
+
+  if (rows[0]) return rows[0]
+
+  return getOrCreateConversation({
+    sessionId: sid,
+    userId: null,
+    guestName: null,
+    guestEmail: null,
+    channel: 'live_chat',
+    source: 'admin-panel',
+    ipAddress: null,
+  })
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // LEGACY CHAT HELPERS
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1280,10 +1311,18 @@ io.on('connection', (socket) => {
   socket.on('msg:admin-join', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin only')
-      const convId = parseInt(payload.conversationId, 10)
-      if (!convId) throw new Error('conversationId required')
+
+      const conv = await resolveConversationForSocket({
+        conversationId: payload.conversationId,
+        sessionId:      payload.sessionId,
+      })
+      if (!conv) throw new Error('Conversation not found')
+
+      const convId = conv.id
+      const sid    = conv.session_id
 
       socket.join(`conv:${convId}`)
+      if (sid) socket.join(`session:${sid}`)
       socket.data.activeConversation = convId
 
       await Promise.all([
@@ -1297,6 +1336,7 @@ io.on('connection', (socket) => {
 
       const messages = await fetchConversationMessages(convId)
       io.to(`conv:${convId}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
+      if (sid) io.to(`session:${sid}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
 
       if (typeof cb === 'function')
         cb({ success: true, messages: messages.map(serializeConvMessage) })
@@ -1310,14 +1350,16 @@ io.on('connection', (socket) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin authentication required')
 
-      const body   = String(payload.body || '').trim()
-      const convId = parseInt(payload.conversationId, 10)
-      if (!body)   throw new Error('Message body required')
-      if (!convId) throw new Error('conversationId required')
+      const body = String(payload.body || '').trim()
+      if (!body) throw new Error('Message body required')
 
-      const convRes = await query(`SELECT * FROM conversations WHERE id=$1`, [convId])
-      if (!convRes.rows[0]) throw new Error('Conversation not found')
-      const conv = convRes.rows[0]
+      const conv = await resolveConversationForSocket({
+        conversationId: payload.conversationId,
+        sessionId:      payload.sessionId,
+      })
+      if (!conv) throw new Error('Conversation not found')
+
+      const convId = conv.id
 
       const msg = await saveConversationMessage({
         conversationId: convId,
