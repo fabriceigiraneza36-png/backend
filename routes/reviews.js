@@ -5,6 +5,7 @@
 const router     = require("express").Router();
 const { query }  = require("../config/db");
 const { protect, adminOnly } = require('../middleware/auth');
+const reviewsController = require("../controllers/reviewsController");
 
 // ═══════════════════════════════════════════════════════════════
 // TABLE BOOTSTRAP
@@ -102,8 +103,8 @@ const normaliseDistribution = (rows = []) => {
 };
 
 
-router.get   ('/my',   protect, ctrl.getMyReviews);
-router.delete('/my/:id', protect, ctrl.deleteMyReview);
+router.get   ('/my',   protect, reviewsController.getMyReviews);
+router.delete('/my/:id', protect, reviewsController.deleteMyReview);
 
 
 // ═══════════════════════════════════════════════════════════════
