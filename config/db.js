@@ -875,6 +875,79 @@ const ensureDestinationsSchema = async () => {
   }
 };
 
+
+// Add this to your ensureCountriesSchema in config/db.js
+// Find the ensureCountriesSchema function and add these columns:
+
+const ensureCountriesSchema = async () => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS countries (
+        id                SERIAL PRIMARY KEY,
+        name              VARCHAR(255) NOT NULL,
+        slug              VARCHAR(255) UNIQUE NOT NULL,
+        continent         VARCHAR(100),
+        description       TEXT,
+        short_description TEXT,
+        image_url         VARCHAR(500),
+        flag_url          VARCHAR(500),
+        capital           VARCHAR(255),
+        currency          VARCHAR(100),
+        language          VARCHAR(255),
+        timezone          VARCHAR(100),
+        visa_info         TEXT,
+        best_time_to_visit TEXT,
+        climate           TEXT,
+        latitude          NUMERIC(10,6),
+        longitude         NUMERIC(10,6),
+        is_active         BOOLEAN   DEFAULT true,
+        is_featured       BOOLEAN   DEFAULT false,
+        view_count        INTEGER   DEFAULT 0,
+        meta_title        VARCHAR(255),
+        meta_description  TEXT,
+        created_at        TIMESTAMP DEFAULT NOW(),
+        updated_at        TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // Add new columns for hero images and activities
+    await addColumns("countries", [
+      { name: "hero_images",     type: "JSONB DEFAULT '[]'::JSONB" },
+      { name: "activities",      type: "JSONB DEFAULT '[]'::JSONB" },
+      { name: "short_notes",     type: "TEXT" },
+      { name: "faqs",            type: "JSONB DEFAULT '[]'::JSONB" },
+      { name: "extra_info",      type: "JSONB DEFAULT '{}'::JSONB" },
+      { name: "flag",            type: "VARCHAR(10)" },
+      { name: "tagline",         type: "VARCHAR(500)" },
+      { name: "population",      type: "BIGINT" },
+      { name: "area_sq_km",      type: "INTEGER" },
+      { name: "calling_code",    type: "VARCHAR(10)" },
+      { name: "driving_side",    type: "VARCHAR(10)" },
+      { name: "electricity",     type: "VARCHAR(100)" },
+      { name: "water_safety",    type: "TEXT" },
+      { name: "health_info",     type: "TEXT" },
+      { name: "safety_info",     type: "TEXT" },
+      { name: "transport_info",  type: "TEXT" },
+      { name: "food_info",       type: "TEXT" },
+      { name: "culture_info",    type: "TEXT" },
+      { name: "wildlife_info",   type: "TEXT" },
+      { name: "geography_info",  type: "TEXT" },
+    ]);
+
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug      ON countries(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_active    ON countries(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_featured  ON countries(is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_continent ON countries(continent)`,
+    ];
+    for (const idx of indexes) await query(idx).catch(() => {});
+
+    logger.info("[DB] ✅ Countries schema verified & ensured");
+  } catch (err) {
+    logger.warn('[Countries] Schema ensure non-fatal:', err.message);
+  }
+};
+
 // ════════════════════════════════════════════════════════════════════════════
 // ensureNotificationsSchema
 // ════════════════════════════════════════════════════════════════════════════

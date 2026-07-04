@@ -690,6 +690,7 @@ app.use('/api/users',                usersRouter)
 app.use('/api/bookings',             bookingsRouter)
 app.use('/api/reviews',              reviewsRouter)
 app.use('/api/countries',            countriesRouter)
+app.use('/api/hero-slides', require('./routes/heroSlides'));
 app.use('/api/packages',             packagesRouter)
 app.use('/api/destinations',         destinationsRouter)
 app.use('/api/posts',                postsRouter)
