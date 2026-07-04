@@ -1065,6 +1065,121 @@ const ensureNotificationsSchema = async () => {
   }
 };
 
+
+// Add to backend/config/db.js  — append after your existing exports
+
+const ensureNotificationsSchema = async () => {
+  const tables = [
+    // ── Main notifications table ──────────────────────────────────────────────
+    `CREATE TABLE IF NOT EXISTS notifications (
+      id               SERIAL PRIMARY KEY,
+      user_id          INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      type             VARCHAR(80)  NOT NULL DEFAULT 'general',
+      category         VARCHAR(50)  NOT NULL DEFAULT 'general',
+      title            TEXT         NOT NULL DEFAULT '',
+      message          TEXT         NOT NULL DEFAULT '',
+      action_url       TEXT,
+      action_label     VARCHAR(100),
+      metadata         JSONB        NOT NULL DEFAULT '{}'::JSONB,
+      priority         VARCHAR(20)  NOT NULL DEFAULT 'normal',
+      target_scope     VARCHAR(20)  NOT NULL DEFAULT 'individual',
+      target_role      VARCHAR(50),
+      sender_type      VARCHAR(20)  NOT NULL DEFAULT 'system',
+      sender_id        INTEGER,
+      sender_name      VARCHAR(255),
+      is_read          BOOLEAN      NOT NULL DEFAULT false,
+      read_at          TIMESTAMP,
+      reaction         VARCHAR(20),
+      reacted_at       TIMESTAMP,
+      reply_text       TEXT,
+      replied_at       TIMESTAMP,
+      admin_reply      TEXT,
+      admin_replied_at TIMESTAMP,
+      expires_at       TIMESTAMP,
+      deleted_at       TIMESTAMP,
+      created_at       TIMESTAMP    NOT NULL DEFAULT NOW(),
+      updated_at       TIMESTAMP    NOT NULL DEFAULT NOW()
+    )`,
+  ];
+
+  for (const sql of tables) {
+    await query(sql).catch(err =>
+      console.warn('[NotificationsSchema] non-fatal:', err.message)
+    );
+  }
+
+  // Indexes for fast queries
+  const indexes = [
+    `CREATE INDEX IF NOT EXISTS idx_notif_user_id     ON notifications(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_scope       ON notifications(target_scope)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_type        ON notifications(type)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_unread      ON notifications(user_id, is_read) WHERE is_read = false`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_deleted     ON notifications(deleted_at) WHERE deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_created     ON notifications(created_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_priority    ON notifications(priority)`,
+    `CREATE INDEX IF NOT EXISTS idx_notif_category    ON notifications(category)`,
+  ];
+
+  for (const idx of indexes) {
+    await query(idx).catch(() => {});
+  }
+
+  // Safely add new columns to existing tables
+  const alterations = [
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS category         VARCHAR(50)  DEFAULT 'general'`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS action_url       TEXT`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS action_label     VARCHAR(100)`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS metadata         JSONB        DEFAULT '{}'::JSONB`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS priority         VARCHAR(20)  DEFAULT 'normal'`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS target_scope     VARCHAR(20)  DEFAULT 'individual'`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS target_role      VARCHAR(50)`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sender_type      VARCHAR(20)  DEFAULT 'system'`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sender_id        INTEGER`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS sender_name      VARCHAR(255)`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reaction         VARCHAR(20)`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reacted_at       TIMESTAMP`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS reply_text       TEXT`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS replied_at       TIMESTAMP`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS admin_reply      TEXT`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS admin_replied_at TIMESTAMP`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS expires_at       TIMESTAMP`,
+    `ALTER TABLE notifications ADD COLUMN IF NOT EXISTS deleted_at       TIMESTAMP`,
+    // Bookings payment columns
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_status VARCHAR(30)  DEFAULT 'unpaid'`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS total_price    NUMERIC(12,2) DEFAULT 0`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS currency       VARCHAR(10)   DEFAULT 'USD'`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS confirmed_at   TIMESTAMP`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_note   TEXT`,
+    `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS amount_paid    NUMERIC(12,2) DEFAULT 0`,
+    // Reviews table (if not exists)
+    `CREATE TABLE IF NOT EXISTS reviews (
+      id             SERIAL PRIMARY KEY,
+      user_id        INTEGER REFERENCES users(id) ON DELETE SET NULL,
+      destination_id INTEGER,
+      booking_id     INTEGER,
+      rating         INTEGER CHECK (rating >= 1 AND rating <= 5),
+      title          VARCHAR(255),
+      comment        TEXT,
+      images         JSONB     DEFAULT '[]'::JSONB,
+      admin_response TEXT,
+      helpful_count  INTEGER   DEFAULT 0,
+      is_published   BOOLEAN   DEFAULT true,
+      is_verified    BOOLEAN   DEFAULT false,
+      created_at     TIMESTAMP DEFAULT NOW(),
+      updated_at     TIMESTAMP DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_reviews_user        ON reviews(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_reviews_destination ON reviews(destination_id)`,
+  ];
+
+  for (const sql of alterations) {
+    await query(sql).catch(() => {});
+  }
+
+  console.log('✅ Notifications schema ready');
+};
+
+
 // ════════════════════════════════════════════════════════════════════════════
 // ensureContactSchema
 // ════════════════════════════════════════════════════════════════════════════
@@ -1280,5 +1395,6 @@ module.exports = {
   ensurePostsSchema,
   ensureBookingsSchema,
   ensurePackagesSchema,
+   ensureNotificationsSchema,
   ensureTestimonialsSchema,
 };

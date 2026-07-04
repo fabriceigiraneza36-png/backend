@@ -61,3 +61,74 @@ exports.getStats = async (req, res, next) => {
     next(err);
   }
 };
+
+// Add this method to your existing backend/controllers/reviewsController.js
+
+/**
+ * GET /api/reviews/my
+ * Returns all reviews written by the currently authenticated user
+ */
+exports.getMyReviews = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const page   = Math.max(1, parseInt(req.query.page  || '1',  10));
+    const limit  = Math.min(50, parseInt(req.query.limit || '20', 10));
+    const offset = (page - 1) * limit;
+
+    const { rows } = await query(
+      `SELECT r.*,
+              d.name          AS destination_name,
+              d.thumbnail_url AS destination_image,
+              d.slug          AS destination_slug
+         FROM reviews r
+         LEFT JOIN destinations d ON d.id = r.destination_id
+        WHERE r.user_id = $1
+        ORDER BY r.created_at DESC
+        LIMIT $2 OFFSET $3`,
+      [userId, limit, offset],
+    );
+
+    const countRes = await query(
+      `SELECT COUNT(*) FROM reviews WHERE user_id = $1`,
+      [userId],
+    );
+
+    res.json({
+      success: true,
+      data:    rows,
+      reviews: rows,
+      pagination: {
+        page,
+        limit,
+        total:       parseInt(countRes.rows[0].count, 10),
+        total_pages: Math.ceil(parseInt(countRes.rows[0].count, 10) / limit),
+      },
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
+ * DELETE /api/reviews/:id
+ * User deletes their own review
+ */
+exports.deleteMyReview = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { id } = req.params;
+
+    const { rows } = await query(
+      `DELETE FROM reviews WHERE id = $1 AND user_id = $2 RETURNING id`,
+      [id, userId],
+    );
+
+    if (!rows[0]) {
+      return res.status(404).json({ success: false, message: 'Review not found or not yours.' });
+    }
+
+    res.json({ success: true, message: 'Review deleted.' });
+  } catch (err) {
+    res.status(500).json({ success: false, message: err.message });
+  }
+};

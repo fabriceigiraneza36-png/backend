@@ -4,7 +4,7 @@
 
 const router     = require("express").Router();
 const { query }  = require("../config/db");
-const { protect } = require("../middleware/auth");
+const { protect, adminOnly } = require('../middleware/auth');
 
 // ═══════════════════════════════════════════════════════════════
 // TABLE BOOTSTRAP
@@ -100,6 +100,11 @@ const normaliseDistribution = (rows = []) => {
     percentage: 0, // calculated below after we know total
   }));
 };
+
+
+router.get   ('/my',   protect, ctrl.getMyReviews);
+router.delete('/my/:id', protect, ctrl.deleteMyReview);
+
 
 // ═══════════════════════════════════════════════════════════════
 // GET /api/reviews/stats

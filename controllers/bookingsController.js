@@ -669,65 +669,91 @@ exports.track = async (req, res, next) => {
 /* ══════════════════════════════════════════════════════════════════════════════
    MY BOOKINGS   GET /api/bookings/my-bookings
 ══════════════════════════════════════════════════════════════════════════════ */
-exports.getMyBookings = async (req, res, next) => {
+// Replace your existing getMyBookings in backend/controllers/bookingsController.js
+
+exports.getMyBookings = async (req, res) => {
   try {
-    const userId = req.user?.id;
-    if (!userId)
-      return res.status(401).json({ success: false, error: "Authentication required" });
+    const userId = req.user.id;
+    const page   = Math.max(1, parseInt(req.query.page  || '1',  10));
+    const limit  = Math.min(100, parseInt(req.query.limit || '10', 10));
+    const offset = (page - 1) * limit;
+    const status = req.query.status || null;
 
-    const { page = 1, limit = 10, status } = req.query;
-    const params = [userId], conds = ["b.user_id=$1"];
-    let pi = 2;
+    let statusFilter = '';
+    const params = [userId];
+    let p = 2;
 
-    if (status && Object.values(BOOKING_STATUS).includes(status)) {
-      conds.push(`b.status=$${pi++}`); params.push(status);
+    if (status) {
+      const statuses = status.split(',').map(s => s.trim());
+      statusFilter = ` AND b.status = ANY($${p}::text[])`;
+      params.push(statuses);
+      p++;
     }
 
-    const where    = conds.join(" AND ");
-    const limitNum = safeInt(limit, 10, 1, 100);
-    const pageNum  = safeInt(page, 1, 1, 9999);
-    const offset   = (pageNum - 1) * limitNum;
+    params.push(limit, offset);
 
-    const [countRes, dataRes] = await Promise.all([
-      query(`SELECT COUNT(*) FROM bookings b WHERE ${where}`, params),
-      query(
-        `SELECT b.id, b.booking_number, b.booking_type, b.status, b.payment_status,
-                b.email_verified,
-                b.full_name, b.email, b.phone, b.travel_date, b.return_date,
-                b.flexible_dates, b.number_of_travelers, b.number_of_adults,
-                b.number_of_children, b.accommodation_type, b.room_type,
-                b.special_requests, b.customer_notes,
-                b.created_at, b.updated_at, b.confirmed_at,
-                d.name      AS destination_name, d.slug AS destination_slug,
-                d.image_url AS destination_image,
-                c.name      AS country_name,     c.slug AS country_slug,
-                s.title     AS service_name,     s.slug AS service_slug,
-                p.title     AS package_name
-           FROM bookings b
-           LEFT JOIN destinations d ON b.destination_id=d.id
-           LEFT JOIN countries    c ON d.country_id=c.id
-           LEFT JOIN services     s ON b.service_id=s.id
-           LEFT JOIN packages     p ON b.package_id=p.id
-           WHERE ${where}
-           ORDER BY b.created_at DESC
-           LIMIT $${pi} OFFSET $${pi+1}`,
-        [...params, limitNum, offset],
-      ),
-    ]);
+    const { rows } = await query(
+      `SELECT
+         b.*,
+         COALESCE(d.name, b.destination_name)     AS destination_name,
+         COALESCE(d.thumbnail_url, '')             AS destination_image,
+         COALESCE(d.slug, '')                      AS destination_slug,
+         COALESCE(c.name, b.country_name, '')      AS country_name,
+         s.name                                    AS service_name,
+         a.name                                    AS accommodation_type
+       FROM bookings b
+       LEFT JOIN destinations d  ON d.id  = b.destination_id
+       LEFT JOIN countries    c  ON c.id  = b.country_id
+                                 OR c.id  = d.country_id
+       LEFT JOIN services     s  ON s.id  = b.service_id
+       LEFT JOIN accommodations a ON a.id = b.accommodation_id
+       WHERE b.user_id = $1
+         ${statusFilter}
+       ORDER BY
+         CASE WHEN b.status = 'confirmed' THEN 0 ELSE 1 END,
+         b.travel_date ASC NULLS LAST,
+         b.created_at DESC
+       LIMIT $${p++} OFFSET $${p++}`,
+      params,
+    ).catch(async () => {
+      // Fallback without joins if tables differ
+      return query(
+        `SELECT * FROM bookings WHERE user_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        [userId, limit, offset],
+      );
+    });
+
+    const countRes = await query(
+      `SELECT COUNT(*) FROM bookings WHERE user_id = $1`,
+      [userId],
+    );
 
     const total = parseInt(countRes.rows[0].count, 10);
-    return res.json({
-      success: true, data: dataRes.rows,
+
+    // Stats for dashboard
+    const completed  = rows.filter(b => b.status === 'completed');
+    const countries  = [...new Set(rows.map(b => b.country_name).filter(Boolean))];
+
+    res.json({
+      success:  true,
+      data:     rows,
+      bookings: rows,
+      stats: {
+        total,
+        completed:        completed.length,
+        countries_visited: countries.length,
+        paid:   rows.filter(b => b.payment_status === 'paid').length,
+        unpaid: rows.filter(b => ['unpaid','pending'].includes(b.payment_status)).length,
+      },
       pagination: {
-        total, page: pageNum, limit: limitNum,
-        total_pages: Math.ceil(total / limitNum),
-        has_next: pageNum < Math.ceil(total / limitNum),
-        has_prev: pageNum > 1,
+        page,
+        limit,
+        total,
+        total_pages: Math.ceil(total / limit),
       },
     });
   } catch (err) {
-    logger.error("[Bookings] getMyBookings:", err.message);
-    next(err);
+    res.status(500).json({ success: false, message: err.message });
   }
 };
 
