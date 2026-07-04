@@ -1,18 +1,3 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════
- * TESTIMONIALS CONTROLLER v3.0
- * ═══════════════════════════════════════════════════════════════════════════
- * Fixes:
- *  - extractUser matches EXACT shape from protect middleware (req.user.id,
- *    req.user.full_name, req.user.email, req.user.avatar_url)
- *  - ensureSchema() uses IF NOT EXISTS — fully idempotent
- *  - Rate-limit window configurable via env
- *  - Consistent { success, data, message } response shape
- *  - All DB errors surfaced with descriptive messages
- *  - No silent catches that swallow real errors
- * ═══════════════════════════════════════════════════════════════════════════
- */
-
 "use strict";
 
 const { query }    = require("../config/db");
