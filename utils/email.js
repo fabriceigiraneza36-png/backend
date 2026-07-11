@@ -9,7 +9,7 @@ const { send: sendResendSend } = require("./resend");
 
 /* ── Env constants ─────────────────────────────────────────────────────── */
 const APP_NAME      = process.env.APP_NAME      || "Altuvera";
-const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://altuvera.vercel.app";
+const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://www.altuverasafaris.com";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || process.env.SMTP_USER || "altuverasafari@gmail.com";
 const ADMIN_EMAIL   = process.env.ADMIN_EMAIL   || process.env.SMTP_USER || "altuverasafari@gmail.com";
 const FROM_ADDRESS  = process.env.SMTP_FROM     || `"${APP_NAME}" <${process.env.SMTP_USER || SUPPORT_EMAIL}>`;

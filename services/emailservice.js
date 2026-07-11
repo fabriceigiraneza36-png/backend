@@ -18,7 +18,7 @@ const CFG = {
   supportEmail: process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
   replyTo:      process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
   appName:      process.env.APP_NAME      || "Altuvera Travel",
-  appUrl:       process.env.FRONTEND_URL  || "https://altuvera.vercel.app",
+  appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   backendUrl:   process.env.BACKEND_URL   || "https://backend-jd8f.onrender.com",
   isDev:        process.env.NODE_ENV      !== "production",
 };

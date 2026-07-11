@@ -142,7 +142,7 @@ const ALLOWED_ORIGINS = [
     process.env.BACKEND_URL,
     ...envOrigins,
     'https://altuverapanel.vercel.app',
-    'https://altuvera.vercel.app',
+    'https://www.altuverasafaris.com',
     'https://altuvera.com',
     'https://www.altuvera.com',
     'http://localhost:3000',

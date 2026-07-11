@@ -329,7 +329,7 @@ exports.unsubscribe = async (req, res, next) => {
 };
 
 function unsubscribeHtml(email, success) {
-  const frontendUrl = process.env.FRONTEND_URL || 'https://altuvera.vercel.app';
+  const frontendUrl = process.env.FRONTEND_URL || 'https://www.altuverasafaris.com';
 
   if (success) {
     return `<!DOCTYPE html>

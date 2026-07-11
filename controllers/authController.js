@@ -822,7 +822,7 @@ exports.githubSignInInit = async (req, res) => {
 exports.githubSignUpInit = exports.githubSignInInit;
 
 exports.githubCallback = async (req, res) => {
-  const FRONTEND = process.env.FRONTEND_URL || "https://altuvera.vercel.app";
+  const FRONTEND = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
   try {
     const { code } = req.query;
     if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)

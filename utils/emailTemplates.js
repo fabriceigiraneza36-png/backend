@@ -4,7 +4,7 @@
 const welcomeSubscriberEmail = (email, name = null) => {
   // Use BACKEND_URL for the unsubscribe API link
   const backendUrl     = process.env.BACKEND_URL    || 'http://localhost:3000';
-  const frontendUrl    = process.env.FRONTEND_URL   || 'https://altuvera.vercel.app';
+  const frontendUrl    = process.env.FRONTEND_URL   || 'https://www.altuverasafaris.com';
   const unsubscribeUrl = `${backendUrl}/api/subscribers/unsubscribe/${encodeURIComponent(email)}`;
   const exploreUrl     = `${frontendUrl}/destinations`;
   const currentYear    = new Date().getFullYear();

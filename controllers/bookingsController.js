@@ -375,7 +375,7 @@ exports.create = async (req, res, next) => {
 exports.verifyEmail = async (req, res, next) => {
   try {
     const { token } = req.params;
-    const frontendUrl = process.env.FRONTEND_URL || "https://altuvera.vercel.app";
+    const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
 
     if (!token || token.length < 32) {
       return res.redirect(
@@ -438,7 +438,7 @@ exports.verifyEmail = async (req, res, next) => {
     );
   } catch (err) {
     logger.error("[Bookings] verifyEmail:", err.message);
-    const frontendUrl = process.env.FRONTEND_URL || "https://altuvera.vercel.app";
+    const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
     return res.redirect(`${frontendUrl}/booking/verify?status=error`);
   }
 };
