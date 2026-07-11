@@ -415,7 +415,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
   const siteUrl        = getEnvVar("SITE_URL", "http://localhost:3000");
   const resubscribeUrl = `${siteUrl}/explore`;
-  const supportEmail   = getEnvVar("ADMIN_EMAIL", "fabriceigiraneza36@gmail.com");
+  const supportEmail   = getEnvVar("ADMIN_EMAIL", "info@altuverasafari.com");
 
   const content = `
     ${buildBanner("🌿", "East Africa Explorer", "Premium Safari & Adventures")}

@@ -34,7 +34,7 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false,
   auth: {
-    user: 'fabriceigiraneza36@gmail.com',
+    user: 'info@altuverasafari.com',
     pass: 'ubfdlzbcikkxpgev' // No spaces in app password
   },
   tls: {
@@ -357,8 +357,8 @@ app.post('/api/contact', async (req, res) => {
     
     // Send admin email
     const adminResult = await transporter.sendMail({
-      from: '"Altuvera Safaris" <fabriceigiraneza36@gmail.com>',
-      to: 'fabriceigiraneza36@gmail.com',
+      from: '"Altuvera Safaris" <info@altuverasafari.com>',
+      to: 'info@altuverasafari.com',
       subject: `🦒 New Safari Inquiry: ${subject}`,
       html: adminEmailHtml,
       replyTo: email
@@ -369,7 +369,7 @@ app.post('/api/contact', async (req, res) => {
     
     // Send customer confirmation
     const customerResult = await transporter.sendMail({
-      from: '"Altuvera Safaris" <fabriceigiraneza36@gmail.com>',
+      from: '"Altuvera Safaris" <info@altuverasafari.com>',
       to: email,
       subject: 'Thank You for Contacting Altuvera Safaris! 🌍',
       html: customerEmailHtml

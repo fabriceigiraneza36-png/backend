@@ -863,7 +863,7 @@ VALUES
      'Founder & CEO',
      'Leadership',
      'Visionary entrepreneur leading Altuvera''s mission to deliver transformative travel experiences across East Africa through the "True Adventures In High Places & Deep Culture" philosophy.',
-     'fabriceigiraneza36@gmail.com',
+     'info@altuverasafari.com',
      'https://randomuser.me/api/portraits/men/32.jpg',
      to_jsonb(ARRAY['Strategic Planning', 'Tourism Innovation', 'Partnership Development', 'Business Leadership']),
      'Musanze',
