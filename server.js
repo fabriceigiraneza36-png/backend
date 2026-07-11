@@ -361,6 +361,8 @@ const ensureMessagingSchema = async () => {
       ip_address      VARCHAR(50),
       source          VARCHAR(100) DEFAULT 'website',
       closed_at       TIMESTAMP,
+      deleted_at      TIMESTAMP,
+      deleted_by      INTEGER,
       created_at      TIMESTAMP    DEFAULT NOW(),
       updated_at      TIMESTAMP    DEFAULT NOW()
     )`,

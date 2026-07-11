@@ -26,6 +26,8 @@ const serializeConv = (row) => ({
   unreadUser:    parseInt(row.unread_user  ?? 0, 10),
   tags:          row.tags           ?? [],
   source:        row.source         ?? null,
+  deletedAt:     row.deleted_at     ?? null,
+  deletedBy:     row.deleted_by     ?? null,
   createdAt:     row.created_at,
   updatedAt:     row.updated_at,
 });
@@ -125,6 +127,13 @@ router.get("/conversations", protect, adminOnly, async (req, res, next) => {
     let where  = "WHERE 1=1";
     const params = [];
     let   idx    = 1;
+
+    // Trash handling: only show deleted items when explicitly requested
+    if (req.query.trash === "1" || req.query.trash === "true") {
+      where += " AND c.deleted_at IS NOT NULL";
+    } else {
+      where += " AND c.deleted_at IS NULL";
+    }
 
     if (status && status !== "all") {
       where += ` AND c.status = $${idx++}`;
@@ -364,17 +373,124 @@ router.patch("/conversations/:id/status", protect, adminOnly, async (req, res, n
 });
 
 /* ══════════════════════════════════════════════════════════════
+   7d. DELETE /api/messages/conversations/trash (empty trash)
+   Permanently deletes every trashed conversation.
+   Registered BEFORE /conversations/:id so "trash" is not treated as an id.
+   ══════════════════════════════════════════════════════════════ */
+router.delete("/conversations/trash", protect, adminOnly, async (req, res, next) => {
+  try {
+    const { rows } = await query(`SELECT id FROM conversations WHERE deleted_at IS NOT NULL`);
+    const ids = rows.map((r) => r.id);
+    if (ids.length) {
+      await query(`DELETE FROM messages WHERE conversation_id = ANY($1)`, [ids]);
+      await query(`DELETE FROM conversations WHERE id = ANY($1)`, [ids]);
+    }
+
+    const io = req.app.get("io");
+    if (io) io.to("admins").emit("msg:conversations-bulk-updated", { ids, action: "delete" });
+
+    return res.json({ success: true, count: ids.length, message: `Emptied trash (${ids.length} deleted).` });
+  } catch (err) { next(err); }
+});
+
+/* ══════════════════════════════════════════════════════════════
    7. DELETE /api/messages/conversations/:id
-══════════════════════════════════════════════════════════════ */
+   Soft-deletes (moves to trash) by default. Pass ?permanent=true
+   to hard-delete.
+   ══════════════════════════════════════════════════════════════ */
 router.delete("/conversations/:id", protect, adminOnly, async (req, res, next) => {
   try {
     const conv = await findConv(req.params.id);
     if (!conv) return res.status(404).json({ error: "Conversation not found." });
 
-    await query(`DELETE FROM messages     WHERE conversation_id=$1`, [conv.id]);
-    await query(`DELETE FROM conversations WHERE id=$1`,             [conv.id]);
+    const permanent = req.query.permanent === "true" || req.query.permanent === "1";
 
-    return res.json({ success: true, message: "Conversation deleted." });
+    if (permanent) {
+      await query(`DELETE FROM messages     WHERE conversation_id=$1`, [conv.id]);
+      await query(`DELETE FROM conversations WHERE id=$1`,             [conv.id]);
+      return res.json({ success: true, message: "Conversation permanently deleted." });
+    }
+
+    await query(
+      `UPDATE conversations SET deleted_at=$1, deleted_by=$2, updated_at=NOW() WHERE id=$3`,
+      [new Date(), req.user?.id ?? null, conv.id],
+    );
+
+    const io = req.app.get("io");
+    if (io) io.to("admins").emit("msg:conversation-updated", {
+      conversationId: conv.id, deletedAt: new Date().toISOString(),
+    });
+
+    return res.json({ success: true, message: "Conversation moved to trash." });
+  } catch (err) { next(err); }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   7b. PATCH /api/messages/conversations/:id/restore
+   Restores a soft-deleted (trashed) conversation
+   ══════════════════════════════════════════════════════════════ */
+router.patch("/conversations/:id/restore", protect, adminOnly, async (req, res, next) => {
+  try {
+    const conv = await findConv(req.params.id);
+    if (!conv) return res.status(404).json({ error: "Conversation not found." });
+
+    const r = await query(
+      `UPDATE conversations SET deleted_at=NULL, deleted_by=NULL, updated_at=NOW()
+        WHERE id=$1 RETURNING *`,
+      [conv.id],
+    );
+
+    const io = req.app.get("io");
+    if (io) io.to("admins").emit("msg:conversation-updated", {
+      conversationId: conv.id, deletedAt: null,
+    });
+
+    return res.json({ success: true, data: serializeConv({ ...r.rows[0], session_id: conv.session_id }) });
+  } catch (err) { next(err); }
+});
+
+/* ══════════════════════════════════════════════════════════════
+   7c. POST /api/messages/conversations/bulk
+   Bulk actions across many conversations:
+     action: "trash"   -> soft delete
+     action: "restore" -> restore from trash
+     action: "delete"  -> permanent delete
+   ══════════════════════════════════════════════════════════════ */
+router.post("/conversations/bulk", protect, adminOnly, async (req, res, next) => {
+  try {
+    const { ids, action } = req.body;
+    if (!Array.isArray(ids) || !ids.length)
+      return res.status(422).json({ error: "ids[] is required." });
+    if (!["trash", "restore", "delete"].includes(action))
+      return res.status(422).json({ error: "action must be 'trash', 'restore' or 'delete'." });
+
+    let result;
+    if (action === "trash") {
+      result = await query(
+        `UPDATE conversations SET deleted_at=NOW(), deleted_by=$2, updated_at=NOW()
+          WHERE id = ANY($1) RETURNING id`,
+        [ids, req.user?.id ?? null],
+      );
+    } else if (action === "restore") {
+      result = await query(
+        `UPDATE conversations SET deleted_at=NULL, deleted_by=NULL, updated_at=NOW()
+          WHERE id = ANY($1) RETURNING id`,
+        [ids],
+      );
+    } else {
+      await query(`DELETE FROM messages WHERE conversation_id = ANY($1)`, [ids]);
+      result = await query(`DELETE FROM conversations WHERE id = ANY($1) RETURNING id`, [ids]);
+    }
+
+    const io = req.app.get("io");
+    if (io) io.to("admins").emit("msg:conversations-bulk-updated", { ids, action });
+
+    return res.json({
+      success:  true,
+      action,
+      count:    result.rowCount,
+      message:  `${action === "delete" ? "Permanently deleted" : action === "restore" ? "Restored" : "Moved to trash"} ${result.rowCount} conversation(s).`,
+    });
   } catch (err) { next(err); }
 });
 

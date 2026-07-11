@@ -131,6 +131,92 @@ exports.create = async (req, res, next) => {
       console.error("[Contact] Notification email failed:", err.message),
     );
 
+    /* ── Link to live chat conversation (so admin replies appear in the
+           user's messaging portal) ── */
+    const sessionId = (body.sessionId || "").trim();
+    if (sessionId) {
+      try {
+        const io       = req.app?.get?.("io");
+        const userId   = req.user?.id ?? null;
+
+        const existing = await query(
+          `SELECT * FROM conversations WHERE session_id = $1 LIMIT 1`,
+          [sessionId],
+        );
+
+        let conv = existing.rows[0];
+        if (!conv) {
+          const ins = await query(
+            `INSERT INTO conversations
+               (session_id, user_id, guest_name, guest_email, channel, source, status)
+             VALUES ($1,$2,$3,$4,'live_chat','contact_form','open')
+             RETURNING *`,
+            [sessionId, userId, name, email],
+          );
+          conv = ins.rows[0];
+        } else {
+          await query(
+            `UPDATE conversations SET
+               guest_name  = COALESCE(NULLIF($2,''), guest_name),
+               guest_email = COALESCE(NULLIF($3,''), guest_email),
+               updated_at  = NOW()
+             WHERE id = $1`,
+            [conv.id, name, email],
+          ).catch(() => {});
+        }
+
+        const msgRes = await query(
+          `INSERT INTO messages
+             (conversation_id, sender_type, sender_id, sender_name, sender_email, body, is_read, metadata)
+           VALUES ($1,'user',$2,$3,$4,$5,false,'{"source":"contact_form"}')
+           RETURNING *`,
+          [conv.id, userId, name, email, message],
+        );
+
+        await query(
+          `UPDATE conversations SET
+             last_message    = $1,
+             last_message_at = NOW(),
+             unread_admin    = unread_admin + 1,
+             updated_at      = NOW()
+           WHERE id = $2`,
+          [message, conv.id],
+        ).catch(() => {});
+
+        if (io) {
+          io.to("admins").emit("msg:user-registered", {
+            conversationId: conv.id,
+            sessionId:      conv.session_id,
+            guestName:      name,
+            guestEmail:     email,
+            status:         conv.status,
+            lastMessage:    message,
+          });
+          io.to("admins").emit("msg:new-from-user", {
+            conversationId: conv.id,
+            sessionId:      conv.session_id,
+            message: {
+              id: msgRes.rows[0].id,
+              conversationId: conv.id,
+              sessionId: conv.session_id,
+              body: message,
+              senderType: "user",
+              senderName: name,
+              senderEmail: email,
+              isRead: false,
+              createdAt: msgRes.rows[0].created_at,
+            },
+            senderName: name,
+            senderEmail: email,
+            unreadCount: 1,
+          });
+        }
+      } catch (linkErr) {
+        // Linking failure must never break contact submission
+        console.error("[Contact] conversation link failed:", linkErr.message);
+      }
+    }
+
     return res.status(201).json({
       success: true,
       message: "Thank you! Our team will respond within 24 hours.",

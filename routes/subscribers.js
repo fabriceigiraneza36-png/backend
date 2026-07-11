@@ -59,6 +59,9 @@ router.post(
 router.get   ("/unsubscribe/:email", asyncHandler(ctrl.unsubscribe));
 router.delete("/unsubscribe/:email", asyncHandler(ctrl.unsubscribe));
 
+// Send newsletter to all active subscribers
+router.post("/email", protect, adminOnly, asyncHandler(ctrl.sendNewsletter));
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // ADMIN ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════

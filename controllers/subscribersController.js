@@ -516,6 +516,78 @@ exports.remove = async (req, res, next) => {
 // POST /api/subscribers/resend-welcome/:id  (admin)
 // ═══════════════════════════════════════════════════════════════════════════════
 
+exports.sendNewsletter = async (req, res, next) => {
+  try {
+    const { subject, body, html: rawHtml } = req.body || {};
+
+    if (!subject || !String(subject).trim()) {
+      return res.status(422).json({ success: false, error: 'Subject is required.' });
+    }
+    if (!body || !String(body).trim()) {
+      return res.status(422).json({ success: false, error: 'Body is required.' });
+    }
+
+    const cleanSubject = String(subject).trim();
+    const textBody     = String(body).trim();
+
+    const htmlBody = rawHtml && String(rawHtml).trim()
+      ? String(rawHtml)
+      : `<!DOCTYPE html>
+<html>
+<body style="font-family:sans-serif;background:#f0fdf4;padding:40px 20px;">
+  <div style="max-width:600px;margin:0 auto;background:#fff;border-radius:16px;padding:40px;">
+    <h1 style="color:#15803D;margin-top:0;">${cleanSubject}</h1>
+    <div style="color:#1f2937;line-height:1.7;white-space:pre-wrap;">${textBody.replace(/</g, '&lt;')}</div>
+    <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;" />
+    <p style="color:#9CA3AF;font-size:12px;">
+      You're receiving this because you subscribed to Altuvera Travel updates.<br/>
+      <a href="${process.env.FRONTEND_URL || 'https://www.altuverasafaris.com'}/unsubscribe" style="color:#15803D;">Unsubscribe</a>
+    </p>
+  </div>
+</body>
+</html>`;
+
+    const { rows: subs } = await query(
+      `SELECT id, email, name FROM subscribers WHERE is_active = true ORDER BY id`,
+    );
+
+    if (!subs.length) {
+      return res.json({
+        success: true,
+        message: 'No active subscribers to send to.',
+        sent: 0, failed: 0, total: 0,
+      });
+    }
+
+    let sent = 0, failed = 0;
+    const errors = [];
+
+    for (const sub of subs) {
+      try {
+        const result = await _sendEmail(sub.email, cleanSubject, htmlBody);
+        if (result && result.success === false) throw new Error(result.error || 'Send failed');
+        sent++;
+      } catch (err) {
+        failed++;
+        if (errors.length < 5) errors.push({ email: sub.email, error: err.message });
+      }
+      if (subs.length > 10) await new Promise((r) => setTimeout(r, 120));
+    }
+
+    logger.info(`[Subscribers] Newsletter sent: ${sent} ok, ${failed} failed`);
+
+    return res.json({
+      success: true,
+      message: `Newsletter sent to ${sent} subscriber(s).`,
+      sent, failed, total: subs.length,
+      errors: failed ? errors : undefined,
+    });
+  } catch (err) {
+    logger.error('[Subscribers] sendNewsletter error:', err);
+    next(err);
+  }
+};
+
 exports.resendWelcome = async (req, res, next) => {
   try {
     const { rows } = await query(

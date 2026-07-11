@@ -1,4 +1,3 @@
-// backend/controllers/notificationsController.js
 'use strict';
 
 const { query }  = require('../config/db');
@@ -14,11 +13,8 @@ const getIO = (req) => {
 
 const emitToUser = (io, userId, event, payload) => {
   if (!io || !userId) return;
-  try {
-    io.to(`user-${userId}`).emit(event, payload);
-  } catch (err) {
-    logger.warn('[Notifications] emit error:', err.message);
-  }
+  try { io.to(`user-${userId}`).emit(event, payload); }
+  catch (err) { logger.warn('[Notifications] emit error:', err.message); }
 };
 
 const emitToAdmins = (io, event, payload) => {
@@ -26,44 +22,46 @@ const emitToAdmins = (io, event, payload) => {
   try {
     io.to('admins').emit(event, payload);
     io.to('admin-room').emit(event, payload);
-  } catch (err) {
-    logger.warn('[Notifications] admin emit error:', err.message);
-  }
+  } catch (err) { logger.warn('[Notifications] admin emit error:', err.message); }
 };
 
 const normalizeRow = (row) => ({
   id:           row.id,
   userId:       row.user_id,
-  type:         row.type         || 'general',
-  category:     row.category     || 'general',
-  title:        row.title        || '',
-  message:      row.message      || '',
-  actionUrl:    row.action_url   || null,
-  actionLabel:  row.action_label || null,
+  type:         row.type          || 'general',
+  category:     row.category      || 'general',
+  title:        row.title         || '',
+  message:      row.message       || '',
+  actionUrl:    row.action_url    || null,
+  actionLabel:  row.action_label  || null,
   isRead:       Boolean(row.is_read),
-  readAt:       row.read_at      || null,
-  reaction:     row.reaction     || null,
-  replyText:    row.reply_text   || null,
-  adminReply:   row.admin_reply  || null,
-  metadata:     row.metadata     || {},
-  priority:     row.priority     || 'normal',
-  targetScope:  row.target_scope || 'individual',
-  senderType:   row.sender_type  || 'system',
-  senderName:   row.sender_name  || null,
+  readAt:       row.read_at       || null,
+  reaction:     row.reaction      || null,
+  replyText:    row.reply_text    || null,
+  adminReply:   row.admin_reply   || null,
+  metadata:     row.metadata      || {},
+  priority:     row.priority      || 'normal',
+  targetScope:  row.target_scope  || 'individual',
+  targetRole:   row.target_role   || null,
+  senderType:   row.sender_type   || 'system',
+  senderName:   row.sender_name   || null,
   createdAt:    row.created_at,
   updatedAt:    row.updated_at,
-  // snake_case aliases for frontend compatibility
+  // snake_case aliases
   is_read:      Boolean(row.is_read),
-  read_at:      row.read_at      || null,
-  reply_text:   row.reply_text   || null,
-  admin_reply:  row.admin_reply  || null,
-  action_url:   row.action_url   || null,
-  action_label: row.action_label || null,
+  read_at:      row.read_at       || null,
+  reply_text:   row.reply_text    || null,
+  admin_reply:  row.admin_reply   || null,
+  action_url:   row.action_url    || null,
+  action_label: row.action_label  || null,
   created_at:   row.created_at,
   updated_at:   row.updated_at,
+  // user info (from JOIN)
+  user_full_name: row.user_full_name || null,
+  user_email:     row.user_email     || null,
 });
 
-// ─── Internal helper (used by other controllers & socket handler) ─────────────
+// ─── Internal helper ──────────────────────────────────────────────────────────
 
 exports.createNotificationInternal = async ({
   userId       = null,
@@ -75,13 +73,53 @@ exports.createNotificationInternal = async ({
   actionLabel  = null,
   metadata     = {},
   priority     = 'normal',
-  targetScope  = 'individual',   // 'individual' | 'all' | 'role'
+  targetScope  = 'individual',
   targetRole   = null,
   senderType   = 'system',
   senderId     = null,
   senderName   = null,
   io           = null,
+  targetUserIds = [],   // NEW: for category-targeted sends
 }) => {
+  // If targetUserIds provided, insert one row per user
+  if (targetUserIds && targetUserIds.length > 0) {
+    const created = [];
+    for (const uid of targetUserIds) {
+      const { rows } = await query(
+        `INSERT INTO notifications
+           (user_id, type, category, title, message,
+            action_url, action_label, metadata, priority,
+            target_scope, target_role,
+            sender_type, sender_id, sender_name,
+            is_read, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+                 false, NOW(), NOW())
+         RETURNING *`,
+        [uid, type, category, title, message,
+         actionUrl, actionLabel, JSON.stringify(metadata),
+         priority, targetScope, targetRole,
+         senderType, senderId, senderName],
+      );
+      const notif = normalizeRow(rows[0]);
+      if (io) emitToUser(io, uid, 'notification:new', notif);
+      created.push(notif);
+    }
+    // Update unread badges
+    if (io) {
+      for (const uid of targetUserIds) {
+        const cnt = await query(
+          `SELECT COUNT(*) FROM notifications
+            WHERE user_id=$1 AND is_read=false AND deleted_at IS NULL`,
+          [uid],
+        );
+        emitToUser(io, uid, 'notification:unread-count',
+          { count: parseInt(cnt.rows[0].count, 10) });
+      }
+    }
+    return created;
+  }
+
+  // Single notification
   const { rows } = await query(
     `INSERT INTO notifications
        (user_id, type, category, title, message,
@@ -89,42 +127,31 @@ exports.createNotificationInternal = async ({
         target_scope, target_role,
         sender_type, sender_id, sender_name,
         is_read, created_at, updated_at)
-     VALUES
-       ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
-        false, NOW(), NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,
+             false, NOW(), NOW())
      RETURNING *`,
-    [
-      userId,
-      type, category, title, message,
-      actionUrl, actionLabel,
-      JSON.stringify(metadata),
-      priority,
-      targetScope, targetRole,
-      senderType, senderId, senderName,
-    ],
+    [userId, type, category, title, message,
+     actionUrl, actionLabel, JSON.stringify(metadata),
+     priority, targetScope, targetRole,
+     senderType, senderId, senderName],
   );
 
   const notif = normalizeRow(rows[0]);
 
-  // ── Live delivery ──────────────────────────────────────────────────────────
   if (io) {
     if (targetScope === 'individual' && userId) {
       emitToUser(io, userId, 'notification:new', notif);
+      const cnt = await query(
+        `SELECT COUNT(*) FROM notifications
+          WHERE user_id=$1 AND is_read=false AND deleted_at IS NULL`,
+        [userId],
+      );
+      emitToUser(io, userId, 'notification:unread-count',
+        { count: parseInt(cnt.rows[0].count, 10) });
     } else if (targetScope === 'all') {
       io.to('all-users').emit('notification:new', notif);
     } else if (targetScope === 'role' && targetRole) {
       io.to(`role-${targetRole}`).emit('notification:new', notif);
-    }
-    // Update unread badge
-    if (userId) {
-      const cnt = await query(
-        `SELECT COUNT(*) FROM notifications
-          WHERE user_id = $1 AND is_read = false AND deleted_at IS NULL`,
-        [userId],
-      );
-      emitToUser(io, userId, 'notification:unread-count', {
-        count: parseInt(cnt.rows[0].count, 10),
-      });
     }
   }
 
@@ -135,9 +162,6 @@ exports.createNotificationInternal = async ({
 // USER ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/notifications/my
- */
 exports.getMyNotifications = async (req, res) => {
   try {
     const userId   = req.user.id;
@@ -152,10 +176,9 @@ exports.getMyNotifications = async (req, res) => {
     let p          = 5;
 
     if (type) {
-      const types = type.split(',').map((t) => t.trim()).filter(Boolean);
+      const types = type.split(',').map(t => t.trim()).filter(Boolean);
       whereExtra = ` AND n.type = ANY($${p}::text[])`;
-      params.push(types);
-      p++;
+      params.push(types); p++;
     }
 
     const { rows } = await query(
@@ -199,18 +222,15 @@ exports.getMyNotifications = async (req, res) => {
       [userId, userRole],
     );
 
-    const total       = parseInt(countResult.rows[0].count, 10);
-    const unreadCount = parseInt(unreadResult.rows[0].count, 10);
-
     res.json({
       success:      true,
       data:         rows.map(normalizeRow),
-      unread_count: unreadCount,
+      unread_count: parseInt(unreadResult.rows[0].count, 10),
       pagination: {
         page,
         limit,
-        total,
-        total_pages: Math.ceil(total / limit),
+        total:       parseInt(countResult.rows[0].count, 10),
+        total_pages: Math.ceil(parseInt(countResult.rows[0].count, 10) / limit),
       },
     });
   } catch (err) {
@@ -219,14 +239,10 @@ exports.getMyNotifications = async (req, res) => {
   }
 };
 
-/**
- * GET /api/notifications/my/unread-count
- */
 exports.getUnreadCount = async (req, res) => {
   try {
     const userId   = req.user.id;
     const userRole = req.user.role || 'user';
-
     const { rows } = await query(
       `SELECT COUNT(*) FROM notifications
         WHERE (
@@ -234,140 +250,112 @@ exports.getUnreadCount = async (req, res) => {
           OR target_scope = 'all'
           OR (target_scope = 'role' AND target_role = $2)
         )
-        AND is_read = false
-        AND deleted_at IS NULL
+        AND is_read = false AND deleted_at IS NULL
         AND (expires_at IS NULL OR expires_at > NOW())`,
       [userId, userRole],
     );
-
-    res.json({
-      success: true,
-      count:   parseInt(rows[0].count, 10),
-    });
+    res.json({ success: true, count: parseInt(rows[0].count, 10) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * PATCH /api/notifications/:id/read
- */
 exports.markRead = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-
     await query(
       `UPDATE notifications
-          SET is_read = true, read_at = NOW(), updated_at = NOW()
-        WHERE id = $1
-          AND (user_id = $2 OR target_scope IN ('all','role'))
+          SET is_read=true, read_at=NOW(), updated_at=NOW()
+        WHERE id=$1
+          AND (user_id=$2 OR target_scope IN ('all','role'))
           AND deleted_at IS NULL`,
       [id, userId],
     );
-
-    // Update badge count live
     const io = getIO(req);
     if (io) {
       const userRole = req.user.role || 'user';
       const cnt = await query(
         `SELECT COUNT(*) FROM notifications
           WHERE (
-            (user_id = $1 AND target_scope='individual')
+            (user_id=$1 AND target_scope='individual')
             OR target_scope='all'
             OR (target_scope='role' AND target_role=$2)
           )
           AND is_read=false AND deleted_at IS NULL`,
         [userId, userRole],
       );
-      emitToUser(io, userId, 'notification:unread-count', {
-        count: parseInt(cnt.rows[0].count, 10),
-      });
+      emitToUser(io, userId, 'notification:unread-count',
+        { count: parseInt(cnt.rows[0].count, 10) });
     }
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * PATCH /api/notifications/mark-all-read
- */
 exports.markAllRead = async (req, res) => {
   try {
     const userId   = req.user.id;
     const userRole = req.user.role || 'user';
-
     await query(
       `UPDATE notifications
-          SET is_read = true, read_at = NOW(), updated_at = NOW()
+          SET is_read=true, read_at=NOW(), updated_at=NOW()
         WHERE (
-          (user_id = $1 AND target_scope = 'individual')
-          OR target_scope = 'all'
-          OR (target_scope = 'role' AND target_role = $2)
+          (user_id=$1 AND target_scope='individual')
+          OR target_scope='all'
+          OR (target_scope='role' AND target_role=$2)
         )
-        AND is_read = false
-        AND deleted_at IS NULL`,
+        AND is_read=false AND deleted_at IS NULL`,
       [userId, userRole],
     );
-
     const io = getIO(req);
     if (io) emitToUser(io, userId, 'notification:unread-count', { count: 0 });
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * PATCH /api/notifications/:id/react
- */
 exports.react = async (req, res) => {
   try {
     const userId   = req.user.id;
     const { id }   = req.params;
     const reaction = req.body.reaction || null;
-
     await query(
       `UPDATE notifications
-          SET reaction = $1, reacted_at = NOW(), updated_at = NOW()
-        WHERE id = $2
-          AND (user_id = $3 OR target_scope IN ('all','role'))
+          SET reaction=$1, reacted_at=NOW(), updated_at=NOW()
+        WHERE id=$2
+          AND (user_id=$3 OR target_scope IN ('all','role'))
           AND deleted_at IS NULL`,
       [reaction, id, userId],
     );
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * POST /api/notifications/:id/reply
- */
 exports.reply = async (req, res) => {
   try {
     const userId    = req.user.id;
     const { id }    = req.params;
     const replyText = String(req.body.reply || req.body.replyText || '').trim();
-    if (!replyText) return res.status(400).json({ success: false, message: 'Reply text required.' });
+    if (!replyText)
+      return res.status(400).json({ success: false, message: 'Reply text required.' });
 
     const { rows } = await query(
       `UPDATE notifications
-          SET reply_text = $1, replied_at = NOW(), updated_at = NOW()
-        WHERE id = $2
-          AND (user_id = $3 OR target_scope IN ('all','role'))
+          SET reply_text=$1, replied_at=NOW(), updated_at=NOW()
+        WHERE id=$2
+          AND (user_id=$3 OR target_scope IN ('all','role'))
           AND deleted_at IS NULL
         RETURNING *`,
       [replyText, id, userId],
     );
+    if (!rows[0])
+      return res.status(404).json({ success: false, message: 'Notification not found.' });
 
-    if (!rows[0]) return res.status(404).json({ success: false, message: 'Notification not found.' });
-
-    // Alert admins about the reply
     const io = getIO(req);
     if (io) {
       emitToAdmins(io, 'notification:user-replied', {
@@ -375,58 +363,48 @@ exports.reply = async (req, res) => {
         userId,
         replyText,
         userName: req.user.fullName || req.user.name || req.user.email,
+        notification: normalizeRow(rows[0]),
       });
     }
-
     res.json({ success: true, data: normalizeRow(rows[0]) });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * DELETE /api/notifications/:id
- */
 exports.deleteOne = async (req, res) => {
   try {
     const userId = req.user.id;
     const { id } = req.params;
-
     await query(
       `UPDATE notifications
-          SET deleted_at = NOW(), updated_at = NOW()
-        WHERE id = $1
-          AND (user_id = $2 OR target_scope IN ('all','role'))
+          SET deleted_at=NOW(), updated_at=NOW()
+        WHERE id=$1
+          AND (user_id=$2 OR target_scope IN ('all','role'))
           AND deleted_at IS NULL`,
       [id, userId],
     );
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * DELETE /api/notifications/clear-all
- */
 exports.clearAll = async (req, res) => {
   try {
     const userId   = req.user.id;
     const userRole = req.user.role || 'user';
-
     await query(
       `UPDATE notifications
-          SET deleted_at = NOW(), updated_at = NOW()
+          SET deleted_at=NOW(), updated_at=NOW()
         WHERE (
-          (user_id = $1 AND target_scope = 'individual')
-          OR target_scope = 'all'
-          OR (target_scope = 'role' AND target_role = $2)
+          (user_id=$1 AND target_scope='individual')
+          OR target_scope='all'
+          OR (target_scope='role' AND target_role=$2)
         )
         AND deleted_at IS NULL`,
       [userId, userRole],
     );
-
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -434,85 +412,53 @@ exports.clearAll = async (req, res) => {
 };
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// CHECKLIST REQUEST (User → Admin)
+// CHECKLIST REQUEST
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * POST /api/notifications/checklist-request
- */
 exports.checklistRequest = async (req, res) => {
   try {
     const userId    = req.user.id;
     const userEmail = req.user.email;
     const userName  = req.user.fullName || req.user.full_name || req.user.name || userEmail;
-    const {
-      title, type, destination, travel_date, notes,
-    } = req.body;
-
-    if (!type) return res.status(400).json({ success: false, message: 'Checklist type required.' });
+    const { title, type, destination, travel_date, notes } = req.body;
+    if (!type)
+      return res.status(400).json({ success: false, message: 'Checklist type required.' });
 
     const io = getIO(req);
 
-    // 1. Notify the USER — request received
     await exports.createNotificationInternal({
-      userId,
-      type:        'checklist_request',
-      category:    'checklist',
-      title:       title || `${type} Request Submitted`,
-      message:     `Your checklist request has been received. Our team will prepare your ${type} and send it to you shortly.`,
-      priority:    'normal',
-      targetScope: 'individual',
-      senderType:  'system',
-      io,
+      userId, type: 'checklist_request', category: 'checklist',
+      title: title || `${type} Request Submitted`,
+      message: `Your checklist request has been received. Our team will prepare your ${type} shortly.`,
+      priority: 'normal', targetScope: 'individual', senderType: 'system', io,
     });
 
-    // 2. Notify ALL ADMINS — new checklist request
     const { rows: admins } = await query(
-      `SELECT id FROM users WHERE role = 'admin' AND is_active = true LIMIT 20`,
+      `SELECT id FROM users WHERE role='admin' AND is_active=true LIMIT 20`,
     );
-
     for (const admin of admins) {
       await exports.createNotificationInternal({
-        userId:      admin.id,
-        type:        'admin_checklist_request',
-        category:    'admin',
-        title:       `📋 Checklist Request: ${type}`,
-        message:     `From: ${userName} (${userEmail})\nDestination: ${destination || 'Not specified'}\nTravel Date: ${travel_date || 'Not specified'}\nNotes: ${notes || 'None'}`,
-        priority:    'high',
-        targetScope: 'individual',
-        senderType:  'user',
-        senderId:    userId,
-        senderName:  userName,
-        metadata: {
-          requesterId:    userId,
-          requesterName:  userName,
-          requesterEmail: userEmail,
-          checklistType:  type,
-          destination,
-          travelDate:     travel_date,
-          notes,
-        },
+        userId: admin.id, type: 'admin_checklist_request', category: 'admin',
+        title: `📋 Checklist Request: ${type}`,
+        message: `From: ${userName} (${userEmail})\nDestination: ${destination || 'Not specified'}\nTravel Date: ${travel_date || 'Not specified'}\nNotes: ${notes || 'None'}`,
+        priority: 'high', targetScope: 'individual',
+        senderType: 'user', senderId: userId, senderName: userName,
+        metadata: { requesterId: userId, requesterName: userName, requesterEmail: userEmail, checklistType: type, destination, travelDate: travel_date, notes },
         io,
       });
     }
 
-    // 3. Emit to admin panel live
     if (io) {
       emitToAdmins(io, 'notification:new', {
-        type:     'admin_checklist_request',
-        category: 'admin',
-        title:    `📋 Checklist Request: ${type}`,
-        message:  `From ${userName}`,
+        type: 'admin_checklist_request', category: 'admin',
+        title: `📋 Checklist Request: ${type}`, message: `From ${userName}`,
         priority: 'high',
         metadata: { userId, userName, userEmail, type, destination, travel_date, notes },
         createdAt: new Date().toISOString(),
       });
     }
 
-    res.json({
-      success: true,
-      message: 'Checklist request submitted. You will be notified when it is ready.',
-    });
+    res.json({ success: true, message: 'Checklist request submitted.' });
   } catch (err) {
     logger.error('[Notifications] checklistRequest:', err.message);
     res.status(500).json({ success: false, message: err.message });
@@ -523,30 +469,26 @@ exports.checklistRequest = async (req, res) => {
 // ADMIN ROUTES
 // ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * GET /api/notifications/admin
- * Admin sees ALL notifications
- */
 exports.adminGetAll = async (req, res) => {
   try {
     const page   = Math.max(1, parseInt(req.query.page  || '1',  10));
     const limit  = Math.min(100, parseInt(req.query.limit || '30', 10));
     const offset = (page - 1) * limit;
-    const type   = req.query.type   || null;
-    const scope  = req.query.scope  || null;
-    const userId = req.query.userId || null;
 
-    const conditions = [`n.deleted_at IS NULL`];
+    const conditions = ['n.deleted_at IS NULL'];
     const params     = [];
     let   p          = 1;
 
-    if (type)   { conditions.push(`n.type = $${p++}`);          params.push(type);           }
-    if (scope)  { conditions.push(`n.target_scope = $${p++}`);  params.push(scope);          }
-    if (userId) { conditions.push(`n.user_id = $${p++}`);       params.push(parseInt(userId, 10)); }
+    if (req.query.type)   { conditions.push(`n.type=$${p++}`);         params.push(req.query.type); }
+    if (req.query.scope)  { conditions.push(`n.target_scope=$${p++}`); params.push(req.query.scope); }
+    if (req.query.userId) { conditions.push(`n.user_id=$${p++}`);      params.push(parseInt(req.query.userId, 10)); }
+    if (req.query.unread === 'true') { conditions.push(`n.is_read=false`); }
+    if (req.query.awaitingReply === 'true') {
+      conditions.push(`n.reply_text IS NOT NULL AND n.admin_reply IS NULL`);
+    }
 
     const where = `WHERE ${conditions.join(' AND ')}`;
-
-    params.push(limit, offset);
+    const dataParams = [...params, limit, offset];
 
     const { rows } = await query(
       `SELECT n.*,
@@ -557,20 +499,18 @@ exports.adminGetAll = async (req, res) => {
          ${where}
          ORDER BY n.created_at DESC
          LIMIT $${p++} OFFSET $${p++}`,
-      params,
+      dataParams,
     );
 
     const countRes = await query(
-      `SELECT COUNT(*) FROM notifications n ${where}`,
-      params.slice(0, -2),
+      `SELECT COUNT(*) FROM notifications n ${where}`, params,
     );
 
     res.json({
       success: true,
       data:    rows.map(normalizeRow),
       pagination: {
-        page,
-        limit,
+        page, limit,
         total:       parseInt(countRes.rows[0].count, 10),
         total_pages: Math.ceil(parseInt(countRes.rows[0].count, 10) / limit),
       },
@@ -581,23 +521,19 @@ exports.adminGetAll = async (req, res) => {
   }
 };
 
-/**
- * GET /api/notifications/admin/stats
- */
 exports.adminStats = async (req, res) => {
   try {
     const { rows } = await query(
       `SELECT
-         COUNT(*)                                                   AS total,
-         COUNT(*) FILTER (WHERE is_read = false)                    AS unread,
-         COUNT(*) FILTER (WHERE type LIKE 'checklist%')             AS checklist_requests,
-         COUNT(*) FILTER (WHERE priority = 'high')                  AS high_priority,
-         COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24h') AS last_24h,
-         COUNT(*) FILTER (WHERE reply_text IS NOT NULL AND admin_reply IS NULL) AS awaiting_reply
-       FROM notifications
-       WHERE deleted_at IS NULL`,
+         COUNT(*)                                                       AS total,
+         COUNT(*) FILTER (WHERE is_read=false)                          AS unread,
+         COUNT(*) FILTER (WHERE type LIKE 'checklist%')                 AS checklist_requests,
+         COUNT(*) FILTER (WHERE priority='high')                        AS high_priority,
+         COUNT(*) FILTER (WHERE created_at > NOW()-INTERVAL '24h')      AS last_24h,
+         COUNT(*) FILTER (WHERE reply_text IS NOT NULL
+                            AND admin_reply IS NULL)                    AS awaiting_reply
+       FROM notifications WHERE deleted_at IS NULL`,
     );
-
     res.json({ success: true, data: rows[0] });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
@@ -605,41 +541,125 @@ exports.adminStats = async (req, res) => {
 };
 
 /**
+ * GET /api/notifications/admin/target-groups
+ * Returns available targeting groups for the broadcast UI
+ */
+exports.adminGetTargetGroups = async (req, res) => {
+  try {
+    const [allUsers, withBookings, withConfirmed, withPending, newUsers] =
+      await Promise.all([
+        query(`SELECT COUNT(*) FROM users WHERE is_active=true`),
+        query(`SELECT COUNT(DISTINCT user_id) FROM bookings WHERE user_id IS NOT NULL`),
+        query(`SELECT COUNT(DISTINCT user_id) FROM bookings WHERE status='confirmed'`),
+        query(`SELECT COUNT(DISTINCT user_id) FROM bookings WHERE status='pending'`),
+        query(`SELECT COUNT(*) FROM users WHERE is_active=true AND created_at > NOW()-INTERVAL '7d'`),
+      ]);
+
+    res.json({
+      success: true,
+      groups: [
+        { key: 'all',               label: 'All Users',             count: parseInt(allUsers.rows[0].count,     10), description: 'Send to every registered user' },
+        { key: 'with_bookings',     label: 'Users with Bookings',   count: parseInt(withBookings.rows[0].count, 10), description: 'Users who have at least one booking' },
+        { key: 'confirmed_booking', label: 'Confirmed Bookings',    count: parseInt(withConfirmed.rows[0].count,10), description: 'Users with confirmed bookings' },
+        { key: 'pending_booking',   label: 'Pending Bookings',      count: parseInt(withPending.rows[0].count,  10), description: 'Users with pending bookings' },
+        { key: 'new_users',         label: 'New Users (7 days)',     count: parseInt(newUsers.rows[0].count,     10), description: 'Users registered in the last 7 days' },
+        { key: 'individual',        label: 'Specific User',         count: null, description: 'Target a single user by ID or email' },
+      ],
+    });
+  } catch (err) {
+    logger.error('[Notifications] adminGetTargetGroups:', err.message);
+    res.status(500).json({ success: false, message: err.message });
+  }
+};
+
+/**
  * POST /api/notifications
- * Admin creates a notification (broadcast or targeted)
+ * Admin creates/broadcasts a notification with advanced targeting
  */
 exports.create = async (req, res) => {
   try {
     const {
-      userId, type, category, title, message,
+      userId, userEmail, type, category, title, message,
       actionUrl, actionLabel, metadata, priority,
-      targetScope, targetRole,
+      targetScope, targetRole, targetGroup,
     } = req.body;
 
-    if (!title || !message) {
+    if (!title || !message)
       return res.status(400).json({ success: false, message: 'title and message are required.' });
+
+    const io         = getIO(req);
+    const senderName = req.user?.full_name || req.user?.name || 'Admin';
+    const senderId   = req.user?.id;
+
+    // ── Resolve target user IDs based on targetGroup ──────────────────────
+    let targetUserIds = [];
+    let resolvedScope = targetScope || (userId ? 'individual' : 'all');
+
+    if (targetGroup && targetGroup !== 'individual') {
+      let groupQuery = '';
+      switch (targetGroup) {
+        case 'all':
+          groupQuery = `SELECT id FROM users WHERE is_active=true`; break;
+        case 'with_bookings':
+          groupQuery = `SELECT DISTINCT user_id AS id FROM bookings WHERE user_id IS NOT NULL`; break;
+        case 'confirmed_booking':
+          groupQuery = `SELECT DISTINCT user_id AS id FROM bookings WHERE status='confirmed'`; break;
+        case 'pending_booking':
+          groupQuery = `SELECT DISTINCT user_id AS id FROM bookings WHERE status='pending'`; break;
+        case 'new_users':
+          groupQuery = `SELECT id FROM users WHERE is_active=true AND created_at > NOW()-INTERVAL '7d'`; break;
+        default:
+          groupQuery = `SELECT id FROM users WHERE is_active=true`;
+      }
+      const { rows: uRows } = await query(groupQuery);
+      targetUserIds  = uRows.map(r => r.id);
+      resolvedScope  = 'individual'; // send individually so each user's feed shows it
+    } else if (userEmail && !userId) {
+      // Resolve by email
+      const { rows: uRows } = await query(
+        `SELECT id FROM users WHERE email=$1 LIMIT 1`, [userEmail],
+      );
+      if (!uRows[0])
+        return res.status(404).json({ success: false, message: 'User not found.' });
+      targetUserIds = [uRows[0].id];
+      resolvedScope = 'individual';
+    } else if (userId) {
+      targetUserIds = [userId];
+      resolvedScope = 'individual';
     }
 
-    const io   = getIO(req);
-    const notif = await exports.createNotificationInternal({
-      userId:      userId || null,
-      type:        type     || 'general',
-      category:    category || 'general',
-      title,
-      message,
-      actionUrl:   actionUrl   || null,
-      actionLabel: actionLabel || null,
-      metadata:    metadata    || {},
-      priority:    priority    || 'normal',
-      targetScope: targetScope || (userId ? 'individual' : 'all'),
-      targetRole:  targetRole  || null,
-      senderType:  'admin',
-      senderId:    req.user?.id,
-      senderName:  req.user?.full_name || req.user?.name || 'Admin',
+    const result = await exports.createNotificationInternal({
+      userId:       targetUserIds.length === 1 ? targetUserIds[0] : null,
+      type:         type         || 'general',
+      category:     category     || 'general',
+      title, message,
+      actionUrl:    actionUrl    || null,
+      actionLabel:  actionLabel  || null,
+      metadata:     metadata     || {},
+      priority:     priority     || 'normal',
+      targetScope:  resolvedScope,
+      targetRole:   targetRole   || null,
+      senderType:   'admin',
+      senderId,
+      senderName,
       io,
+      targetUserIds: targetUserIds.length > 1 ? targetUserIds : [],
     });
 
-    res.status(201).json({ success: true, data: notif });
+    // Emit count to admin panel
+    if (io) {
+      emitToAdmins(io, 'notification:broadcast-sent', {
+        count:       Array.isArray(result) ? result.length : 1,
+        title,
+        targetGroup: targetGroup || resolvedScope,
+      });
+    }
+
+    res.status(201).json({
+      success: true,
+      data:    result,
+      sent:    Array.isArray(result) ? result.length : 1,
+    });
   } catch (err) {
     logger.error('[Notifications] create:', err.message);
     res.status(500).json({ success: false, message: err.message });
@@ -648,48 +668,44 @@ exports.create = async (req, res) => {
 
 /**
  * POST /api/notifications/:id/admin-reply
- * Admin replies to a user's notification reply
  */
 exports.adminReply = async (req, res) => {
   try {
-    const { id }       = req.params;
-    const adminReply   = String(req.body.adminReply || req.body.admin_reply || '').trim();
-    if (!adminReply) return res.status(400).json({ success: false, message: 'Reply text required.' });
+    const { id }     = req.params;
+    const adminReply = String(req.body.adminReply || req.body.admin_reply || '').trim();
+    if (!adminReply)
+      return res.status(400).json({ success: false, message: 'Reply text required.' });
 
     const { rows } = await query(
       `UPDATE notifications
-          SET admin_reply = $1, admin_replied_at = NOW(), updated_at = NOW()
-        WHERE id = $2 AND deleted_at IS NULL
+          SET admin_reply=$1, admin_replied_at=NOW(), updated_at=NOW()
+        WHERE id=$2 AND deleted_at IS NULL
         RETURNING *`,
       [adminReply, id],
     );
-
-    if (!rows[0]) return res.status(404).json({ success: false, message: 'Not found.' });
+    if (!rows[0])
+      return res.status(404).json({ success: false, message: 'Not found.' });
 
     const notif = normalizeRow(rows[0]);
-
-    // Push updated notification to the user live
-    const io = getIO(req);
+    const io    = getIO(req);
     if (io && notif.userId) {
       emitToUser(io, notif.userId, 'notification:updated', notif);
+      emitToUser(io, notif.userId, 'notification:admin-replied', {
+        notificationId: notif.id,
+        adminReply,
+        adminName: req.user?.full_name || req.user?.name || 'Admin',
+      });
     }
-
     res.json({ success: true, data: notif });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * DELETE /api/notifications/:id/admin
- * Admin hard-deletes a notification
- */
 exports.adminDelete = async (req, res) => {
   try {
-    const { id } = req.params;
     await query(
-      `UPDATE notifications SET deleted_at = NOW() WHERE id = $1`,
-      [id],
+      `UPDATE notifications SET deleted_at=NOW() WHERE id=$1`, [req.params.id],
     );
     res.json({ success: true });
   } catch (err) {
@@ -697,143 +713,84 @@ exports.adminDelete = async (req, res) => {
   }
 };
 
-/**
- * POST /api/notifications/admin/send-checklist
- * Admin sends completed PDF checklist to user
- */
 exports.adminSendChecklist = async (req, res) => {
   try {
-    const {
-      userId, pdfUrl, tripTitle, requestNotifId,
-    } = req.body;
-
-    if (!userId || !pdfUrl) {
-      return res.status(400).json({
-        success: false, message: 'userId and pdfUrl are required.',
-      });
-    }
+    const { userId, pdfUrl, tripTitle, requestNotifId } = req.body;
+    if (!userId || !pdfUrl)
+      return res.status(400).json({ success: false, message: 'userId and pdfUrl are required.' });
 
     const io    = getIO(req);
     const notif = await exports.createNotificationInternal({
-      userId,
-      type:        'checklist_ready',
-      category:    'checklist',
-      title:       `✅ Your Checklist is Ready!`,
-      message:     `Our team has prepared your travel checklist${tripTitle ? ` for ${tripTitle}` : ''}. Download it now!`,
-      actionUrl:   pdfUrl,
-      actionLabel: 'Download PDF',
-      priority:    'high',
-      targetScope: 'individual',
-      senderType:  'admin',
-      senderId:    req.user?.id,
-      senderName:  req.user?.full_name || 'Altuvera Team',
-      metadata:    { pdfUrl, tripTitle },
-      io,
+      userId, type: 'checklist_ready', category: 'checklist',
+      title:   '✅ Your Checklist is Ready!',
+      message: `Your travel checklist${tripTitle ? ` for ${tripTitle}` : ''} is ready. Download it now!`,
+      actionUrl: pdfUrl, actionLabel: 'Download PDF',
+      priority: 'high', targetScope: 'individual',
+      senderType: 'admin', senderId: req.user?.id,
+      senderName: req.user?.full_name || 'Altuvera Team',
+      metadata: { pdfUrl, tripTitle }, io,
     });
 
-    // Mark the original request notification as handled
     if (requestNotifId) {
       await query(
         `UPDATE notifications
-            SET metadata = metadata || '{"handled": true}'::jsonb,
-                updated_at = NOW()
-          WHERE id = $1`,
-        [requestNotifId],
+            SET metadata=metadata||'{"handled":true}'::jsonb, updated_at=NOW()
+          WHERE id=$1`, [requestNotifId],
       );
     }
-
-    res.json({
-      success: true,
-      message: 'Checklist sent to user.',
-      data:    notif,
-    });
+    res.json({ success: true, message: 'Checklist sent.', data: notif });
   } catch (err) {
     logger.error('[Notifications] adminSendChecklist:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * POST /api/notifications/admin/confirm-payment
- * Admin confirms user payment → triggers live notification
- */
 exports.adminConfirmPayment = async (req, res) => {
   try {
     const { bookingId, userId, bookingNumber, amount, currency } = req.body;
-
-    if (!bookingId || !userId) {
+    if (!bookingId || !userId)
       return res.status(400).json({ success: false, message: 'bookingId and userId required.' });
-    }
 
-    // Update booking payment status
     await query(
-      `UPDATE bookings
-          SET payment_status = 'paid',
-              confirmed_at   = NOW(),
-              updated_at     = NOW()
-        WHERE id = $1`,
+      `UPDATE bookings SET payment_status='paid', confirmed_at=NOW(), updated_at=NOW() WHERE id=$1`,
       [bookingId],
     );
 
     const io    = getIO(req);
     const notif = await exports.createNotificationInternal({
-      userId,
-      type:        'payment_confirmed',
-      category:    'payment',
-      title:       '💳 Payment Confirmed!',
-      message:     `Your payment${amount ? ` of ${currency || 'USD'} ${amount}` : ''} for booking ${bookingNumber || `#${bookingId}`} has been confirmed by our team. Your trip is now fully booked!`,
-      actionUrl:   '/my-bookings',
-      actionLabel: 'View Booking',
-      priority:    'high',
-      targetScope: 'individual',
-      senderType:  'admin',
-      senderId:    req.user?.id,
-      senderName:  req.user?.full_name || 'Altuvera Team',
-      metadata:    { bookingId, bookingNumber, amount, currency },
-      io,
+      userId, type: 'payment_confirmed', category: 'payment',
+      title:   '💳 Payment Confirmed!',
+      message: `Your payment${amount ? ` of ${currency || 'USD'} ${amount}` : ''} for booking ${bookingNumber || `#${bookingId}`} has been confirmed. Your trip is now fully booked!`,
+      actionUrl: '/my-bookings', actionLabel: 'View Booking',
+      priority: 'high', targetScope: 'individual',
+      senderType: 'admin', senderId: req.user?.id,
+      senderName: req.user?.full_name || 'Altuvera Team',
+      metadata: { bookingId, bookingNumber, amount, currency }, io,
     });
-
-    res.json({
-      success: true,
-      message: 'Payment confirmed and user notified.',
-      data:    notif,
-    });
+    res.json({ success: true, message: 'Payment confirmed and user notified.', data: notif });
   } catch (err) {
     logger.error('[Notifications] adminConfirmPayment:', err.message);
     res.status(500).json({ success: false, message: err.message });
   }
 };
 
-/**
- * POST /api/notifications/admin/request-payment
- * Admin requests payment from user
- */
 exports.adminRequestPayment = async (req, res) => {
   try {
     const { userId, bookingId, bookingNumber, amount, currency, dueDate } = req.body;
-
-    if (!userId || !bookingId) {
+    if (!userId || !bookingId)
       return res.status(400).json({ success: false, message: 'userId and bookingId required.' });
-    }
 
     const io    = getIO(req);
     const notif = await exports.createNotificationInternal({
-      userId,
-      type:        'payment_request',
-      category:    'payment',
-      title:       '💰 Payment Required',
-      message:     `Please complete your payment${amount ? ` of ${currency || 'USD'} ${amount}` : ''} for booking ${bookingNumber || `#${bookingId}`}${dueDate ? ` by ${new Date(dueDate).toLocaleDateString()}` : ''} to confirm your trip.`,
-      actionUrl:   '/payments',
-      actionLabel: 'View Payment Details',
-      priority:    'high',
-      targetScope: 'individual',
-      senderType:  'admin',
-      senderId:    req.user?.id,
-      senderName:  req.user?.full_name || 'Altuvera Team',
-      metadata:    { bookingId, bookingNumber, amount, currency, dueDate },
-      io,
+      userId, type: 'payment_request', category: 'payment',
+      title:   '💰 Payment Required',
+      message: `Please complete your payment${amount ? ` of ${currency || 'USD'} ${amount}` : ''} for booking ${bookingNumber || `#${bookingId}`}${dueDate ? ` by ${new Date(dueDate).toLocaleDateString()}` : ''}.`,
+      actionUrl: '/payments', actionLabel: 'View Payment Details',
+      priority: 'high', targetScope: 'individual',
+      senderType: 'admin', senderId: req.user?.id,
+      senderName: req.user?.full_name || 'Altuvera Team',
+      metadata: { bookingId, bookingNumber, amount, currency, dueDate }, io,
     });
-
     res.json({ success: true, data: notif });
   } catch (err) {
     logger.error('[Notifications] adminRequestPayment:', err.message);
