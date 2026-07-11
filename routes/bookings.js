@@ -70,8 +70,9 @@ router.get("/by-country/:countryId",         ctrl.getBookingsByCountry);
 
 /* ══════════════════════════════════════════════════════════════════════════
    AUTHENTICATED USER
-══════════════════════════════════════════════════════════════════════════ */
+   ══════════════════════════════════════════════════════════════════════════ */
 router.get("/my-bookings", protect, ctrl.getMyBookings);
+router.post("/:id/request-cancellation", protect, ctrl.requestCancellation);
 
 /* ══════════════════════════════════════════════════════════════════════════
    ADMIN — named routes before /:id wildcard
@@ -80,6 +81,7 @@ router.get ("/stats",            adminOnly, ctrl.getStats);
 router.get ("/upcoming",         adminOnly, ctrl.getUpcoming);
 router.get ("/recent",           adminOnly, ctrl.getRecent);
 router.get ("/export",           adminOnly, ctrl.export);
+router.get ("/cancellation-requests", adminOnly, ctrl.getCancellationRequests);
 router.get ("/",                 adminOnly, ctrl.getAll);
 router.post("/admin",            adminOnly, ctrl.adminCreate);
 router.post("/bulk-status",      adminOnly, ctrl.bulkUpdateStatus);
@@ -95,5 +97,6 @@ router.patch ("/:id/status",  adminOnly, ctrl.updateStatus);
 router.post  ("/:id/confirm", adminOnly, ctrl.confirm);
 router.post  ("/:id/cancel",  adminOnly, ctrl.cancel);
 router.post  ("/:id/notes",   adminOnly, ctrl.addNotes);
+router.post  ("/:id/review-cancellation", adminOnly, ctrl.reviewCancellation);
 
 module.exports = router;

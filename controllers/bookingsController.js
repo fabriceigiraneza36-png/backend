@@ -64,6 +64,15 @@ try {
   logger.warn("[Bookings] notificationsController not found:", err.message);
 }
 
+/* ── Safe require: socket bus (live notifications) ────────────────────────── */
+let getIO = () => null;
+try {
+  const socketBus = require("../utils/socketBus");
+  getIO = () => socketBus.getIO?.() || null;
+} catch (err) {
+  logger.warn("[Bookings] socketBus not found:", err.message);
+}
+
 /* ══════════════════════════════════════════════════════════════════════════════
    CONSTANTS
 ══════════════════════════════════════════════════════════════════════════════ */
@@ -241,22 +250,35 @@ const getBookingDetail = async (identifier, type = "id") => {
   }
 };
 
-/* ── ensureVerificationColumns ─────────────────────────────────────────────── */
-const ensureVerificationColumns = async () => {
+/* ── ensureSchemaColumns (verification + cancellation requests) ─────────────── */
+const ensureSchemaColumns = async () => {
   const cols = [
     "email_verified          BOOLEAN     DEFAULT false",
     "email_verified_at       TIMESTAMPTZ",
     "verification_token      VARCHAR(128)",
     "verification_token_exp  TIMESTAMPTZ",
+    /* ── Cancellation / refund requests ── */
+    "cancel_request_type      VARCHAR(20)",
+    "cancel_request_reason    TEXT",
+    "cancel_requested_at      TIMESTAMPTZ",
+    "cancel_request_status    VARCHAR(20) DEFAULT 'none'",
+    "cancel_reviewed_at       TIMESTAMPTZ",
+    "cancel_reviewed_by       INTEGER",
+    "cancel_admin_response    TEXT",
+    "refund_amount            NUMERIC(12,2)",
   ];
   for (const col of cols) {
-    const name = col.split(/\s+/)[0];
     await query(
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${col}`
     ).catch(() => {});
   }
+  // Keep the request-status enum-like value valid
+  await query(
+    `UPDATE bookings SET cancel_request_status='none'
+      WHERE cancel_request_status IS NULL`
+  ).catch(() => {});
 };
-ensureVerificationColumns();
+ensureSchemaColumns();
 
 /* ══════════════════════════════════════════════════════════════════════════════
    CREATE BOOKING   POST /api/bookings
@@ -561,6 +583,7 @@ exports.getAll = async (req, res, next) => {
       page = 1, limit = 20, status, payment_status, booking_type,
       destination_id, service_id, search, date_from, date_to,
       travel_date_from, travel_date_to, email_verified,
+      cancel_request_status,
       sortBy = "created_at", order = "desc",
     } = req.query;
 
@@ -579,6 +602,8 @@ exports.getAll = async (req, res, next) => {
     if (travel_date_to)   push("b.travel_date<=?",     travel_date_to);
     if (email_verified !== undefined)
       push("b.email_verified=?", email_verified === "true");
+    if (cancel_request_status)
+      push("b.cancel_request_status=?", cancel_request_status);
     if (search) {
       const t = `%${search.trim()}%`;
       conds.push(`(b.full_name ILIKE $${pi} OR b.email ILIKE $${pi} OR b.booking_number ILIKE $${pi} OR b.phone ILIKE $${pi})`);
@@ -1428,6 +1453,253 @@ exports.getDestinationsBookingStats = async (req, res, next) => {
       },
     });
   } catch (err) { next(err); }
+};
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   CANCELLATION / REFUND REQUESTS
+   ─ Users request cancellation or refund on an eligible booking.
+   ─ Admins review (approve / reject) with an optional response + refund amount.
+   ══════════════════════════════════════════════════════════════════════════════ */
+const CANCEL_REQUEST_STATUS = {
+  NONE:     "none",
+  PENDING:  "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+};
+
+const isEligibleForRequest = (booking, type) => {
+  const status = booking.status;
+  if (type === "cancellation")
+    return ["pending", "confirmed", "on-hold"].includes(status);
+  if (type === "refund")
+    return ["confirmed", "completed"].includes(status);
+  return false;
+};
+
+exports.requestCancellation = async (req, res, next) => {
+  try {
+    const id   = parseInt(req.params.id, 10);
+    const user = req.user;
+    const { type = "cancellation", reason = "" } = req.body || {};
+
+    if (!["cancellation", "refund"].includes(type))
+      return res.status(400).json({
+        success: false, error: "type must be 'cancellation' or 'refund'",
+      });
+    if (!String(reason || "").trim())
+      return res.status(400).json({
+        success: false, error: "Please provide a reason for your request.",
+      });
+
+    const { rows } = await query("SELECT * FROM bookings WHERE id=$1", [id]);
+    if (!rows[0])
+      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    const booking = rows[0];
+    if (booking.user_id && booking.user_id !== user.id)
+      return res.status(403).json({
+        success: false, error: "This booking does not belong to your account.",
+      });
+
+    if (booking.cancel_request_status === CANCEL_REQUEST_STATUS.PENDING)
+      return res.status(409).json({
+        success: false,
+        error: "You already have a pending request for this booking.",
+        data: booking,
+      });
+
+    if (!isEligibleForRequest(booking, type))
+      return res.status(409).json({
+        success: false,
+        error: `This booking (status: ${booking.status}) is not eligible for a ${type} request.`,
+      });
+
+    const updated = await query(
+      `UPDATE bookings
+         SET cancel_request_type    = $2,
+             cancel_request_reason  = $3,
+             cancel_requested_at    = NOW(),
+             cancel_request_status  = $4,
+             cancel_admin_response  = NULL,
+             cancel_reviewed_at     = NULL,
+             cancel_reviewed_by     = NULL,
+             refund_amount          = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [id, type, reason.trim(), CANCEL_REQUEST_STATUS.PENDING],
+    );
+
+    const full = await getBookingDetail(id);
+
+    logActivity(id, `cancel_request_${type}`,
+      `User requested ${type}. Reason: ${reason.trim()}`, user.id);
+
+    /* Notify all admins */
+    const io = getIO();
+    createNotificationInternal({
+      targetScope: "role",
+      targetRole:  "admin",
+      type:        "booking_cancel_request",
+      title:       `New ${type} request — ${booking.booking_number}`,
+      message:     `${booking.full_name || "A user"} requested a ${type} for booking ${booking.booking_number}.`,
+      actionUrl:   `/bookings`,
+      actionLabel: "Review Request",
+      category:    "booking",
+      priority:    "high",
+      senderType:  "user",
+      senderId:    user.id,
+      io,
+    }).catch(() => {});
+
+    return res.json({
+      success: true,
+      message: `Your ${type} request has been submitted for review.`,
+      data:    full || updated.rows[0],
+    });
+  } catch (err) {
+    logger.error("[Bookings] requestCancellation:", err.message);
+    next(err);
+  }
+};
+
+exports.reviewCancellation = async (req, res, next) => {
+  try {
+    const id      = parseInt(req.params.id, 10);
+    const adminId = req.admin?.id || req.user?.id || null;
+    const { decision, admin_response = "", refund_amount = null } = req.body || {};
+
+    if (!["approved", "rejected"].includes(decision))
+      return res.status(400).json({
+        success: false, error: "decision must be 'approved' or 'rejected'",
+      });
+
+    const { rows } = await query("SELECT * FROM bookings WHERE id=$1", [id]);
+    if (!rows[0])
+      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    const booking = rows[0];
+    if (booking.cancel_request_status !== CANCEL_REQUEST_STATUS.PENDING)
+      return res.status(409).json({
+        success: false, error: "No pending request to review for this booking.",
+      });
+
+    const requestType = booking.cancel_request_type || "cancellation";
+
+    if (decision === "rejected") {
+      await query(
+        `UPDATE bookings
+           SET cancel_request_status = $2,
+               cancel_reviewed_at    = NOW(),
+               cancel_reviewed_by    = $3,
+               cancel_admin_response = $4
+         WHERE id = $1`,
+        [id, CANCEL_REQUEST_STATUS.REJECTED, adminId, admin_response.trim() || null],
+      );
+      logActivity(id, "cancel_request_rejected",
+        `Admin rejected ${requestType} request.${admin_response ? " Response: " + admin_response.trim() : ""}`, adminId);
+    } else {
+      let newStatus;
+      if (requestType === "refund")
+        newStatus = booking.status === "completed" ? "refunded" : "cancelled";
+      else
+        newStatus = "cancelled";
+
+      const params = [newStatus, CANCEL_REQUEST_STATUS.APPROVED, adminId,
+        admin_response.trim() || null, id];
+      let pi = 6;
+      let setClause = `status=$1, cancel_request_status=$2, cancel_reviewed_at=NOW(),
+                       cancel_reviewed_by=$3, cancel_admin_response=$4, updated_at=NOW()`;
+      if (newStatus === "cancelled") {
+        setClause += `, cancelled_at=NOW(), cancellation_reason=$${pi++}`;
+        params.splice(4, 0, booking.cancel_request_reason || `Approved ${requestType} request`);
+      }
+      if (requestType === "refund" && refund_amount != null) {
+        setClause += `, refund_amount=$${pi++}`;
+        params.push(parseFloat(refund_amount) || null);
+      }
+      await query(`UPDATE bookings SET ${setClause} WHERE id=$${pi}`, params);
+
+      logActivity(id, "cancel_request_approved",
+        `Admin approved ${requestType} request → ${newStatus}.${admin_response ? " Response: " + admin_response.trim() : ""}`, adminId);
+    }
+
+    const full = await getBookingDetail(id);
+
+    /* Notify the user */
+    const io = getIO();
+    const approved = decision === "approved";
+    createNotificationInternal({
+      userId:      booking.user_id,
+      userEmail:   booking.email,
+      targetScope: "individual",
+      type:        approved ? "booking_cancel_approved" : "booking_cancel_rejected",
+      title:       approved
+        ? `Your ${requestType} request was approved`
+        : `Your ${requestType} request was declined`,
+      message:     approved
+        ? `Your ${requestType} request for booking ${booking.booking_number} has been approved.`
+        : `Your ${requestType} request for booking ${booking.booking_number} was declined.${admin_response ? " Note: " + admin_response.trim() : ""}`,
+      actionUrl:   "/my-bookings",
+      actionLabel: "View Booking",
+      category:    "booking",
+      priority:    "urgent",
+      senderType:  "admin",
+      senderId:    adminId,
+      io,
+    }).catch(() => {});
+
+    return res.json({
+      success: true,
+      message: `Request ${decision}.`,
+      data:    full,
+    });
+  } catch (err) {
+    logger.error("[Bookings] reviewCancellation:", err.message);
+    next(err);
+  }
+};
+
+exports.getCancellationRequests = async (req, res, next) => {
+  try {
+    const status  = req.query.status || CANCEL_REQUEST_STATUS.PENDING;
+    const page    = Math.max(1, parseInt(req.query.page  || "1",  10));
+    const limit   = Math.min(100, parseInt(req.query.limit || "20", 10));
+    const offset  = (page - 1) * limit;
+
+    const { rows } = await query(
+      `SELECT
+          b.*,
+          COALESCE(d.name, b.destination_name) AS destination_name,
+          COALESCE(u.full_name, b.full_name)   AS user_name,
+          u.email                              AS user_email
+        FROM bookings b
+        LEFT JOIN destinations d ON d.id = b.destination_id
+        LEFT JOIN users        u ON u.id = b.user_id
+        WHERE b.cancel_request_status = $1
+        ORDER BY b.cancel_requested_at ASC NULLS LAST, b.created_at DESC
+        LIMIT $2 OFFSET $3`,
+      [status, limit, offset],
+    );
+
+    const countRes = await query(
+      `SELECT COUNT(*) FROM bookings WHERE cancel_request_status=$1`,
+      [status],
+    );
+    const total = parseInt(countRes.rows[0].count, 10);
+
+    res.json({
+      success:  true,
+      data:     rows,
+      bookings: rows,
+      pagination: {
+        page, limit, total,
+        total_pages: Math.ceil(total / limit),
+        has_next: page < Math.ceil(total / limit),
+      },
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 module.exports = exports;

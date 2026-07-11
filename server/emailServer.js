@@ -320,7 +320,7 @@ app.post('/api/contact', async (req, res) => {
                 <a href="tel:0792352409" style="color: #34d399; text-decoration: none; font-size: 14px;">📞 0792352409</a>
               </p>
                <p style="margin: 5px 0;">
-                 <a href="https://wa.me/250792352409" style="color: #34d399; text-decoration: none; font-size: 14px;">💬 WhatsApp Us</a>
+                  <a href="https://wa.me/250785751391" style="color: #34d399; text-decoration: none; font-size: 14px;">💬 WhatsApp Us</a>
                </p>
             </div>
             

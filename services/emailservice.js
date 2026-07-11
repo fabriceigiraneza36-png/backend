@@ -374,7 +374,7 @@ async function sendBookingVerificationLink(booking, verificationToken) {
         <p style="font-size:13px;color:#6B7280;margin-bottom:12px">
           Need help? We're here for you:
         </p>
-        <a href="https://wa.me/250788000000" class="btn btn-o"
+        <a href="https://wa.me/250785751391" class="btn btn-o"
            style="font-size:13px">
           💬 WhatsApp Support
         </a>
