@@ -700,6 +700,7 @@ app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
+app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
 
 // ── Test / Dev routes — registered AFTER app is declared ─────────────────────
 // ✅ FIX v6.9: moved from top-of-file (where app didn't exist yet) to here
