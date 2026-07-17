@@ -6,6 +6,7 @@ const router     = require("express").Router();
 const { query }  = require("../config/db");
 const { protect, adminOnly } = require('../middleware/auth');
 const reviewsController = require("../controllers/reviewsController");
+const { notifyReviewPosted } = require("../controllers/notificationsController");
 
 // ═══════════════════════════════════════════════════════════════
 // TABLE BOOTSTRAP
@@ -594,6 +595,12 @@ router.post("/", protect, async (req, res) => {
         body   || null,
       ]
     );
+
+    // ── Notify user + aggregate to admins ──────────────────────
+    notifyReviewPosted(
+      { title, rating: parsedRating },
+      { id: req.user.id, email: req.user.email, name: req.user.full_name || req.user.email },
+    ).catch(() => {});
 
     return res.status(201).json({
       success: true,

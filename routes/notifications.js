@@ -14,10 +14,13 @@ try {
 /* ─────────────────────────────────────────────────────────────
    AUTH MIDDLEWARE — resolve from whatever your project uses
 ───────────────────────────────────────────────────────────────*/
-let protect, restrictTo;
+let protect;
 
 try {
-  // Try the most common paths in your project
+  // Try the most common paths in your project.
+  // NOTE: only pick a `protect` handler here — never pick `adminOnly`
+  // (it is async and takes no role args, so using it as restrictTo(...)
+  // returns a Promise and crashes Express route registration).
   const candidates = [
     "../middleware/authMiddleware",
     "../middleware/auth",
@@ -26,8 +29,7 @@ try {
   for (const p of candidates) {
     try {
       const m = require(p);
-      protect    = protect    || m.protect    || m.authenticate || m.verifyToken  || m.auth;
-      restrictTo = restrictTo || m.restrictTo || m.authorize    || m.requireRole  || m.adminOnly;
+      protect    = protect || m.protect || m.authenticate || m.verifyToken || m.auth;
       if (protect) break;
     } catch { /* try next */ }
   }
@@ -51,14 +53,19 @@ if (!protect) {
   };
 }
 
-if (!restrictTo) {
-  restrictTo = (...roles) =>
-    (req, res, next) => {
-      if (!roles.includes(req.user?.role))
-        return res.status(403).json({ success: false, message: "Forbidden" });
-      next();
-    };
-}
+/* Role guard factory.
+   Accepts role via req.user.role OR req.user.type (admin users may carry
+   either). Always synchronous so it can be used directly as Express
+   middleware: router.get('/admin', protect, restrictTo('admin','manager'), ...) */
+const restrictTo = (...roles) => {
+  const allowed = new Set(roles);
+  return (req, res, next) => {
+    const role = req.user?.role || req.user?.type || "";
+    if (!allowed.has(role))
+      return res.status(403).json({ success: false, message: "Forbidden" });
+    next();
+  };
+};
 
 /* ─────────────────────────────────────────────────────────────
    SMALL HELPERS
@@ -883,4 +890,22 @@ router.delete("/:id", protect, async (req, res) => {
   }
 });
 
+/* ════════════════════════════════════════════════════════════
+   ALIAS ROUTER  — /api/admin/notifications/*
+   The admin Sidebar/Header bundle calls these exact paths.
+   Forward them to the canonical /api/notifications handlers so
+   neither client URL shape 404s.
+════════════════════════════════════════════════════════════*/
+const aliasRouter = express.Router();
+
+aliasRouter.get("/",                (req, res, next) => { req.url = "/admin";        router.handle(req, res, next); });
+aliasRouter.get("/unread-count",    (req, res, next) => { req.url = "/admin/unread-count"; router.handle(req, res, next); });
+aliasRouter.patch("/read-all",      (req, res, next) => { req.url = "/mark-all-read";  router.handle(req, res, next); });
+aliasRouter.patch("/:id/read",      (req, res, next) => { req.url = `/${req.params.id}/read`;    router.handle(req, res, next); });
+aliasRouter.delete("/:id",          (req, res, next) => { req.url = `/${req.params.id}`;          router.handle(req, res, next); });
+/* also accept the /admin* shape under this alias */
+aliasRouter.get("/admin",           (req, res, next) => { req.url = "/admin";        router.handle(req, res, next); });
+aliasRouter.get("/admin/unread-count", (req, res, next) => { req.url = "/admin/unread-count"; router.handle(req, res, next); });
+
 module.exports = router;
+module.exports.aliasRouter = aliasRouter;

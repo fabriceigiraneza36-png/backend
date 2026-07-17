@@ -7,6 +7,7 @@ const {
   sendContactNotification,
   sendContactReply,
 } = require("../utils/email");
+const { notifyContactMessage } = require("./notificationsController");
 
 /* ════════════════════════════════════════════════════════════════
    SERIALIZER
@@ -216,6 +217,12 @@ exports.create = async (req, res, next) => {
         console.error("[Contact] conversation link failed:", linkErr.message);
       }
     }
+
+    /* ── In-app + admin notification ── */
+    notifyContactMessage(
+      { subject },
+      { id: req.user?.id ?? null, email, name },
+    ).catch(() => {});
 
     return res.status(201).json({
       success: true,

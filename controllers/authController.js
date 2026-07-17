@@ -16,6 +16,7 @@ const {
 } = require("../utils/email");
 const logger = require("../utils/logger");
 const { validateEmail, validateName } = require("../utils/validators");
+const { notifyUserRegistered } = require("./notificationsController");
 
 /* ════════════════════════════════════════════════════════════════
    CONFIG
@@ -450,6 +451,11 @@ exports.verifyCode = async (req, res) => {
 
     if (isFirstVerification) {
       sendWelcomeEmail({ to: user.email, recipientName: user.full_name || "" }).catch(() => {});
+      notifyUserRegistered({
+        id:    user.id,
+        email: user.email,
+        name:  user.full_name || user.email,
+      }).catch(() => {});
     }
 
     return res.json({

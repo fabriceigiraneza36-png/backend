@@ -1,6 +1,4 @@
-﻿
-
-const { setDefaultAutoSelectFamily } = require("net");
+﻿const { setDefaultAutoSelectFamily } = require("net");
 try { setDefaultAutoSelectFamily(false); } catch { /* Node < 18.13 */ }
 
 // ── IPv4 DNS preference — MUST be first line ──────────────────────────────────
@@ -9,14 +7,13 @@ dns.setDefaultResultOrder('ipv4first');
 
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.8
+ * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v6.9
  * "True Adventures In High Places & Deep Culture"
  *
- * Changes from v6.7:
- *   - Notifications route registered: /api/notifications
- *   - Socket: users join user-{id}, role-{role}, all-users rooms on connect
- *   - Socket: notification:new event handler added
- *   - ensureNotificationsSchema added to boot sequence
+ * Changes from v6.8:
+ *   - Fixed: ReferenceError: Cannot access 'app' before initialization
+ *   - Moved test route block to after app is declared and routes are mounted
+ *   - General code organization improvements
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -76,15 +73,6 @@ try {
     null
 } catch { /* email.js not present — non-fatal */ }
 
-// server.js — add these lines near the other route registrations
-
-// ── Test / Dev routes (notifications) ─────────────────────────
-if (process.env.NODE_ENV !== 'production') {
-  const notifTestRouter = require('./routes/notificationTest')
-  app.use('/api/test/notifications', notifTestRouter)
-  logger.info('🧪 Notification test routes active at /api/test/notifications/*')
-}
-
 // ── Middleware / error handlers ───────────────────────────────────────────────
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler')
 const {
@@ -123,7 +111,7 @@ const countryRatingsRouter      = require('./routes/countryRatings')
 const destinationLikesRouter    = require('./routes/destinationLikes')
 const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
-const notificationsRouter       = require('./routes/notifications')  // ← NEW v6.8
+const notificationsRouter       = require('./routes/notifications')
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -302,7 +290,6 @@ const ensurePackagesSchema = async () => {
       created_at     TIMESTAMP    DEFAULT NOW(),
       updated_at     TIMESTAMP    DEFAULT NOW()
     )`,
-   
   ]
 
   for (const sql of tables) {
@@ -533,7 +520,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '6.8',
+    version:     '6.9',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -545,7 +532,7 @@ app.get('/health', (_req, res) =>
       transports:      ['polling', 'websocket'],
       connectedAdmins: connectedAdmins.size,
     },
-    cache:   getCacheStats(),
+    cache: getCacheStats(),
     email: {
       verifyEmailConnection: typeof verifyEmailConnection === 'function' ? 'available' : 'unavailable',
       verifyAuthEmail:       typeof verifyAuthEmail       === 'function' ? 'available' : 'unavailable',
@@ -563,7 +550,7 @@ app.get('/api', (_req, res) =>
   res.json({
     success: true,
     name:    'Altuvera Travel API',
-    version: '6.8',
+    version: '6.9',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
     routes:  '/api/routes',
@@ -686,7 +673,7 @@ app.use('/api/users',                usersRouter)
 app.use('/api/bookings',             bookingsRouter)
 app.use('/api/reviews',              reviewsRouter)
 app.use('/api/countries',            countriesRouter)
-app.use('/api/hero-slides', require('./routes/heroSlides'));
+app.use('/api/hero-slides',          require('./routes/heroSlides'))
 app.use('/api/packages',             packagesRouter)
 app.use('/api/destinations',         destinationsRouter)
 app.use('/api/posts',                postsRouter)
@@ -711,7 +698,20 @@ app.use('/api/country-ratings',      countryRatingsRouter)
 app.use('/api/destination-likes',    destinationLikesRouter)
 app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
-app.use('/api/notifications',        notificationsRouter)  // ← NEW v6.8
+app.use('/api/notifications',        notificationsRouter)
+app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
+
+// ── Test / Dev routes — registered AFTER app is declared ─────────────────────
+// ✅ FIX v6.9: moved from top-of-file (where app didn't exist yet) to here
+if (!IS_PROD) {
+  try {
+    const notifTestRouter = require('./routes/notificationTest')
+    app.use('/api/test/notifications', notifTestRouter)
+    logger.info('🧪 Notification test routes active at /api/test/notifications/*')
+  } catch (err) {
+    logger.warn('⚠️  notificationTest router not found (non-fatal):', err.message)
+  }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // JWT SOCKET HELPER
@@ -759,8 +759,8 @@ const getOrCreateConversation = async ({
   const inserted = await query(
     `INSERT INTO conversations
        (session_id, user_id, guest_name, guest_email,
-        channel, source, ip_address, status, priority)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal')
+        source, ip_address, status, priority)
+     VALUES ($1,$2,$3,$4,$5,$6,'open','normal')
      RETURNING *`,
     [
       sid,
@@ -872,15 +872,14 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   if (rows[0]) return rows[0]
 
   return getOrCreateConversation({
-    sessionId: sid,
-    userId: null,
-    guestName: null,
+    sessionId:  sid,
+    userId:     null,
+    guestName:  null,
     guestEmail: null,
-    source: 'admin-panel',
-    ipAddress: null,
+    source:     'admin-panel',
+    ipAddress:  null,
   })
 }
-
 
 const fetchSessionMessages = async (sessionId) => {
   const { rows } = await query(
@@ -923,15 +922,12 @@ const broadcastConversationMessage = ({
   if (conversationId) {
     io.to(`conv:${conversationId}`).emit('msg:message', payload)
   }
-
   if (sessionId) {
     io.to(`session:${sessionId}`).emit('msg:message', payload)
   }
-
   if (userId) {
     io.to(`user-${userId}`).emit('msg:message', payload)
   }
-
   if (adminPayload) {
     io.to('admins').emit('msg:new-from-user', adminPayload)
   }
@@ -974,7 +970,7 @@ setInterval(async () => {
 }, 15_000)
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO — CONNECTION HANDLER  v6.8
+// SOCKET.IO — CONNECTION HANDLER  v6.9
 // ═══════════════════════════════════════════════════════════════════════════════
 
 io.on('connection', (socket) => {
@@ -982,17 +978,12 @@ io.on('connection', (socket) => {
     `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`,
   )
 
-  // ── v6.8: Room setup for authenticated users ─────────────────────────────
+  // ── Room setup for authenticated users ───────────────────────────────────
   if (socket.data.userId) {
-    // Individual user room — for targeted notifications and messages
     socket.join(`user-${socket.data.userId}`)
 
-    // Role-based room — for role-targeted notifications
-    // e.g. 'role-user', 'role-moderator', 'role-editor'
     const userRole = socket.data.user?.role || 'user'
     socket.join(`role-${userRole}`)
-
-    // Broadcast room — all authenticated users
     socket.join('all-users')
 
     logger.info(
@@ -1007,12 +998,8 @@ io.on('connection', (socket) => {
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
-  // ── v6.8: Notification socket events ────────────────────────────────────
+  // ── Notification socket events ───────────────────────────────────────────
 
-  /**
-   * Client requests their unread count on connect / focus
-   * Emits back: notification:unread-count { count }
-   */
   socket.on('notification:get-unread', async (_, cb) => {
     try {
       const userId   = socket.data.userId
@@ -1044,9 +1031,6 @@ io.on('connection', (socket) => {
     }
   })
 
-  /**
-   * Client marks a notification as read via socket (instant UI update)
-   */
   socket.on('notification:mark-read', async ({ id } = {}, cb) => {
     try {
       const userId   = socket.data.userId
@@ -1062,7 +1046,6 @@ io.on('connection', (socket) => {
         [id, userId],
       )
 
-      // Re-emit updated count
       const { rows } = await query(
         `SELECT COUNT(*) FROM notifications
            WHERE (
@@ -1084,10 +1067,6 @@ io.on('connection', (socket) => {
     }
   })
 
-  /**
-   * Admin broadcasts a notification to all connected users instantly
-   * (REST API also handles persistence; this is for instant delivery)
-   */
   socket.on('notification:admin-broadcast', async (payload = {}, cb) => {
     try {
       if (!socket.data.isAdmin) throw new Error('Admin only')
@@ -1095,7 +1074,6 @@ io.on('connection', (socket) => {
       const { title, message, type = 'general', actionUrl, priority = 'normal' } = payload
       if (!title || !message) throw new Error('title and message required')
 
-      // Persist via controller helper
       const { createNotificationInternal } = require('./controllers/notificationsController')
       const notif = await createNotificationInternal({
         userId:      null,
@@ -1108,7 +1086,6 @@ io.on('connection', (socket) => {
         senderName:  socket.data.user?.full_name || 'Admin',
       })
 
-      // Socket broadcast handled inside createNotificationInternal via emitNotification
       if (typeof cb === 'function') cb({ success: true, data: notif })
     } catch (err) {
       logger.error('[Socket] notification:admin-broadcast error:', err.message)
@@ -1360,8 +1337,8 @@ io.on('connection', (socket) => {
       conversationId: parseInt(convId, 10),
       senderType,
       senderName:
-        payload.senderName         ||
-        socket.data.user?.full_name ||
+        payload.senderName          ||
+        socket.data.user?.full_name  ||
         (socket.data.isAdmin ? 'Support' : 'Guest'),
       isTyping,
     })
@@ -1468,12 +1445,13 @@ io.on('connection', (socket) => {
       const name  = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name || '').trim()
       const email = String(payload.email || socket.data.user?.email    || '').trim()
 
-      const session = await getOrCreateChatSession({
-        sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
+      const session = await getOrCreateConversation({
+        sessionId:  sid,
+        userId:     socket.data.user?.id,
+        guestName:  name  || null,
+        guestEmail: email || null,
+        source:     socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        ipAddress:  socket.handshake.address,
       })
 
       socket.data.sessionId = session.session_id
@@ -1483,8 +1461,8 @@ io.on('connection', (socket) => {
       socket.emit('chat:session', {
         sessionId: session.session_id,
         userId:    session.user_id,
-        email:     session.email,
-        fullName:  session.full_name,
+        email:     session.guest_email,
+        fullName:  session.guest_name,
         source:    session.source,
         messages:  history.map(serializeChatMsg),
       })
@@ -1509,25 +1487,26 @@ io.on('connection', (socket) => {
       const name  = String(payload.name  || socket.data.user?.fullName || socket.data.user?.name || 'Guest')
       const email = String(payload.email || socket.data.user?.email    || '')
 
-      const session = await getOrCreateChatSession({
-        sessionId: sid,
-        userId:    socket.data.user?.id,
-        email:     email || null,
-        fullName:  name  || null,
-        source:    socket.data.user ? 'frontend-auth' : 'frontend-guest',
+      const session = await getOrCreateConversation({
+        sessionId:  sid,
+        userId:     socket.data.user?.id,
+        guestName:  name  || null,
+        guestEmail: email || null,
+        source:     socket.data.user ? 'frontend-auth' : 'frontend-guest',
+        ipAddress:  socket.handshake.address,
       })
 
       socket.data.sessionId = session.session_id
       socket.join(`chat:${session.session_id}`)
 
-      const row    = await saveChatMessage({
-        sessionId:   session.session_id,
-        senderType:  'user',
-        senderId:    socket.data.user?.id,
-        senderName:  name,
-        senderEmail: email,
+      const row    = await saveConversationMessage({
+        conversationId: session.id,
+        senderType:     'user',
+        senderId:       socket.data.user?.id,
+        senderName:     name,
+        senderEmail:    email,
         body,
-        metadata:    payload.metadata || { source: 'frontend-chat' },
+        metadata: payload.metadata || { source: 'frontend-chat' },
       })
 
       const message = serializeChatMsg(row)
@@ -1537,8 +1516,8 @@ io.on('connection', (socket) => {
       io.to('admins').emit('new-chat-message', {
         sessionId:   session.session_id,
         userId:      session.user_id,
-        email:       session.email,
-        fullName:    session.full_name,
+        email:       session.guest_email,
+        fullName:    session.guest_name,
         body:        message.body,
         senderName:  message.senderName,
         unreadCount: unread,
@@ -1560,14 +1539,17 @@ io.on('connection', (socket) => {
       if (!sid)  throw new Error('sessionId is required')
       if (!body) throw new Error('Message body is required')
 
-      const row = await saveChatMessage({
-        sessionId:   sid,
-        senderType:  'admin',
-        senderId:    socket.data.user?.id,
-        senderName:  socket.data.user?.full_name || socket.data.user?.name || 'Admin',
-        senderEmail: socket.data.user?.email     || null,
+      const conv = await resolveConversationForSocket({ sessionId: sid })
+      if (!conv) throw new Error('Conversation not found')
+
+      const row = await saveConversationMessage({
+        conversationId: conv.id,
+        senderType:     'admin',
+        senderId:       socket.data.user?.id,
+        senderName:     socket.data.user?.full_name || socket.data.user?.name || 'Admin',
+        senderEmail:    socket.data.user?.email     || null,
         body,
-        metadata:    { source: 'admin-panel' },
+        metadata: { source: 'admin-panel' },
       })
 
       const message = serializeChatMsg(row)
@@ -1632,7 +1614,7 @@ io.on('connection', (socket) => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS
+// ERROR HANDLERS  — must be last middleware
 // ═══════════════════════════════════════════════════════════════════════════════
 
 app.use(notFoundHandler)
@@ -1656,17 +1638,16 @@ async function initializeServer () {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
-    // Core schemas — sequential
     const schemas = [
-      { fn: ensureSubscribersSchema,    name: 'Subscribers'    },
-      { fn: ensureUserSchema,           name: 'Users'          },
-      { fn: ensureContactSchema,        name: 'Contact'        },
-      { fn: ensureGallerySchema,        name: 'Gallery'        },
-      { fn: ensurePostsSchema,          name: 'Posts'          },
-      { fn: ensurePackagesSchema,       name: 'Packages'       },
-      { fn: ensureBookingsSchema,       name: 'Bookings'       },
-      { fn: ensureMessagingSchema,      name: 'Messaging'      },
-      { fn: ensureNotificationsSchema,  name: 'Notifications'  }, // ← NEW v6.8
+      { fn: ensureSubscribersSchema,   name: 'Subscribers'   },
+      { fn: ensureUserSchema,          name: 'Users'         },
+      { fn: ensureContactSchema,       name: 'Contact'       },
+      { fn: ensureGallerySchema,       name: 'Gallery'       },
+      { fn: ensurePostsSchema,         name: 'Posts'         },
+      { fn: ensurePackagesSchema,      name: 'Packages'      },
+      { fn: ensureBookingsSchema,      name: 'Bookings'      },
+      { fn: ensureMessagingSchema,     name: 'Messaging'     },
+      { fn: ensureNotificationsSchema, name: 'Notifications' },
     ]
 
     for (const { fn, name } of schemas) {
@@ -1683,7 +1664,7 @@ async function initializeServer () {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.8')
+        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v6.9')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
@@ -1695,6 +1676,7 @@ async function initializeServer () {
         logger.info(`  Socket rooms : user-{id}, role-{role}, all-users ✅`)
         logger.info(`  Notifications: /api/notifications ✅`)
         logger.info(`  Socket.io    : polling → websocket ✅`)
+        logger.info(`  Test routes  : ${IS_PROD ? 'disabled (production)' : '/api/test/notifications ✅'}`)
         logger.info(`${line}\n`)
         resolve()
       })

@@ -486,6 +486,17 @@ exports.create = async (req, res, next) => {
         actionUrl:   "/my-bookings",
         actionLabel: "Track Booking",
         category:    "booking",
+        actor:       req.user,
+        adminActivity: {
+          key: "booking_created",
+          type: "booking_created",
+          category: "booking",
+          template: {
+            title:   (n) => `${n} new booking${n > 1 ? "s" : ""} received`,
+            message: (names, n) =>
+              `${n} traveller${n > 1 ? "s" : ""} just requested bookings${n > 1 ? ` (${names})` : ""}.`,
+          },
+        },
       }).catch(() => {});
 
     /* ── GUEST USER ── */
@@ -1222,6 +1233,17 @@ exports.updateStatus = async (req, res, next) => {
         priority:    status === "cancelled" ? "urgent" : "normal",
         senderType:  "admin",
         senderId:    adminId,
+        actor:       { id: full.user_id, email: full.email },
+        adminActivity: {
+          key: `booking_${status}`,
+          type: `booking_${status}`,
+          category: "booking",
+          template: {
+            title:   (n) => `${n} booking${n > 1 ? "s" : ""} marked ${status}`,
+            message: (names, n) =>
+              `${n} bookings were marked ${status}${n > 1 ? ` (${names})` : ""}.`,
+          },
+        },
       }).catch(() => {});
     }
 
