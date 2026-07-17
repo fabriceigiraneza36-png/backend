@@ -385,30 +385,72 @@ const getBookingDetail = async (identifier, type = "id") => {
 /* ══════════════════════════════════════════════════════════════════════════════
    ensureSchemaColumns — idempotent migration
 ══════════════════════════════════════════════════════════════════════════════ */
+const SCHEMA_COLUMNS = [
+  "user_id                  INTEGER",
+  "package_id               INTEGER",
+  "service_id               INTEGER",
+  "booking_type             VARCHAR(100) DEFAULT 'custom'",
+  "whatsapp                 VARCHAR(50)",
+  "nationality              VARCHAR(100)",
+  "country                  VARCHAR(100)",
+  "return_date              DATE",
+  "flexible_dates           BOOLEAN      DEFAULT false",
+  "number_of_adults         INTEGER      DEFAULT 1",
+  "number_of_children       INTEGER      DEFAULT 0",
+  "accommodation_type       VARCHAR(100)",
+  "dietary_requirements     TEXT",
+  "email_verified           BOOLEAN      DEFAULT false",
+  "email_verified_at        TIMESTAMPTZ",
+  "verification_token       VARCHAR(128)",
+  "verification_token_exp    TIMESTAMPTZ",
+  "cancel_request_type       VARCHAR(20)",
+  "cancel_request_reason     TEXT",
+  "cancel_requested_at      TIMESTAMPTZ",
+  "cancel_request_status    VARCHAR(20)  DEFAULT 'none'",
+  "cancel_reviewed_at       TIMESTAMPTZ",
+  "cancel_reviewed_by       INTEGER",
+  "cancel_admin_response    TEXT",
+  "refund_amount            NUMERIC(12,2)",
+  "flexible_months          TEXT",
+  "group_type               VARCHAR(50)",
+  "destination_name         TEXT",
+  "country_name             TEXT",
+  "marketing_source         VARCHAR(100)",
+  "newsletter_opt_in        BOOLEAN      DEFAULT false",
+  "preferred_contact_method VARCHAR(50)",
+  "preferred_contact_time   VARCHAR(100)",
+  "pickup_location          TEXT",
+  "accommodation_id         INTEGER",
+  "country_id               INTEGER",
+  "is_active                BOOLEAN      DEFAULT true",
+  "booking_ref              VARCHAR(100)",
+  "confirmation_code        VARCHAR(100)",
+  "payment_status           VARCHAR(50)  DEFAULT 'pending'",
+  "source                   VARCHAR(100) DEFAULT 'website'",
+  "status                   VARCHAR(50)  DEFAULT 'pending'",
+];
+
+let _schemaReadyPromise = null;
+
 const ensureSchemaColumns = async () => {
-  const cols = [
-    "email_verified           BOOLEAN      DEFAULT false",
-    "email_verified_at        TIMESTAMPTZ",
-    "verification_token       VARCHAR(128)",
-    "verification_token_exp   TIMESTAMPTZ",
-    "cancel_request_type      VARCHAR(20)",
-    "cancel_request_reason    TEXT",
-    "cancel_requested_at      TIMESTAMPTZ",
-    "cancel_request_status    VARCHAR(20)  DEFAULT 'none'",
-    "cancel_reviewed_at       TIMESTAMPTZ",
-    "cancel_reviewed_by       INTEGER",
-    "cancel_admin_response    TEXT",
-    "refund_amount            NUMERIC(12,2)",
-    "flexible_months          TEXT",
-    "group_type               VARCHAR(50)",
-    "destination_name         TEXT",
-    "country_name             TEXT",
-    "marketing_source         VARCHAR(100)",
-    "newsletter_opt_in        BOOLEAN      DEFAULT false",
-    "preferred_contact_method VARCHAR(50)",
-    "preferred_contact_time   VARCHAR(100)",
-    "pickup_location          TEXT",
-  ];
+  // Memoize: run the (slow, remote) ALTERs at most once per process.
+  if (_schemaReadyPromise) return _schemaReadyPromise;
+  _schemaReadyPromise = (async () => {
+  // Make sure the bookings table itself exists (idempotent)
+  await query(`CREATE TABLE IF NOT EXISTS bookings (
+    id            SERIAL PRIMARY KEY,
+    booking_number VARCHAR(50) UNIQUE NOT NULL,
+    destination_id INTEGER,
+    service_id     INTEGER,
+    full_name      VARCHAR(255) NOT NULL,
+    email          VARCHAR(255) NOT NULL,
+    phone          VARCHAR(50),
+    status         VARCHAR(50) DEFAULT 'pending',
+    created_at     TIMESTAMP DEFAULT NOW(),
+    updated_at     TIMESTAMP DEFAULT NOW()
+  )`);
+
+  const cols = SCHEMA_COLUMNS;
 
   for (const col of cols) {
     await query(
@@ -421,6 +463,11 @@ const ensureSchemaColumns = async () => {
        SET cancel_request_status = 'none'
      WHERE cancel_request_status IS NULL`,
   ).catch(() => {});
+  })().catch((err) => {
+    _schemaReadyPromise = null; // allow retry on next request
+    logger.warn("[Bookings] ensureSchemaColumns failed:", err.message);
+  });
+  return _schemaReadyPromise;
 };
 
 // Run on startup — non-blocking
@@ -435,6 +482,12 @@ ensureSchemaColumns().catch((err) =>
 ══════════════════════════════════════════════════════════════════════════════ */
 exports.create = async (req, res, next) => {
   try {
+    /* Guarantee the bookings table + required columns exist before insert
+       (idempotent; safe to call on every request, cheap once schema is ready). */
+    await ensureSchemaColumns().catch((e) =>
+      logger.warn("[Bookings] ensureSchemaColumns (create):", e.message),
+    );
+
     const body   = normalizeBookingData(req.body);
     const errors = validateBooking(body);
     if (errors.length)
@@ -828,6 +881,10 @@ exports.adminCreate = async (req, res, next) => {
 ══════════════════════════════════════════════════════════════════════════════ */
 exports.getAll = async (req, res, next) => {
   try {
+    await ensureSchemaColumns().catch((e) =>
+      logger.warn("[Bookings] ensureSchemaColumns (getAll):", e.message),
+    );
+
     const {
       page = 1, limit = 20,
       status, payment_status, booking_type,
