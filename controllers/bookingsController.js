@@ -1,127 +1,110 @@
 // controllers/bookingsController.js
 "use strict";
 
-const crypto    = require("crypto");
+const crypto = require("crypto");
 const { query } = require("../config/db");
-const logger    = require("../utils/logger");
+const logger = require("../utils/logger");
 
-/* ═══════════════════════════════════════════════════════════════════
-   PURE HELPERS — defined FIRST so every function below can use them
-═══════════════════════════════════════════════════════════════════ */
-const safe = (val, fallback = null) => {
-  if (val === undefined || val === null || val === "") return fallback;
-  return val;
-};
+/* ═════════════════════════════════════════════════════════════════════
+   SAFE REQUIRE: HELPERS
+═════════════════════════════════════════════════════════════════════ */
+let generateBookingNumber;
+let generateConfirmationCode;
+let sanitizeInput;
 
-const safeInt = (v, def, min = 1, max = 500) => {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def;
-};
-
-const safeFloat = (val, fallback = null) => {
-  const n = parseFloat(val);
-  return isNaN(n) ? fallback : n;
-};
-
-const safeDate = (val) => {
-  if (!val) return null;
-  const d = new Date(val);
-  return isNaN(d.getTime()) ? null : d.toISOString();
-};
-
-const isValidTransition = (from, to) =>
-  (STATUS_TRANSITIONS[from] || []).includes(to);
-
-const isEligibleForRequest = (booking, type) => {
-  const s = booking.status;
-  if (type === "cancellation") return ["pending", "confirmed", "on-hold"].includes(s);
-  if (type === "refund")       return ["confirmed", "completed"].includes(s);
-  return false;
-};
-
-const getStatusMessage = (status) =>
-  ({
-    pending:   "Your booking is being reviewed. We will contact you within 24 hours.",
-    confirmed: "Your booking has been confirmed! Check your email for details.",
-    "on-hold": "Your booking is on hold. Please contact us for more information.",
-    completed: "Trip completed. Thank you for travelling with us!",
-    cancelled: "This booking has been cancelled.",
-    refunded:  "This booking has been refunded.",
-  }[status] || "Unknown status.");
-
-/* ═══════════════════════════════════════════════════════════════════
-   SAFE-REQUIRE: helpers (generateBookingNumber etc.)
-═══════════════════════════════════════════════════════════════════ */
-let generateBookingNumber, generateConfirmationCode, sanitizeInput;
 try {
-  ({ generateBookingNumber, generateConfirmationCode, sanitizeInput } =
-    require("../utils/helpers"));
+  ({
+    generateBookingNumber,
+    generateConfirmationCode,
+    sanitizeInput,
+  } = require("../utils/helpers"));
 } catch (err) {
   logger.warn("[Bookings] helpers fallback active:", err.message);
+
   generateBookingNumber = () =>
     "BK-" +
     Date.now().toString(36).toUpperCase() +
     "-" +
     Math.random().toString(36).slice(2, 6).toUpperCase();
+
   generateConfirmationCode = () =>
     crypto.randomBytes(4).toString("hex").toUpperCase();
+
   sanitizeInput = (v) => v;
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   SAFE-REQUIRE: email services
-═══════════════════════════════════════════════════════════════════ */
-let sendBookingVerificationLink  = null;
-let sendBookingReceivedEmail     = null;
+/* ═════════════════════════════════════════════════════════════════════
+   EMAIL SERVICE
+═════════════════════════════════════════════════════════════════════ */
+let sendBookingVerificationLink = null;
+let sendBookingReceivedEmail = null;
 let sendAdminBookingNotification = null;
-let sendBookingConfirmation      = null;
-let sendBookingStatusUpdate      = null;
-let sendBookingCancellation      = null;
-let sendTripCountdownEmail       = null;
-let sendCancellationRequestAck   = null;
+let sendBookingConfirmation = null;
+let sendBookingStatusUpdate = null;
+let sendBookingCancellation = null;
+let sendTripCountdownEmail = null;
+let sendCancellationRequestAck = null;
 
 try {
   const bookingEmails = require("../utils/bookingEmails");
-  sendBookingVerificationLink  = bookingEmails.sendBookingVerificationLink  || null;
-  sendBookingReceivedEmail     = bookingEmails.sendBookingReceivedEmail     || null;
+
+  sendBookingVerificationLink = bookingEmails.sendBookingVerificationLink || null;
+  sendBookingReceivedEmail = bookingEmails.sendBookingReceivedEmail || null;
   sendAdminBookingNotification = bookingEmails.sendAdminBookingNotification || null;
-  sendBookingConfirmation      = bookingEmails.sendBookingConfirmation      || null;
-  sendBookingStatusUpdate      = bookingEmails.sendBookingStatusUpdate      || null;
-  sendBookingCancellation      = bookingEmails.sendBookingCancellation      || null;
-  sendTripCountdownEmail       = bookingEmails.sendTripCountdownEmail       || null;
-  sendCancellationRequestAck   = bookingEmails.sendCancellationRequestAck   || null;
+  sendBookingConfirmation = bookingEmails.sendBookingConfirmation || null;
+  sendBookingStatusUpdate = bookingEmails.sendBookingStatusUpdate || null;
+  sendBookingCancellation = bookingEmails.sendBookingCancellation || null;
+  sendTripCountdownEmail = bookingEmails.sendTripCountdownEmail || null;
+  sendCancellationRequestAck = bookingEmails.sendCancellationRequestAck || null;
+
   logger.info("[Bookings] ✅ bookingEmails loaded from utils/bookingEmails");
 } catch (err) {
   logger.warn("[Bookings] bookingEmails not available — trying legacy paths:", err.message);
+
   const LEGACY_PATHS = [
     "../services/emailService",
     "../utils/emailService",
     "../services/email",
     "../utils/email",
   ];
+
   for (const p of LEGACY_PATHS) {
     try {
       const mod = require(p);
-      sendBookingVerificationLink  = sendBookingVerificationLink  || mod.sendBookingVerificationLink  || null;
-      sendBookingReceivedEmail     = sendBookingReceivedEmail     || mod.sendBookingReceivedEmail     || null;
-      sendAdminBookingNotification = sendAdminBookingNotification || mod.sendAdminBookingNotification || null;
-      sendBookingConfirmation      = sendBookingConfirmation      || mod.sendBookingConfirmation      || null;
-      sendBookingStatusUpdate      = sendBookingStatusUpdate      || mod.sendBookingStatusUpdate      || null;
-      sendBookingCancellation      = sendBookingCancellation      || mod.sendBookingCancellation      || null;
-      sendTripCountdownEmail       = sendTripCountdownEmail       || mod.sendTripCountdownEmail       || null;
+
+      sendBookingVerificationLink =
+        sendBookingVerificationLink || mod.sendBookingVerificationLink || null;
+      sendBookingReceivedEmail =
+        sendBookingReceivedEmail || mod.sendBookingReceivedEmail || null;
+      sendAdminBookingNotification =
+        sendAdminBookingNotification || mod.sendAdminBookingNotification || null;
+      sendBookingConfirmation =
+        sendBookingConfirmation || mod.sendBookingConfirmation || null;
+      sendBookingStatusUpdate =
+        sendBookingStatusUpdate || mod.sendBookingStatusUpdate || null;
+      sendBookingCancellation =
+        sendBookingCancellation || mod.sendBookingCancellation || null;
+      sendTripCountdownEmail =
+        sendTripCountdownEmail || mod.sendTripCountdownEmail || null;
+      sendCancellationRequestAck =
+        sendCancellationRequestAck || mod.sendCancellationRequestAck || null;
+
       logger.info(`[Bookings] Partial email functions loaded from legacy path: ${p}`);
       break;
-    } catch { /* try next */ }
+    } catch {
+      // try next
+    }
   }
+
   if (!sendAdminBookingNotification) {
-    logger.warn("[Bookings] No email service found — booking emails will be skipped");
+    logger.warn("[Bookings] No email service found — booking emails may be skipped");
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   SAFE-REQUIRE: notifications / messaging / socket
-═══════════════════════════════════════════════════════════════════ */
-let createNotificationInternal = async () => {};
+/* ═════════════════════════════════════════════════════════════════════
+   SAFE REQUIRE: NOTIFICATIONS / MESSAGING / SOCKET
+═════════════════════════════════════════════════════════════════════ */
+let createNotificationInternal = async () => null;
 try {
   ({ createNotificationInternal } = require("./notificationsController"));
 } catch (err) {
@@ -143,29 +126,233 @@ try {
   logger.warn("[Bookings] socketBus not found:", err.message);
 }
 
-/* ═══════════════════════════════════════════════════════════════════
-   NOTIFICATION HELPERS
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   CONSTANTS
+═════════════════════════════════════════════════════════════════════ */
+const BOOKING_STATUS = {
+  PENDING: "pending",
+  CONFIRMED: "confirmed",
+  CANCELLED: "cancelled",
+  COMPLETED: "completed",
+  ON_HOLD: "on-hold",
+  REFUNDED: "refunded",
+};
+
+const STATUS_TRANSITIONS = {
+  pending: ["confirmed", "cancelled", "on-hold"],
+  confirmed: ["completed", "cancelled", "on-hold"],
+  "on-hold": ["confirmed", "cancelled", "pending"],
+  completed: ["refunded"],
+  cancelled: ["pending"],
+  refunded: [],
+};
+
+const CANCEL_REQUEST_STATUS = {
+  NONE: "none",
+  PENDING: "pending",
+  APPROVED: "approved",
+  REJECTED: "rejected",
+};
+
+const BOOKING_TYPES = ["destination", "service", "custom", "package"];
+
+const ALLOWED_SORT = new Set([
+  "created_at",
+  "travel_date",
+  "full_name",
+  "status",
+  "booking_number",
+]);
+
+const VERIFY_EXPIRY_H = 24;
+
+/* ═════════════════════════════════════════════════════════════════════
+   SAFE VALUE HELPERS
+═════════════════════════════════════════════════════════════════════ */
+const isObj = (v) =>
+  v && typeof v === "object" && !Array.isArray(v) && !(v instanceof Date);
+
+const firstDefined = (...vals) => {
+  for (const v of vals) {
+    if (v !== undefined && v !== null && v !== "") return v;
+  }
+  return undefined;
+};
+
+/**
+ * IMPORTANT:
+ * This fixes the "[object Object]" issue.
+ * If a frontend select sends { value, label }, we extract label/value instead
+ * of letting JS convert the object into "[object Object]".
+ */
+const safe = (val, fallback = null) => {
+  if (val === undefined || val === null) return fallback;
+
+  if (val instanceof Date) {
+    return Number.isNaN(val.getTime()) ? fallback : val.toISOString();
+  }
+
+  if (Array.isArray(val)) {
+    const joined = val
+      .map((x) => safe(x, ""))
+      .filter(Boolean)
+      .join(", ");
+    return joined || fallback;
+  }
+
+  if (isObj(val)) {
+    const picked = firstDefined(
+      val.label,
+      val.name,
+      val.title,
+      val.text,
+      val.value,
+      val.id,
+      val._id,
+    );
+
+    if (picked !== undefined) return safe(picked, fallback);
+
+    try {
+      const json = JSON.stringify(val);
+      return json && json !== "{}" ? json : fallback;
+    } catch {
+      return fallback;
+    }
+  }
+
+  const s = String(val).trim();
+  if (!s) return fallback;
+
+  try {
+    const sanitized = sanitizeInput ? sanitizeInput(s) : s;
+    return String(sanitized).trim() || fallback;
+  } catch {
+    return s || fallback;
+  }
+};
+
+const safeText = (val, fallback = null) => safe(val, fallback);
+
+const safeEmail = (val) => {
+  const s = safe(val, null);
+  return s ? s.toLowerCase().trim() : null;
+};
+
+const safeId = (val, fallback = null) => {
+  if (isObj(val)) {
+    val = firstDefined(val.value, val.id, val._id);
+  }
+  const n = parseInt(val, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+};
+
+const safeInt = (v, def = null, min = 0, max = 500) => {
+  if (isObj(v)) v = firstDefined(v.value, v.id, v.count, v.number);
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n)) return def;
+  return Math.min(Math.max(n, min), max);
+};
+
+const safeFloat = (v, def = null) => {
+  if (isObj(v)) v = firstDefined(v.value, v.amount, v.price);
+  const n = parseFloat(v);
+  return Number.isFinite(n) ? n : def;
+};
+
+const safeBool = (v, def = false) => {
+  if (v === undefined || v === null || v === "") return def;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1;
+  const s = String(v).toLowerCase().trim();
+  if (["true", "1", "yes", "y", "on"].includes(s)) return true;
+  if (["false", "0", "no", "n", "off"].includes(s)) return false;
+  return def;
+};
+
+const safeDate = (v, fallback = null) => {
+  if (!v) return fallback;
+
+  if (isObj(v)) {
+    v = firstDefined(v.value, v.date, v.startDate, v.endDate, v.arrivalDate, v.departureDate);
+  }
+
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return fallback;
+
+  // PostgreSQL DATE-friendly yyyy-mm-dd
+  return d.toISOString().slice(0, 10);
+};
+
+const safeJson = (v, fallback = null) => {
+  if (v === undefined || v === null || v === "") return fallback;
+  if (typeof v === "string") return v;
+  try {
+    return JSON.stringify(v);
+  } catch {
+    return fallback;
+  }
+};
+
+const asyncNoThrow = (promise, label) => {
+  Promise.resolve(promise).catch((e) => {
+    logger.warn(`[Bookings] ${label} failed:`, e.message);
+  });
+};
+
+/* ═════════════════════════════════════════════════════════════════════
+   BUSINESS HELPERS
+═════════════════════════════════════════════════════════════════════ */
+const isValidTransition = (from, to) =>
+  (STATUS_TRANSITIONS[from] || []).includes(to);
+
+const isEligibleForRequest = (booking, type) => {
+  const s = booking.status;
+  if (type === "cancellation") return ["pending", "confirmed", "on-hold"].includes(s);
+  if (type === "refund") return ["confirmed", "completed"].includes(s);
+  return false;
+};
+
+const getStatusMessage = (status) =>
+  ({
+    pending: "Your booking is being reviewed. We will contact you within 24 hours.",
+    confirmed: "Your booking has been confirmed! Check your email for details.",
+    "on-hold": "Your booking is on hold. Please contact us for more information.",
+    completed: "Trip completed. Thank you for traveling with us!",
+    cancelled: "This booking has been cancelled.",
+    refunded: "This booking has been refunded.",
+  }[status] || "Unknown status");
+
+/* ═════════════════════════════════════════════════════════════════════
+   NOTIFICATIONS
+═════════════════════════════════════════════════════════════════════ */
 const notifyUserBookingEvent = async ({
-  req, user, booking, title, message, actionUrl, actionLabel, priority = "normal",
+  user,
+  booking,
+  title,
+  message,
+  actionUrl,
+  actionLabel,
+  priority = "normal",
 }) => {
   try {
-    await createNotificationInternal({
-      userId:      safe(user.id),
-      userEmail:   safe(user.email),
-      type:        "booking_created",
-      category:    "booking",
+    return await createNotificationInternal({
+      userId: user?.id || null,
+      userEmail: user?.email || null,
+      type: "booking_created",
+      category: "booking",
       title,
       message,
-      actionUrl:   safe(actionUrl, "/my-bookings"),
-      actionLabel: safe(actionLabel, "View Booking"),
+      actionUrl: actionUrl || "/my-bookings",
+      actionLabel: actionLabel || "View Booking",
       priority,
-      senderType:  "admin",
-      senderName:  "Altuvera Team",
-      metadata:    { bookingNumber: safe(booking.booking_number) },
-    });
+      senderType: "admin",
+      senderName: "Altuvera Team",
+      metadata: { bookingNumber: booking?.booking_number || null },
+    }).catch(() => null);
   } catch (err) {
     logger.warn("[Bookings] notifyUserBookingEvent:", err.message);
+    return null;
   }
 };
 
@@ -173,188 +360,195 @@ const pingAdminNewRequest = (booking) => {
   try {
     createNotificationInternal({
       targetScope: "admin",
-      type:        "booking_created",
-      category:    "booking",
-      title:       "🔔 New booking request",
-      message:     `Booking ${safe(booking.booking_number, "—")} from ${safe(booking.full_name, "a traveller")}.`,
-      actionUrl:   "/bookings",
+      type: "booking_created",
+      category: "booking",
+      title: "🔔 New booking request",
+      message: `Booking ${booking?.booking_number || ""} from ${booking?.full_name || "a traveller"}.`,
+      actionUrl: "/bookings",
       actionLabel: "Review",
-      priority:    "high",
-      metadata:    { bookingNumber: safe(booking.booking_number) },
+      priority: "high",
+      metadata: { bookingNumber: booking?.booking_number || null },
     }).catch(() => {});
-  } catch { /* non-fatal */ }
+  } catch {
+    // non-fatal
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   CONSTANTS
-═══════════════════════════════════════════════════════════════════ */
-const BOOKING_STATUS = {
-  PENDING:   "pending",
-  CONFIRMED: "confirmed",
-  CANCELLED: "cancelled",
-  COMPLETED: "completed",
-  ON_HOLD:   "on-hold",
-  REFUNDED:  "refunded",
-};
-
-const STATUS_TRANSITIONS = {
-  pending:   ["confirmed", "cancelled", "on-hold"],
-  confirmed: ["completed", "cancelled", "on-hold"],
-  "on-hold": ["confirmed", "cancelled", "pending"],
-  completed: ["refunded"],
-  cancelled: ["pending"],
-  refunded:  [],
-};
-
-const CANCEL_REQUEST_STATUS = {
-  NONE:     "none",
-  PENDING:  "pending",
-  APPROVED: "approved",
-  REJECTED: "rejected",
-};
-
-const BOOKING_TYPES = ["destination", "service", "custom", "package"];
-const ALLOWED_SORT  = new Set([
-  "created_at", "travel_date", "full_name", "status", "booking_number",
-]);
-const VERIFY_EXPIRY_H = 24;
-
-/* ═══════════════════════════════════════════════════════════════════
-   normalizeBookingData  (handles arrival/departure date fields)
-═══════════════════════════════════════════════════════════════════ */
-const normalizeBookingData = (raw) => {
+/* ═════════════════════════════════════════════════════════════════════
+   NORMALIZE BOOKING DATA
+═════════════════════════════════════════════════════════════════════ */
+const normalizeBookingData = (raw = {}) => {
   const d = { ...raw };
 
-  const alias = (target, ...sources) => {
-    if (!d[target])
-      for (const s of sources)
-        if (d[s] !== undefined && d[s] !== null && d[s] !== "") {
-          d[target] = d[s]; break;
-        }
+  const read = (...keys) => {
+    for (const k of keys) {
+      if (d[k] !== undefined && d[k] !== null && d[k] !== "") return d[k];
+    }
+    return undefined;
   };
 
-  /* Name */
-  alias("full_name", "fullName", "name", "firstName");
-  if (!d.full_name && (d.firstName || d.lastName)) {
-    d.full_name = [d.firstName, d.lastName].filter(Boolean).join(" ").trim();
-  }
+  const firstName = safeText(read("firstName", "first_name"), "");
+  const lastName = safeText(read("lastName", "last_name"), "");
 
-  /* Contact */
-  alias("email",    "emailAddress");
-  alias("phone",    "phoneNumber", "telephone");
-  alias("whatsapp", "whatsappNumber");
+  const fullName =
+    safeText(read("full_name", "fullName", "name"), null) ||
+    [firstName, lastName].filter(Boolean).join(" ").trim();
 
-  /* IDs */
-  alias("destination_id", "destinationId", "destination");
-  alias("service_id",     "serviceId",     "service");
-  alias("package_id",     "packageId");
-  alias("country_id",     "countryId");
+  const destinationObj = read("destination", "selectedDestination");
+  const countryObj = read("country", "selectedCountry", "countryOfResidence", "residenceCountry");
 
-  /* Trip details — arrival (travel_date) and departure (return_date) */
-  alias("travel_date",  "travelDate", "startDate", "arrivalDate");
-  alias("return_date",  "returnDate", "endDate", "departureDate");
+  const destinationId = safeId(
+    read("destination_id", "destinationId", "destinationID") ??
+      (isObj(destinationObj) ? firstDefined(destinationObj.value, destinationObj.id, destinationObj._id) : undefined),
+  );
 
-  alias("accommodation_type", "accommodationType", "accommodation");
-  alias("room_type",          "roomType");
-  alias("special_requests",   "specialRequests", "requests");
-  alias("dietary_requirements","dietaryRequirements", "dietary");
-  alias("accessibility_needs", "accessibilityNeeds");
-  alias("customer_notes",     "customerNotes", "notes", "message");
-  alias("nationality",        "citizenship");
-  alias("country",            "countryOfResidence", "residenceCountry");
-  alias("group_type",         "groupType");
+  const countryId = safeId(
+    read("country_id", "countryId", "countryID") ??
+      (isObj(countryObj) ? firstDefined(countryObj.value, countryObj.id, countryObj._id) : undefined),
+  );
 
-  /* Traveller counts */
-  if (d.number_of_travelers === undefined) {
-    for (const k of ["numberOfTravelers", "travelers", "guests", "groupSize"])
-      if (d[k] !== undefined) { d.number_of_travelers = d[k]; break; }
-  }
-  if (d.number_of_adults === undefined) {
-    for (const k of ["numberOfAdults", "adults"])
-      if (d[k] !== undefined) { d.number_of_adults = d[k]; break; }
-  }
-  if (d.number_of_children === undefined) {
-    for (const k of ["numberOfChildren", "children"])
-      if (d[k] !== undefined) { d.number_of_children = d[k]; break; }
-  }
+  const serviceId = safeId(read("service_id", "serviceId", "service"));
+  const packageId = safeId(read("package_id", "packageId", "package"));
 
-  /* Flexible dates */
-  if (d.flexible_dates === undefined && d.flexibleDates !== undefined)
-    d.flexible_dates = d.flexibleDates;
-  if (d.flexible_dates === undefined && d.isFlexible !== undefined)
-    d.flexible_dates = d.isFlexible;
+  const destinationName =
+    safeText(read("destination_name", "destinationName"), null) ||
+    (isObj(destinationObj) ? safeText(destinationObj.label || destinationObj.name || destinationObj.title, null) : null) ||
+    (!destinationId ? safeText(destinationObj, null) : null);
 
-  /* Compute total travelers from adults + children when still missing */
-  if (d.number_of_travelers == null &&
-      (d.number_of_adults != null || d.number_of_children != null)) {
-    d.number_of_travelers =
-      (parseInt(d.number_of_adults   || 0, 10) || 0) +
-      (parseInt(d.number_of_children || 0, 10) || 0) || 1;
-  }
+  const countryName =
+    safeText(read("country_name", "countryName"), null) ||
+    (isObj(countryObj) ? safeText(countryObj.label || countryObj.name || countryObj.title, null) : null) ||
+    (!countryId ? safeText(countryObj, null) : null);
 
-  if (!d.booking_type) d.booking_type = "custom";
-  const bt = String(d.booking_type).toLowerCase().trim();
-  d.booking_type = BOOKING_TYPES.includes(bt) ? bt : "custom";
+  // New frontend date fields:
+  // arrivalDate = start/travel date
+  // departureDate = return/end date
+  const travelDate = safeDate(
+    read("travel_date", "travelDate", "arrivalDate", "startDate", "date"),
+  );
 
-  if (Array.isArray(d.flexibleMonths))
-    d.flexible_months = JSON.stringify(d.flexibleMonths);
+  const returnDate = safeDate(
+    read("return_date", "returnDate", "departureDate", "endDate"),
+  );
 
-  for (const k of ["full_name", "email", "phone", "whatsapp", "nationality",
-                  "country", "special_requests", "customer_notes"]) {
-    if (typeof d[k] === "string") d[k] = d[k].trim();
-  }
+  const adults = safeInt(read("number_of_adults", "numberOfAdults", "adults"), 1, 0, 500);
+  const children = safeInt(read("number_of_children", "numberOfChildren", "children"), 0, 0, 500);
 
-  return d;
+  const travelerCount =
+    safeInt(read("number_of_travelers", "numberOfTravelers", "travelers", "guests", "groupSize"), null, 1, 500) ||
+    Math.max(1, adults + children);
+
+  let bookingType = safeText(read("booking_type", "bookingType", "type"), "custom").toLowerCase();
+  if (!BOOKING_TYPES.includes(bookingType)) bookingType = "custom";
+
+  return {
+    user_id: safeId(read("user_id", "userId")),
+    package_id: packageId,
+    destination_id: destinationId,
+    service_id: serviceId,
+    country_id: countryId,
+
+    booking_type: bookingType,
+
+    full_name: safeText(fullName, ""),
+    email: safeEmail(read("email", "emailAddress")),
+    phone: safeText(read("phone", "phoneNumber", "telephone"), null),
+    whatsapp: safeText(read("whatsapp", "whatsappNumber"), null),
+
+    nationality: safeText(read("nationality", "citizenship"), null),
+    country: countryName,
+    destination_name: destinationName,
+    country_name: countryName,
+
+    travel_date: travelDate,
+    return_date: returnDate,
+
+    flexible_dates: safeBool(read("flexible_dates", "flexibleDates", "isFlexible"), false),
+    flexible_months: Array.isArray(d.flexibleMonths)
+      ? JSON.stringify(d.flexibleMonths)
+      : safeText(read("flexible_months", "flexibleMonths"), null),
+
+    number_of_travelers: travelerCount,
+    number_of_adults: adults,
+    number_of_children: children,
+
+    accommodation_type: safeText(read("accommodation_type", "accommodationType", "accommodation"), null),
+    room_type: safeText(read("room_type", "roomType"), null),
+
+    dietary_requirements: safeText(read("dietary_requirements", "dietaryRequirements", "dietary"), null),
+    special_requests: safeText(read("special_requests", "specialRequests", "requests"), null),
+    accessibility_needs: safeText(read("accessibility_needs", "accessibilityNeeds"), null),
+    customer_notes: safeText(read("customer_notes", "customerNotes", "notes", "message"), null),
+
+    group_type: safeText(read("group_type", "groupType", "tripType"), null),
+
+    marketing_source: safeText(read("marketing_source", "marketingSource", "howHeard"), null),
+    newsletter_opt_in: safeBool(read("newsletter_opt_in", "newsletterOptIn"), false),
+    preferred_contact_method: safeText(read("preferred_contact_method", "preferredContactMethod", "contactMethod"), null),
+    preferred_contact_time: safeText(read("preferred_contact_time", "preferredContactTime"), null),
+    pickup_location: safeText(read("pickup_location", "pickupLocation"), null),
+
+    source: safeText(read("source"), "website"),
+
+    children_ages: safeJson(read("children_ages", "childrenAges"), null),
+    travelers_details: safeJson(read("travelers_details", "travelersDetails"), null),
+    emergency_contact: safeJson(read("emergency_contact", "emergencyContact"), null),
+  };
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   validateBooking
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   VALIDATION
+═════════════════════════════════════════════════════════════════════ */
 const validateBooking = (data, isUpdate = false) => {
   const errors = [];
 
   if (!isUpdate) {
-    if (!String(safe(data.full_name, "")).trim())
+    if (!safeText(data.full_name, "")) {
       errors.push({ field: "full_name", message: "Full name is required" });
+    }
 
-    const em = String(safe(data.email, "")).trim();
-    if (!em)
+    const em = safeEmail(data.email);
+    if (!em) {
       errors.push({ field: "email", message: "Email is required" });
-    else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em))
+    } else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) {
       errors.push({ field: "email", message: "Invalid email address" });
+    }
   }
 
-  /* Arrival date (travel_date) */
   if (data.travel_date) {
-    const td    = new Date(data.travel_date);
+    const td = new Date(data.travel_date);
     const today = new Date();
     today.setHours(0, 0, 0, 0);
-    if (isNaN(td.getTime()))
+
+    if (Number.isNaN(td.getTime())) {
       errors.push({ field: "travel_date", message: "Invalid arrival date" });
-    else if (td < today)
+    } else if (td < today) {
       errors.push({ field: "travel_date", message: "Arrival date cannot be in the past" });
+    }
   }
 
-  /* Departure date (return_date) */
   if (data.travel_date && data.return_date) {
     const td = new Date(data.travel_date);
     const rd = new Date(data.return_date);
-    if (!isNaN(td.getTime()) && !isNaN(rd.getTime()) && rd < td)
+
+    if (!Number.isNaN(td.getTime()) && !Number.isNaN(rd.getTime()) && rd < td) {
       errors.push({ field: "return_date", message: "Departure date must be after arrival date" });
+    }
   }
 
   if (data.number_of_travelers != null) {
     const n = parseInt(data.number_of_travelers, 10);
-    if (!Number.isFinite(n) || n < 1 || n > 500)
-      errors.push({ field: "number_of_travelers", message: "Travellers: 1–500" });
+    if (!Number.isFinite(n) || n < 1 || n > 500) {
+      errors.push({ field: "number_of_travelers", message: "Travelers must be between 1 and 500" });
+    }
   }
 
   return errors;
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   logActivity
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   ACTIVITY LOG
+═════════════════════════════════════════════════════════════════════ */
 const logActivity = async (bookingId, action, description, adminId = null) => {
   try {
     await query(
@@ -362,7 +556,10 @@ const logActivity = async (bookingId, action, description, adminId = null) => {
          (entity_type, entity_id, action, description, admin_id, metadata, created_at)
        VALUES ('booking',$1,$2,$3,$4,$5,NOW())`,
       [
-        bookingId, action, description, safe(adminId),
+        bookingId,
+        action,
+        description,
+        adminId,
         JSON.stringify({ ts: new Date().toISOString() }),
       ],
     );
@@ -371,33 +568,36 @@ const logActivity = async (bookingId, action, description, adminId = null) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   getBookingDetail
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   BOOKING DETAIL
+═════════════════════════════════════════════════════════════════════ */
 const getBookingDetail = async (identifier, type = "id") => {
   const where = type === "id" ? "b.id=$1" : "b.booking_number=$1";
+
   try {
     const { rows } = await query(
       `SELECT b.*,
-              d.name      AS destination_name,
-              d.slug      AS destination_slug,
-              d.image_url AS destination_image,
-              c.name      AS country_name,
-              c.slug      AS country_slug,
-              s.title     AS service_name,
-              s.slug      AS service_slug,
-              p.title     AS package_name,
+              COALESCE(d.name, b.destination_name) AS destination_name,
+              d.slug AS destination_slug,
+              COALESCE(d.image_url, d.thumbnail_url) AS destination_image,
+              COALESCE(c.name, b.country_name, b.country) AS country_name,
+              c.slug AS country_slug,
+              s.title AS service_name,
+              s.slug AS service_slug,
+              p.title AS package_name,
               u.full_name AS user_name,
-              u.email     AS user_email
+              u.email AS user_email
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
-         LEFT JOIN countries    c ON d.country_id     = c.id
-         LEFT JOIN services     s ON b.service_id     = s.id
-         LEFT JOIN packages     p ON b.package_id     = p.id
-         LEFT JOIN users        u ON b.user_id        = u.id
-         WHERE ${where}`,
+         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services s ON b.service_id = s.id
+         LEFT JOIN packages p ON b.package_id = p.id
+         LEFT JOIN users u ON b.user_id = u.id
+        WHERE ${where}
+        LIMIT 1`,
       [identifier],
     );
+
     return rows[0] || null;
   } catch (err) {
     logger.error("[Bookings] getBookingDetail:", err.message);
@@ -405,282 +605,342 @@ const getBookingDetail = async (identifier, type = "id") => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   ensureSchemaColumns (idempotent)
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   SCHEMA
+═════════════════════════════════════════════════════════════════════ */
 const SCHEMA_COLUMNS = [
-  "user_id                   INTEGER",
-  "package_id                INTEGER",
-  "service_id                INTEGER",
-  "country_id                INTEGER",
-  "booking_type              VARCHAR(100)  DEFAULT 'custom'",
-  "whatsapp                  VARCHAR(50)",
-  "nationality               VARCHAR(100)",
-  "country                   VARCHAR(100)",
-  "return_date               DATE",
-  "flexible_dates            BOOLEAN       DEFAULT false",
-  "number_of_adults          INTEGER       DEFAULT 1",
-  "number_of_children        INTEGER       DEFAULT 0",
-  "accommodation_type        VARCHAR(100)",
-  "dietary_requirements      TEXT",
-  "accessibility_needs       TEXT",
-  "email_verified            BOOLEAN       DEFAULT false",
-  "email_verified_at         TIMESTAMPTZ",
-  "verification_token        VARCHAR(128)",
-  "verification_token_exp    TIMESTAMPTZ",
-  "cancel_request_type       VARCHAR(20)",
-  "cancel_request_reason     TEXT",
-  "cancel_requested_at       TIMESTAMPTZ",
-  "cancel_request_status     VARCHAR(20)   DEFAULT 'none'",
-  "cancel_reviewed_at        TIMESTAMPTZ",
-  "cancel_reviewed_by        INTEGER",
-  "cancel_admin_response     TEXT",
-  "refund_amount             NUMERIC(12,2)",
-  "flexible_months           TEXT",
-  "group_type                VARCHAR(50)",
-  "destination_name          TEXT",
-  "country_name              TEXT",
-  "marketing_source          VARCHAR(100)",
-  "newsletter_opt_in         BOOLEAN       DEFAULT false",
-  "preferred_contact_method  VARCHAR(50)",
-  "preferred_contact_time    VARCHAR(100)",
-  "pickup_location           TEXT",
-  "accommodation_id          INTEGER",
-  "is_active                 BOOLEAN       DEFAULT true",
-  "booking_ref               VARCHAR(100)",
-  "confirmation_code         VARCHAR(100)",
-  "payment_status            VARCHAR(50)   DEFAULT 'pending'",
-  "source                    VARCHAR(100)  DEFAULT 'website'",
-  "status                    VARCHAR(50)   DEFAULT 'pending'",
-  "customer_notes            TEXT",
-  "internal_notes            TEXT",
-  "admin_notes               TEXT",
-  "room_type                 VARCHAR(100)",
-  "group_type                VARCHAR(50)",
-  "children_ages             TEXT",
-  "travelers_details         TEXT",
-  "emergency_contact         TEXT",
-  "confirmed_at              TIMESTAMPTZ",
-  "cancelled_at              TIMESTAMPTZ",
-  "completed_at              TIMESTAMPTZ",
-  "cancellation_reason       TEXT",
+  "user_id INTEGER",
+  "package_id INTEGER",
+  "service_id INTEGER",
+  "country_id INTEGER",
+  "accommodation_id INTEGER",
+
+  "booking_type VARCHAR(100) DEFAULT 'custom'",
+  "booking_ref VARCHAR(100)",
+  "confirmation_code VARCHAR(100)",
+
+  "whatsapp VARCHAR(50)",
+  "nationality VARCHAR(100)",
+  "country VARCHAR(100)",
+  "destination_name TEXT",
+  "country_name TEXT",
+
+  "travel_date DATE",
+  "return_date DATE",
+  "flexible_dates BOOLEAN DEFAULT false",
+  "flexible_months TEXT",
+
+  "number_of_travelers INTEGER DEFAULT 1",
+  "number_of_adults INTEGER DEFAULT 1",
+  "number_of_children INTEGER DEFAULT 0",
+  "children_ages TEXT",
+
+  "accommodation_type VARCHAR(100)",
+  "room_type VARCHAR(100)",
+  "dietary_requirements TEXT",
+  "special_requests TEXT",
+  "accessibility_needs TEXT",
+  "customer_notes TEXT",
+  "travelers_details TEXT",
+  "emergency_contact TEXT",
+
+  "group_type VARCHAR(50)",
+  "marketing_source VARCHAR(100)",
+  "newsletter_opt_in BOOLEAN DEFAULT false",
+  "preferred_contact_method VARCHAR(50)",
+  "preferred_contact_time VARCHAR(100)",
+  "pickup_location TEXT",
+
+  "email_verified BOOLEAN DEFAULT false",
+  "email_verified_at TIMESTAMPTZ",
+  "verification_token VARCHAR(128)",
+  "verification_token_exp TIMESTAMPTZ",
+
+  "cancel_request_type VARCHAR(20)",
+  "cancel_request_reason TEXT",
+  "cancel_requested_at TIMESTAMPTZ",
+  "cancel_request_status VARCHAR(20) DEFAULT 'none'",
+  "cancel_reviewed_at TIMESTAMPTZ",
+  "cancel_reviewed_by INTEGER",
+  "cancel_admin_response TEXT",
+
+  "refund_amount NUMERIC(12,2)",
+  "cancellation_reason TEXT",
+  "cancelled_at TIMESTAMPTZ",
+  "confirmed_at TIMESTAMPTZ",
+  "completed_at TIMESTAMPTZ",
+
+  "admin_notes TEXT",
+  "internal_notes TEXT",
+
+  "payment_status VARCHAR(50) DEFAULT 'pending'",
+  "source VARCHAR(100) DEFAULT 'website'",
+  "status VARCHAR(50) DEFAULT 'pending'",
+  "is_active BOOLEAN DEFAULT true",
 ];
 
 let _schemaReadyPromise = null;
 
 const ensureSchemaColumns = async () => {
   if (_schemaReadyPromise) return _schemaReadyPromise;
+
   _schemaReadyPromise = (async () => {
-    await query(`CREATE TABLE IF NOT EXISTS bookings (
-      id            SERIAL PRIMARY KEY,
-      booking_number VARCHAR(50) UNIQUE NOT NULL,
-      destination_id INTEGER,
-      service_id     INTEGER,
-      full_name      VARCHAR(255) NOT NULL,
-      email          VARCHAR(255) NOT NULL,
-      phone          VARCHAR(50),
-      status         VARCHAR(50)  DEFAULT 'pending',
-      created_at     TIMESTAMP    DEFAULT NOW(),
-      updated_at     TIMESTAMP    DEFAULT NOW()
-    )`);
+    await query(`
+      CREATE TABLE IF NOT EXISTS bookings (
+        id SERIAL PRIMARY KEY,
+        booking_number VARCHAR(50) UNIQUE NOT NULL,
+        destination_id INTEGER,
+        service_id INTEGER,
+        full_name VARCHAR(255) NOT NULL,
+        email VARCHAR(255) NOT NULL,
+        phone VARCHAR(50),
+        status VARCHAR(50) DEFAULT 'pending',
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
     for (const col of SCHEMA_COLUMNS) {
       await query(`ALTER TABLE bookings ADD COLUMN IF NOT EXISTS ${col}`).catch(() => {});
     }
 
-    await query(
-      `UPDATE bookings SET cancel_request_status='none' WHERE cancel_request_status IS NULL`,
-    ).catch(() => {});
+    await query(`
+      UPDATE bookings
+         SET cancel_request_status = 'none'
+       WHERE cancel_request_status IS NULL
+    `).catch(() => {});
   })().catch((err) => {
     _schemaReadyPromise = null;
     logger.warn("[Bookings] ensureSchemaColumns failed:", err.message);
   });
+
   return _schemaReadyPromise;
 };
 
 ensureSchemaColumns().catch((err) =>
-  logger.warn("[Bookings] ensureSchemaColumns startup:", err.message),
+  logger.warn("[Bookings] ensureSchemaColumns startup failed:", err.message),
 );
 
-/* ═══════════════════════════════════════════════════════════════════
-   CREATE BOOKING   POST /api/bookings
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   CREATE BOOKING — POST /api/bookings
+═════════════════════════════════════════════════════════════════════ */
 exports.create = async (req, res, next) => {
   try {
     await ensureSchemaColumns().catch((e) =>
-      logger.warn("[Bookings] ensureSchemaColumns (create):", e.message),
+      logger.warn("[Bookings] ensureSchemaColumns(create):", e.message),
     );
 
-    const body   = normalizeBookingData(req.body);
+    const body = normalizeBookingData(req.body || {});
     const errors = validateBooking(body);
-    if (errors.length)
-      return res.status(400).json({ success: false, errors });
 
-    const bookingNumber     = generateBookingNumber();
+    if (errors.length) {
+      return res.status(400).json({
+        success: false,
+        message: errors[0]?.message || "Please check your booking details.",
+        errors,
+      });
+    }
+
+    const bookingNumber = generateBookingNumber();
     const verificationToken = crypto.randomBytes(48).toString("hex");
-    const tokenExpiry       = new Date(Date.now() + VERIFY_EXPIRY_H * 3_600_000);
-    const emailVerified     = !!req.user?.id;
-
-    /* Build INSERT values using safe/safeInt/safeDate everywhere */
-    const values = [
-      bookingNumber,                                 // $1
-      safe(req.user?.id),                           // $2
-      safe(body.package_id),                         // $3
-      safe(body.destination_id),                     // $4
-      safe(body.service_id),                         // $5
-      safe(body.booking_type, "custom"),              // $6
-      body.full_name,                                 // $7 (validated)
-      body.email,                                     // $8 (validated)
-      safe(body.phone),                              // $9
-      safe(body.whatsapp),                           // $10
-      safe(body.nationality),                        // $11
-      safe(body.country),                            // $12
-      safe(body.country_id),                         // $13
-      safeDate(body.travel_date),                    // $14  (arrival date)
-      safeDate(body.return_date),                    // $15  (departure date)
-      body.flexible_dates === true || body.flexible_dates === "true" ? true : false, // $16
-      safe(body.flexible_months),                    // $17
-      safeInt(body.number_of_travelers, 1, 1, 500),  // $18
-      safeInt(body.number_of_adults, 1, 0, 500),     // $19
-      safeInt(body.number_of_children, 0, 0, 500),  // $20
-      safe(body.accommodation_type),                 // $21
-      safe(body.dietary_requirements),               // $22
-      safe(body.accessibility_needs),                // $23
-      safe(body.special_requests),                   // $24
-      safe(body.customer_notes),                     // $25
-      safe(body.group_type),                         // $26
-      safe(body.marketing_source),                   // $27
-      body.newsletter_opt_in === true || body.newsletter_opt_in === "true" ? true : false, // $28
-      safe(body.preferred_contact_method),           // $29
-      safe(body.preferred_contact_time),             // $30
-      safe(body.pickup_location),                    // $31
-      safe(body.source, "website"),                  // $32
-      "pending",                                     // $33
-      emailVerified,                                 // $34
-      emailVerified ? null : verificationToken,     // $35
-      emailVerified ? null : tokenExpiry,             // $36
-    ];
+    const tokenExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
+    const emailVerified = !!req.user?.id;
 
     const { rows } = await query(
       `INSERT INTO bookings (
           booking_number,
-          user_id, package_id, destination_id, service_id,
-          booking_type, full_name, email, phone, whatsapp,
-          nationality, country, country_id,
+          user_id, package_id, destination_id, service_id, country_id,
+          booking_type,
+          full_name, email, phone, whatsapp,
+          nationality, country, destination_name, country_name,
           travel_date, return_date, flexible_dates, flexible_months,
           number_of_travelers, number_of_adults, number_of_children,
-          accommodation_type, dietary_requirements, accessibility_needs,
-          special_requests, customer_notes,
+          accommodation_type, room_type,
+          dietary_requirements, special_requests, accessibility_needs, customer_notes,
+          children_ages, travelers_details, emergency_contact,
           group_type, marketing_source, newsletter_opt_in,
           preferred_contact_method, preferred_contact_time, pickup_location,
-          source, status,
+          source, status, payment_status,
           email_verified, verification_token, verification_token_exp,
           created_at, updated_at
         ) VALUES (
           $1,
-          $2,$3,$4,$5,
-          $6,$7,$8,$9,$10,
-          $11,$12,$13,
-          $14,$15,$16,$17,
-          $18,$19,$20,
-          $21,$22,$23,
-          $24,$25,
-          $26,$27,$28,
+          $2,$3,$4,$5,$6,
+          $7,
+          $8,$9,$10,$11,
+          $12,$13,$14,$15,
+          $16,$17,$18,$19,
+          $20,$21,$22,
+          $23,$24,
+          $25,$26,$27,$28,
           $29,$30,$31,
-          $32,$33,
-          $34,$35,$36,
+          $32,$33,$34,
+          $35,$36,$37,
+          $38,'pending','pending',
+          $39,$40,$41,
           NOW(),NOW()
-        ) RETURNING *`,
-      values,
+        )
+        RETURNING *`,
+      [
+        bookingNumber,
+
+        req.user?.id || body.user_id || null,
+        body.package_id,
+        body.destination_id,
+        body.service_id,
+        body.country_id,
+
+        body.booking_type || "custom",
+
+        body.full_name,
+        body.email,
+        body.phone,
+        body.whatsapp,
+
+        body.nationality,
+        body.country,
+        body.destination_name,
+        body.country_name,
+
+        body.travel_date,
+        body.return_date,
+        body.flexible_dates,
+        body.flexible_months,
+
+        body.number_of_travelers || 1,
+        body.number_of_adults ?? 1,
+        body.number_of_children ?? 0,
+
+        body.accommodation_type,
+        body.room_type,
+
+        body.dietary_requirements,
+        body.special_requests,
+        body.accessibility_needs,
+        body.customer_notes,
+
+        body.children_ages,
+        body.travelers_details,
+        body.emergency_contact,
+
+        body.group_type,
+        body.marketing_source,
+        body.newsletter_opt_in,
+
+        body.preferred_contact_method,
+        body.preferred_contact_time,
+        body.pickup_location,
+
+        body.source || "website",
+
+        emailVerified,
+        emailVerified ? null : verificationToken,
+        emailVerified ? null : tokenExpiry,
+      ],
     );
 
     const booking = rows[0];
-    const full    = await getBookingDetail(booking.id);
+    const full = (await getBookingDetail(booking.id)) || booking;
 
-    /* ── AUTHENTICATED USER ── */
     if (emailVerified) {
-      if (sendBookingReceivedEmail && full) {
-        sendBookingReceivedEmail(full).catch((e) =>
-          logger.warn("[Bookings] sendBookingReceivedEmail:", e.message),
-        );
-      }
-      if (sendAdminBookingNotification && full) {
-        sendAdminBookingNotification(full).catch((e) =>
-          logger.warn("[Bookings] sendAdminBookingNotification:", e.message),
-        );
-      }
-      notifyUserBookingEvent({
-        req,
-        user:    { id: req.user.id, email: req.user.email },
-        booking: full || booking,
-        title:       "Booking Request Received! 🎉",
-        message:     `We've received your booking request ${bookingNumber} and our team has been notified. We'll reply within 24 hours.`,
-        actionUrl:   "/my-bookings",
-        actionLabel: "Track Booking",
-      });
-      pingAdminNewRequest(full || booking);
-      if (startBookingConversation) {
-        startBookingConversation(full || booking, {
-          ipAddress: req.ip || req.headers["x-forwarded-for"],
-        }).catch((e) =>
-          logger.warn("[Bookings] startBookingConversation:", e.message),
-        );
+      if (sendBookingReceivedEmail) {
+        asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail");
       }
 
-    /* ── GUEST USER ── */
+      if (sendAdminBookingNotification) {
+        asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
+      }
+
+      asyncNoThrow(
+        notifyUserBookingEvent({
+          user: { id: req.user.id, email: req.user.email || body.email },
+          booking: full,
+          title: "Booking Request Received! 🎉",
+          message: `We've received your booking request ${bookingNumber}. We'll reply within 24 hours.`,
+          actionUrl: "/my-bookings",
+          actionLabel: "Track Booking",
+        }),
+        "notifyUserBookingEvent",
+      );
+
+      pingAdminNewRequest(full);
+
+      if (startBookingConversation) {
+        asyncNoThrow(
+          startBookingConversation(full, {
+            ipAddress: req.ip || req.headers["x-forwarded-for"],
+          }),
+          "startBookingConversation",
+        );
+      }
     } else {
-      if (sendBookingVerificationLink && full) {
-        sendBookingVerificationLink(full, verificationToken).catch((e) =>
-          logger.error("[Bookings] sendBookingVerificationLink:", e.message),
+      if (sendBookingVerificationLink) {
+        asyncNoThrow(
+          sendBookingVerificationLink(full, verificationToken),
+          "sendBookingVerificationLink",
         );
       } else {
-        logger.warn("[Bookings] sendBookingVerificationLink not available — verification email skipped");
+        logger.warn("[Bookings] sendBookingVerificationLink not available — skipped");
       }
 
-      notifyUserBookingEvent({
-        req,
-        user:    { id: null, email: booking.email },
-        booking: full || booking,
-        title:       "Booking Request Received! 🎉",
-        message:     `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. Please confirm your email so our team can start planning.`,
-        actionUrl:   "/booking/verify",
-        actionLabel: "Confirm Email",
-      });
-      pingAdminNewRequest(full || booking);
+      asyncNoThrow(
+        notifyUserBookingEvent({
+          user: { id: null, email: booking.email },
+          booking: full,
+          title: "Booking Request Received! 🎉",
+          message: `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. Please confirm your email so our team can start planning.`,
+          actionUrl: "/booking/verify",
+          actionLabel: "Confirm Email",
+        }),
+        "notifyUserBookingEvent(guest)",
+      );
+
+      pingAdminNewRequest(full);
+
       if (startBookingConversation) {
-        startBookingConversation(full || booking, {
-          ipAddress: req.ip || req.headers["x-forwarded-for"],
-        }).catch((e) =>
-          logger.warn("[Bookings] startBookingConversation (guest):", e.message),
+        asyncNoThrow(
+          startBookingConversation(full, {
+            ipAddress: req.ip || req.headers["x-forwarded-for"],
+          }),
+          "startBookingConversation(guest)",
         );
       }
     }
 
-    logger.info(`[Bookings] ✅ Created: ${bookingNumber} | verified=${emailVerified}`);
+    await logActivity(
+      booking.id,
+      "created",
+      `Booking ${bookingNumber} created via ${body.source || "website"}`,
+      req.admin?.id || req.user?.id || null,
+    );
+
+    logger.info(`[Bookings] ✅ Created: ${bookingNumber} | emailVerified=${emailVerified}`);
 
     return res.status(201).json({
-      success:       true,
+      success: true,
       data: {
-        id:             booking.id,
+        id: booking.id,
         booking_number: bookingNumber,
+        bookingRef: bookingNumber,
       },
+      bookingRef: bookingNumber,
       emailVerified,
       message: emailVerified
         ? "Booking submitted successfully! We will contact you within 24 hours."
-        : "Booking created! Please check your email and click the confirmation link to send your request to our team.",
+        : "Booking created! Please check your email and click the confirmation link.",
     });
   } catch (err) {
-    logger.error("[Bookings] create:", err.message, err.stack);
+    logger.error("[Bookings] create:", err.message);
     next(err);
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    VERIFY EMAIL
-═══════════════════════════════════════════════════════════════════ */
-exports.verifyEmail = async (req, res, next) => {
+═════════════════════════════════════════════════════════════════════ */
+exports.verifyEmail = async (req, res) => {
   try {
-    const { token }   = req.params;
+    const { token } = req.params;
     const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
 
     if (!token || token.length < 32) {
@@ -689,21 +949,23 @@ exports.verifyEmail = async (req, res, next) => {
 
     const { rows } = await query(
       `SELECT * FROM bookings
-       WHERE verification_token     = $1
-         AND email_verified         = false
-         AND verification_token_exp > NOW()
-       LIMIT 1`,
+        WHERE verification_token = $1
+          AND email_verified = false
+          AND verification_token_exp > NOW()
+        LIMIT 1`,
       [token],
     );
 
     if (!rows[0]) {
       const { rows: used } = await query(
-        `SELECT id, email_verified FROM bookings
-         WHERE verification_token = $1 LIMIT 1`,
+        `SELECT id, email_verified FROM bookings WHERE verification_token = $1 LIMIT 1`,
         [token],
       );
-      if (used[0]?.email_verified)
+
+      if (used[0]?.email_verified) {
         return res.redirect(`${frontendUrl}/booking/verify?status=already_verified`);
+      }
+
       return res.redirect(`${frontendUrl}/booking/verify?status=expired`);
     }
 
@@ -711,43 +973,42 @@ exports.verifyEmail = async (req, res, next) => {
 
     await query(
       `UPDATE bookings
-         SET email_verified         = true,
-             email_verified_at      = NOW(),
-             verification_token     = NULL,
-             verification_token_exp = NULL,
-             updated_at             = NOW()
-       WHERE id = $1`,
+          SET email_verified = true,
+              email_verified_at = NOW(),
+              verification_token = NULL,
+              verification_token_exp = NULL,
+              updated_at = NOW()
+        WHERE id = $1`,
       [booking.id],
     );
 
-    logger.info(`[Bookings] ✅ Email verified: ${safe(booking.booking_number, "—")}`);
+    logger.info(`[Bookings] ✅ Email verified: ${booking.booking_number}`);
 
-    const full = await getBookingDetail(booking.id);
+    const full = (await getBookingDetail(booking.id)) || booking;
 
-    if (sendBookingReceivedEmail && full) {
-      sendBookingReceivedEmail(full).catch((e) =>
-        logger.warn("[Bookings] sendBookingReceivedEmail (verify):", e.message),
-      );
-    }
-    if (sendAdminBookingNotification && full) {
-      sendAdminBookingNotification(full).catch((e) =>
-        logger.warn("[Bookings] sendAdminBookingNotification (verify):", e.message),
-      );
+    if (sendBookingReceivedEmail) {
+      asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail after verify");
     }
 
-    pingAdminNewRequest(full || booking);
+    if (sendAdminBookingNotification) {
+      asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification after verify");
+    }
+
+    pingAdminNewRequest(full);
+
     if (startBookingConversation) {
-      startBookingConversation(full || booking, {
-        ipAddress: req.ip || req.headers["x-forwarded-for"],
-      }).catch((e) =>
-        logger.warn("[Bookings] startBookingConversation (verify):", e.message),
+      asyncNoThrow(
+        startBookingConversation(full, {
+          ipAddress: req.ip || req.headers["x-forwarded-for"],
+        }),
+        "startBookingConversation verify",
       );
     }
 
-    logActivity(booking.id, "email_verified", "Customer verified email address");
+    await logActivity(booking.id, "email_verified", "Customer verified email address");
 
     return res.redirect(
-      `${frontendUrl}/booking/verify?status=success&ref=${safe(booking.booking_number)}`,
+      `${frontendUrl}/booking/verify?status=success&ref=${booking.booking_number}`,
     );
   } catch (err) {
     logger.error("[Bookings] verifyEmail:", err.message);
@@ -756,35 +1017,42 @@ exports.verifyEmail = async (req, res, next) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    RESEND VERIFICATION
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.resendVerification = async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id, 10);
+    const id = safeId(req.params.id);
+
     const { rows } = await query(
-      `SELECT * FROM bookings WHERE id=$1 AND email_verified=false`,
+      `SELECT * FROM bookings WHERE id = $1 AND email_verified = false`,
       [id],
     );
-    if (!rows[0])
+
+    if (!rows[0]) {
       return res.status(404).json({
         success: false,
         error: "Booking not found or already verified",
       });
+    }
 
-    const newToken  = crypto.randomBytes(48).toString("hex");
-    const newExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3_600_000);
+    const newToken = crypto.randomBytes(48).toString("hex");
+    const newExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
 
     await query(
       `UPDATE bookings
-         SET verification_token=$1, verification_token_exp=$2, updated_at=NOW()
-       WHERE id=$3`,
+          SET verification_token = $1,
+              verification_token_exp = $2,
+              updated_at = NOW()
+        WHERE id = $3`,
       [newToken, newExpiry, id],
     );
 
     const full = await getBookingDetail(id);
-    if (sendBookingVerificationLink && full)
+
+    if (sendBookingVerificationLink && full) {
       await sendBookingVerificationLink(full, newToken);
+    }
 
     return res.json({
       success: true,
@@ -796,18 +1064,20 @@ exports.resendVerification = async (req, res, next) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    ADMIN CREATE
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.adminCreate = async (req, res, next) => {
   try {
-    const adminId = safe(req.admin?.id);
-    const body    = normalizeBookingData(req.body);
+    await ensureSchemaColumns();
+
+    const adminId = req.admin?.id || req.user?.id || null;
+    const body = normalizeBookingData(req.body || {});
 
     if (!body.user_id && body.email) {
       const { rows: u } = await query(
-        "SELECT id FROM users WHERE email=$1",
-        [String(body.email).toLowerCase().trim()],
+        "SELECT id FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [body.email],
       );
       if (u[0]) body.user_id = u[0].id;
     }
@@ -821,77 +1091,103 @@ exports.adminCreate = async (req, res, next) => {
       `INSERT INTO bookings (
           booking_number, user_id, full_name, email, phone,
           travel_date, return_date, number_of_travelers,
-          status, source, admin_notes,
-          email_verified, created_at, updated_at
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'confirmed','admin_manual',$9,true,NOW(),NOW())
+          destination_id, country_id, destination_name, country_name,
+          status, source, admin_notes, email_verified,
+          created_at, updated_at
+        ) VALUES (
+          $1,$2,$3,$4,$5,
+          $6,$7,$8,
+          $9,$10,$11,$12,
+          'confirmed','admin_manual',$13,true,
+          NOW(),NOW()
+        )
         RETURNING *`,
       [
         bookingNumber,
-        safe(body.user_id),
+        body.user_id || null,
         body.full_name,
         body.email,
-        safe(body.phone),
-        safeDate(body.travel_date),
-        safeDate(body.return_date),
-        safeInt(body.number_of_travelers, 1, 1, 500),
-        `Created by admin ID: ${safe(adminId, "unknown")}`,
+        body.phone,
+        body.travel_date,
+        body.return_date,
+        body.number_of_travelers || 1,
+        body.destination_id,
+        body.country_id,
+        body.destination_name,
+        body.country_name,
+        `Created by admin ID: ${adminId || "unknown"}`,
       ],
     );
 
     const booking = rows[0];
-    const full    = await getBookingDetail(booking.id);
+    const full = (await getBookingDetail(booking.id)) || booking;
 
-    if (sendBookingConfirmation && full) {
-      sendBookingConfirmation(full).catch((e) =>
-        logger.warn("[Bookings] adminCreate — sendBookingConfirmation:", e.message),
-      );
+    if (sendBookingConfirmation) {
+      asyncNoThrow(sendBookingConfirmation(full), "adminCreate sendBookingConfirmation");
     }
 
     if (body.user_id) {
-      createNotificationInternal({
-        userId:      body.user_id,
-        userEmail:   body.email,
-        type:        "booking_created",
-        title:       "New Booking Created for You",
-        message:     `An admin has created booking ${bookingNumber} on your behalf.`,
-        actionUrl:   "/my-bookings",
-        actionLabel: "View Booking",
-        priority:    "high",
-        category:    "booking",
-        senderType:  "admin",
-        senderId:    adminId,
-      }).catch(() => {});
+      asyncNoThrow(
+        createNotificationInternal({
+          userId: body.user_id,
+          userEmail: body.email,
+          type: "booking_created",
+          title: "New Booking Created for You",
+          message: `An admin has created booking ${bookingNumber} on your behalf.`,
+          actionUrl: "/my-bookings",
+          actionLabel: "View Booking",
+          priority: "high",
+          category: "booking",
+          senderType: "admin",
+          senderId: adminId,
+        }),
+        "adminCreate createNotification",
+      );
     }
 
+    await logActivity(booking.id, "admin_created", `Admin created ${bookingNumber}`, adminId);
+
     logger.info(`[Bookings] Admin created: ${bookingNumber}`);
-    return res.status(201).json({ success: true, data: booking });
+
+    return res.status(201).json({
+      success: true,
+      data: full,
+      message: "Booking created successfully",
+    });
   } catch (err) {
     logger.error("[Bookings] adminCreate:", err.message);
     next(err);
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   GET ALL
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   GET ALL BOOKINGS
+═════════════════════════════════════════════════════════════════════ */
 exports.getAll = async (req, res, next) => {
   try {
-    await ensureSchemaColumns().catch((e) =>
-      logger.warn("[Bookings] ensureSchemaColumns (getAll):", e.message),
-    );
+    await ensureSchemaColumns();
 
     const {
-      page = 1, limit = 20,
-      status, payment_status, booking_type,
-      destination_id, service_id,
-      search, date_from, date_to,
-      travel_date_from, travel_date_to,
-      email_verified, cancel_request_status,
-      sortBy = "created_at", order = "desc",
+      page = 1,
+      limit = 20,
+      status,
+      payment_status,
+      booking_type,
+      destination_id,
+      service_id,
+      search,
+      date_from,
+      date_to,
+      travel_date_from,
+      travel_date_to,
+      email_verified,
+      cancel_request_status,
+      sortBy = "created_at",
+      order = "desc",
     } = req.query;
 
     const params = [];
-    const conds  = ["1=1"];
+    const conds = ["1=1"];
     let pi = 1;
 
     const push = (clause, value) => {
@@ -899,74 +1195,76 @@ exports.getAll = async (req, res, next) => {
       params.push(value);
     };
 
-    if (status)               push("b.status=?",                status);
-    if (payment_status)       push("b.payment_status=?",        payment_status);
-    if (booking_type)         push("b.booking_type=?",          booking_type);
-    if (destination_id)       push("b.destination_id=?",        parseInt(destination_id, 10));
-    if (service_id)           push("b.service_id=?",            parseInt(service_id, 10));
-    if (date_from)            push("b.created_at>=?",           date_from);
-    if (date_to)              push("b.created_at<=?",           date_to);
-    if (travel_date_from)     push("b.travel_date>=?",          travel_date_from);
-    if (travel_date_to)       push("b.travel_date<=?",          travel_date_to);
-    if (email_verified !== undefined)
-      push("b.email_verified=?", email_verified === "true");
-    if (cancel_request_status)
-      push("b.cancel_request_status=?", cancel_request_status);
+    if (status) push("b.status=?", status);
+    if (payment_status) push("b.payment_status=?", payment_status);
+    if (booking_type) push("b.booking_type=?", booking_type);
+    if (destination_id) push("b.destination_id=?", safeId(destination_id));
+    if (service_id) push("b.service_id=?", safeId(service_id));
+    if (date_from) push("b.created_at>=?", date_from);
+    if (date_to) push("b.created_at<=?", date_to);
+    if (travel_date_from) push("b.travel_date>=?", travel_date_from);
+    if (travel_date_to) push("b.travel_date<=?", travel_date_to);
+    if (email_verified !== undefined) push("b.email_verified=?", email_verified === "true");
+    if (cancel_request_status) push("b.cancel_request_status=?", cancel_request_status);
 
     if (search) {
       const t = `%${String(search).trim()}%`;
       conds.push(
-        `(b.full_name ILIKE $${pi} OR b.email ILIKE $${pi} ` +
-        `OR b.booking_number ILIKE $${pi} OR b.phone ILIKE $${pi})`,
+        `(b.full_name ILIKE $${pi}
+          OR b.email ILIKE $${pi}
+          OR b.booking_number ILIKE $${pi}
+          OR b.phone ILIKE $${pi}
+          OR b.destination_name ILIKE $${pi}
+          OR b.country_name ILIKE $${pi})`,
       );
       params.push(t);
       pi++;
     }
 
-    const where    = conds.join(" AND ");
-    const sortCol  = ALLOWED_SORT.has(sortBy) ? sortBy : "created_at";
-    const sortDir  = String(order).toUpperCase() === "ASC" ? "ASC" : "DESC";
+    const where = conds.join(" AND ");
+    const sortCol = ALLOWED_SORT.has(sortBy) ? sortBy : "created_at";
+    const sortDir = String(order).toUpperCase() === "ASC" ? "ASC" : "DESC";
     const limitNum = safeInt(limit, 20, 1, 100);
-    const pageNum  = safeInt(page,  1,  1, 9999);
-    const offset   = (pageNum - 1) * limitNum;
+    const pageNum = safeInt(page, 1, 1, 9999);
+    const offset = (pageNum - 1) * limitNum;
 
     const [countRes, dataRes] = await Promise.all([
       query(`SELECT COUNT(*) FROM bookings b WHERE ${where}`, params),
       query(
         `SELECT b.*,
-                d.name      AS destination_name,
-                d.slug      AS destination_slug,
-                d.image_url AS destination_image,
-                c.name      AS country_name,
-                s.title     AS service_name,
-                p.title     AS package_name,
+                COALESCE(d.name, b.destination_name) AS destination_name,
+                d.slug AS destination_slug,
+                COALESCE(d.image_url, d.thumbnail_url) AS destination_image,
+                COALESCE(c.name, b.country_name, b.country) AS country_name,
+                s.title AS service_name,
+                p.title AS package_name,
                 u.full_name AS user_name,
-                u.email     AS user_email
+                u.email AS user_email
            FROM bookings b
            LEFT JOIN destinations d ON b.destination_id = d.id
-           LEFT JOIN countries    c ON d.country_id     = c.id
-           LEFT JOIN services     s ON b.service_id     = s.id
-           LEFT JOIN packages     p ON b.package_id     = p.id
-           LEFT JOIN users        u ON b.user_id        = u.id
-           WHERE ${where}
-           ORDER BY b.${sortCol} ${sortDir}
-           LIMIT $${pi} OFFSET $${pi + 1}`,
+           LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+           LEFT JOIN services s ON b.service_id = s.id
+           LEFT JOIN packages p ON b.package_id = p.id
+           LEFT JOIN users u ON b.user_id = u.id
+          WHERE ${where}
+          ORDER BY b.${sortCol} ${sortDir}
+          LIMIT $${pi} OFFSET $${pi + 1}`,
         [...params, limitNum, offset],
       ),
     ]);
 
-    const total = parseInt(safe(countRes.rows[0].count, 0), 10);
+    const total = parseInt(countRes.rows[0].count, 10);
 
     return res.json({
       success: true,
-      data:    dataRes.rows,
+      data: dataRes.rows,
       pagination: {
         total,
-        page:        pageNum,
-        limit:       limitNum,
+        page: pageNum,
+        limit: limitNum,
         total_pages: Math.ceil(total / limitNum),
-        has_next:    pageNum < Math.ceil(total / limitNum),
-        has_prev:    pageNum > 1,
+        has_next: pageNum < Math.ceil(total / limitNum),
+        has_prev: pageNum > 1,
       },
     });
   } catch (err) {
@@ -975,62 +1273,74 @@ exports.getAll = async (req, res, next) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   TRACK
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   TRACK BOOKING
+═════════════════════════════════════════════════════════════════════ */
 exports.track = async (req, res, next) => {
   try {
-    const { bookingNumber } = req.params;
-    if (!String(bookingNumber || "").trim())
-      return res.status(400).json({ success: false, error: "Booking number required" });
+    const bookingNumber = safeText(req.params.bookingNumber, "");
+
+    if (!bookingNumber) {
+      return res.status(400).json({
+        success: false,
+        error: "Booking number required",
+      });
+    }
 
     const booking = await getBookingDetail(
-      String(bookingNumber).trim().toUpperCase(),
+      bookingNumber.toUpperCase(),
       "booking_number",
     );
-    if (!booking)
-      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
     return res.json({
       success: true,
       data: {
-        booking_number:      booking.booking_number,
-        status:              booking.status,
-        payment_status:      safe(booking.payment_status, "pending"),
-        email_verified:      !!booking.email_verified,
-        travel_date:         safe(booking.travel_date),
-        return_date:         safe(booking.return_date),
-        number_of_travelers: safe(booking.number_of_travelers, 1),
-        destination:         safe(booking.destination_name),
-        service:             safe(booking.service_name),
-        package:             safe(booking.package_name),
-        country:             safe(booking.country_name),
-        created_at:          booking.created_at,
-        confirmed_at:        safe(booking.confirmed_at),
-        status_message:      getStatusMessage(booking.status),
+        booking_number: booking.booking_number,
+        status: booking.status,
+        payment_status: booking.payment_status,
+        email_verified: booking.email_verified,
+        travel_date: booking.travel_date,
+        return_date: booking.return_date,
+        number_of_travelers: booking.number_of_travelers,
+        destination: booking.destination_name,
+        service: booking.service_name,
+        package: booking.package_name,
+        country: booking.country_name,
+        created_at: booking.created_at,
+        confirmed_at: booking.confirmed_at,
+        status_message: getStatusMessage(booking.status),
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    MY BOOKINGS
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.getMyBookings = async (req, res) => {
   try {
     const userId = req.user.id;
-    const page   = Math.max(1, parseInt(req.query.page  || "1",  10));
-    const limit  = Math.min(100, parseInt(req.query.limit || "10", 10));
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(100, parseInt(req.query.limit || "10", 10));
     const offset = (page - 1) * limit;
     const status = req.query.status || null;
 
     let statusFilter = "";
-    const params     = [userId];
+    const params = [userId];
     let p = 2;
 
     if (status) {
       const statuses = String(status).split(",").map((s) => s.trim());
-      statusFilter   = ` AND b.status = ANY($${p}::text[])`;
+      statusFilter = ` AND b.status = ANY($${p}::text[])`;
       params.push(statuses);
       p++;
     }
@@ -1038,64 +1348,72 @@ exports.getMyBookings = async (req, res) => {
     params.push(limit, offset);
 
     const { rows } = await query(
-      `SELECT
-         b.*,
-         COALESCE(d.name, b.destination_name, '')  AS destination_name,
-         COALESCE(d.thumbnail_url, '')              AS destination_image,
-         COALESCE(d.slug, '')                       AS destination_slug,
-         COALESCE(c.name, b.country_name, '')       AS country_name,
-         s.name                                     AS service_name,
-         a.name                                     AS accommodation_type_name
-       FROM bookings b
-       LEFT JOIN destinations  d ON d.id = b.destination_id
-       LEFT JOIN countries     c ON c.id = b.country_id OR c.id = d.country_id
-       LEFT JOIN services      s ON s.id = b.service_id
-       LEFT JOIN accommodations a ON a.id = b.accommodation_id
-       WHERE b.user_id = $1
-         ${statusFilter}
-       ORDER BY
-         CASE WHEN b.status = 'confirmed' THEN 0 ELSE 1 END,
-         b.travel_date ASC NULLS LAST,
-         b.created_at  DESC
-       LIMIT $${p++} OFFSET $${p++}`,
+      `SELECT b.*,
+              COALESCE(d.name, b.destination_name, '') AS destination_name,
+              COALESCE(d.thumbnail_url, d.image_url, '') AS destination_image,
+              COALESCE(d.slug, '') AS destination_slug,
+              COALESCE(c.name, b.country_name, b.country, '') AS country_name,
+              s.title AS service_name
+         FROM bookings b
+         LEFT JOIN destinations d ON d.id = b.destination_id
+         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services s ON s.id = b.service_id
+        WHERE b.user_id = $1
+          ${statusFilter}
+        ORDER BY
+          CASE WHEN b.status = 'confirmed' THEN 0 ELSE 1 END,
+          b.travel_date ASC NULLS LAST,
+          b.created_at DESC
+        LIMIT $${p++} OFFSET $${p++}`,
       params,
-    ).catch(async () =>
+    ).catch(() =>
       query(
-        `SELECT * FROM bookings WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`,
+        `SELECT * FROM bookings
+          WHERE user_id = $1
+          ORDER BY created_at DESC
+          LIMIT $2 OFFSET $3`,
         [userId, limit, offset],
       ),
     );
 
-    const countRes = await query("SELECT COUNT(*) FROM bookings WHERE user_id=$1", [userId]);
-    const total = parseInt(safe(countRes.rows[0].count, 0), 10);
+    const countRes = await query(
+      `SELECT COUNT(*) FROM bookings WHERE user_id = $1`,
+      [userId],
+    );
 
+    const total = parseInt(countRes.rows[0].count, 10);
     const completed = rows.filter((b) => b.status === "completed");
     const countries = [...new Set(rows.map((b) => b.country_name).filter(Boolean))];
 
     return res.json({
-      success:  true,
-      data:     rows,
+      success: true,
+      data: rows,
       bookings: rows,
       stats: {
         total,
-        completed:         completed.length,
+        completed: completed.length,
         countries_visited: countries.length,
-        paid:   rows.filter((b) => b.payment_status === "paid").length,
+        paid: rows.filter((b) => b.payment_status === "paid").length,
         unpaid: rows.filter((b) => ["unpaid", "pending"].includes(b.payment_status)).length,
       },
       pagination: {
-        page, limit, total,
+        page,
+        limit,
+        total,
         total_pages: Math.ceil(total / limit),
       },
     });
   } catch (err) {
-    res.status(500).json({ success: false, message: err.message });
+    return res.status(500).json({
+      success: false,
+      message: err.message || "Failed to load bookings",
+    });
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    STATS
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.getStats = async (req, res, next) => {
   try {
     const period = req.query.period === "6months" ? "6 months" : "12 months";
@@ -1121,7 +1439,7 @@ exports.getStats = async (req, res, next) => {
         `),
         query(`
           SELECT
-            TO_CHAR(created_at,'YYYY-MM')  AS month,
+            TO_CHAR(created_at,'YYYY-MM') AS month,
             TO_CHAR(created_at,'Mon YYYY') AS month_label,
             COUNT(*)::INTEGER AS total,
             COUNT(*) FILTER (WHERE status='confirmed')::INTEGER AS confirmed,
@@ -1174,12 +1492,12 @@ exports.getStats = async (req, res, next) => {
     return res.json({
       success: true,
       data: {
-        overview:         overview.rows[0],
-        monthly_trends:   monthly.rows,
+        overview: overview.rows[0],
+        monthly_trends: monthly.rows,
         top_destinations: topDest.rows,
-        by_source:        bySrc.rows,
-        upcoming:         upcoming.rows[0],
-        conversion_rate:  parseFloat(safe(conversion.rows[0]?.conversion_rate, 0)),
+        by_source: bySrc.rows,
+        upcoming: upcoming.rows[0],
+        conversion_rate: parseFloat(conversion.rows[0]?.conversion_rate || 0),
       },
       generated_at: new Date().toISOString(),
     });
@@ -1189,116 +1507,184 @@ exports.getStats = async (req, res, next) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    GET ONE
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.getOne = async (req, res, next) => {
   try {
-    const id = parseInt(req.params.id, 10);
-    if (!id || id < 1)
-      return res.status(400).json({ success: false, error: "Invalid booking ID" });
+    const id = safeId(req.params.id);
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid booking ID",
+      });
+    }
 
     const booking = await getBookingDetail(id);
-    if (!booking)
-      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    if (!booking) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
     let history = [];
     try {
       const h = await query(
         `SELECT action, description, created_at, admin_id
            FROM activity_log
-           WHERE entity_type='booking' AND entity_id=$1
-           ORDER BY created_at DESC
-           LIMIT 30`,
+          WHERE entity_type = 'booking'
+            AND entity_id = $1
+          ORDER BY created_at DESC
+          LIMIT 30`,
         [id],
       );
       history = h.rows;
-    } catch { /* non-fatal */ }
+    } catch {
+      // non-fatal
+    }
 
     return res.json({
       success: true,
-      data:    { ...booking, activity_history: history },
+      data: { ...booking, activity_history: history },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    UPDATE
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.update = async (req, res, next) => {
   try {
-    const id      = parseInt(req.params.id, 10);
-    const adminId = safe(req.admin?.id || req.user?.id);
+    const id = safeId(req.params.id);
+    const adminId = req.admin?.id || req.user?.id || null;
 
     const { rows: ex } = await query("SELECT id FROM bookings WHERE id=$1", [id]);
-    if (!ex[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
+    if (!ex[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
+
+    const normalized = normalizeBookingData(req.body || {});
 
     const ALLOWED_FIELDS = [
-      "full_name", "email", "phone", "whatsapp", "nationality", "country",
-      "travel_date", "return_date", "flexible_dates",
-      "number_of_travelers", "number_of_adults", "number_of_children", "children_ages",
-      "accommodation_type", "room_type", "dietary_requirements",
-      "special_requests", "accessibility_needs",
-      "travelers_details", "emergency_contact",
-      "admin_notes", "internal_notes", "customer_notes", "payment_status",
+      "full_name",
+      "email",
+      "phone",
+      "whatsapp",
+      "nationality",
+      "country",
+      "country_id",
+      "destination_id",
+      "destination_name",
+      "country_name",
+      "travel_date",
+      "return_date",
+      "flexible_dates",
+      "number_of_travelers",
+      "number_of_adults",
+      "number_of_children",
+      "children_ages",
+      "accommodation_type",
+      "room_type",
+      "dietary_requirements",
+      "special_requests",
+      "accessibility_needs",
+      "travelers_details",
+      "emergency_contact",
+      "admin_notes",
+      "internal_notes",
+      "customer_notes",
+      "payment_status",
+      "marketing_source",
+      "preferred_contact_method",
+      "preferred_contact_time",
+      "pickup_location",
     ];
 
     const updates = {};
-    for (const f of ALLOWED_FIELDS)
-      if (req.body[f] !== undefined) updates[f] = req.body[f];
+    for (const f of ALLOWED_FIELDS) {
+      if (normalized[f] !== undefined) updates[f] = normalized[f];
+      else if (req.body[f] !== undefined) updates[f] = safe(req.body[f], null);
+    }
 
-    if (!Object.keys(updates).length)
-      return res.status(400).json({ success: false, error: "No valid fields to update" });
+    if (!Object.keys(updates).length) {
+      return res.status(400).json({
+        success: false,
+        error: "No valid fields to update",
+      });
+    }
 
     const errs = validateBooking(updates, true);
-    if (errs.length)
-      return res.status(400).json({ success: false, errors: errs });
+    if (errs.length) return res.status(400).json({ success: false, errors: errs });
 
-    for (const f of ["travelers_details", "emergency_contact", "children_ages"])
-      if (updates[f] && typeof updates[f] === "object")
-        updates[f] = JSON.stringify(updates[f]);
-
-    if (updates.travel_date) updates.travel_date = safeDate(updates.travel_date);
-    if (updates.return_date) updates.return_date = safeDate(updates.return_date);
-
-    const fields    = Object.keys(updates);
-    const values    = Object.values(updates);
+    const fields = Object.keys(updates);
+    const values = Object.values(updates);
     const setClause = fields.map((f, i) => `${f}=$${i + 1}`).join(", ");
 
     await query(
-      `UPDATE bookings SET ${setClause}, updated_at=NOW() WHERE id=$${fields.length + 1}`,
+      `UPDATE bookings
+          SET ${setClause}, updated_at=NOW()
+        WHERE id=$${fields.length + 1}`,
       [...values, id],
     );
 
-    logActivity(id, "updated", `Fields: ${fields.join(", ")}`, adminId);
+    await logActivity(id, "updated", `Fields: ${fields.join(", ")}`, adminId);
+
     const updated = await getBookingDetail(id);
-    return res.json({ success: true, message: "Booking updated", data: updated });
+
+    return res.json({
+      success: true,
+      message: "Booking updated",
+      data: updated,
+    });
   } catch (err) {
     logger.error("[Bookings] update:", err.message);
     next(err);
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    UPDATE STATUS
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.updateStatus = async (req, res, next) => {
   try {
-    const id      = parseInt(req.params.id, 10);
-    const adminId = safe(req.admin?.id || req.user?.id);
-    const { status, reason, notify_customer = true } = req.body;
+    const id = safeId(req.params.id);
+    const adminId = req.admin?.id || req.user?.id || null;
+    const status = safeText(req.body.status, null);
+    const reason = safeText(req.body.reason, null);
+    const notify_customer = safeBool(req.body.notify_customer, true);
 
-    if (!status)
-      return res.status(400).json({ success: false, error: "Status is required" });
-    if (!Object.values(BOOKING_STATUS).includes(status))
-      return res.status(400).json({ success: false, error: "Invalid status value" });
+    if (!status) {
+      return res.status(400).json({
+        success: false,
+        error: "Status is required",
+      });
+    }
+
+    if (!Object.values(BOOKING_STATUS).includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status value",
+      });
+    }
 
     const { rows: ex } = await query("SELECT * FROM bookings WHERE id=$1", [id]);
-    if (!ex[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
+    if (!ex[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
     const current = ex[0].status;
+
     if (!isValidTransition(current, status)) {
       return res.status(400).json({
         success: false,
@@ -1309,63 +1695,81 @@ exports.updateStatus = async (req, res, next) => {
       });
     }
 
-    const params  = [status];
-    let pi        = 2;
+    const params = [status];
+    let pi = 2;
     let setClause = "status=$1, updated_at=NOW()";
 
     if (status === "confirmed") {
       const code = generateConfirmationCode();
       setClause += `, confirmed_at=NOW(), confirmation_code=$${pi++}`;
       params.push(code);
-    } else if (status === "cancelled") {
+    }
+
+    if (status === "cancelled") {
       setClause += `, cancelled_at=NOW()`;
-      if (reason) { setClause += `, cancellation_reason=$${pi++}`; params.push(reason); }
-    } else if (status === "completed") {
+      if (reason) {
+        setClause += `, cancellation_reason=$${pi++}`;
+        params.push(reason);
+      }
+    }
+
+    if (status === "completed") {
       setClause += `, completed_at=NOW()`;
     }
 
     params.push(id);
+
     await query(
-      `UPDATE bookings SET ${setClause} WHERE id=$${pi} RETURNING *`,
+      `UPDATE bookings
+          SET ${setClause}
+        WHERE id=$${pi}
+        RETURNING *`,
       params,
     );
 
-    logActivity(id, `status_${status}`, `${current} → ${status}${reason ? `. Reason: ${reason}` : ""}`, adminId);
+    await logActivity(
+      id,
+      `status_${status}`,
+      `${current} → ${status}${reason ? `. Reason: ${reason}` : ""}`,
+      adminId,
+    );
+
     const full = await getBookingDetail(id);
 
     if (notify_customer && full?.email) {
       if (status === "confirmed" && sendBookingConfirmation) {
-        sendBookingConfirmation(full).catch((e) =>
-          logger.warn("[Bookings] sendBookingConfirmation:", e.message),
-        );
+        asyncNoThrow(sendBookingConfirmation(full), "sendBookingConfirmation");
       } else if (status === "cancelled" && sendBookingCancellation) {
-        sendBookingCancellation(full, reason).catch((e) =>
-          logger.warn("[Bookings] sendBookingCancellation:", e.message),
-        );
+        asyncNoThrow(sendBookingCancellation(full, reason), "sendBookingCancellation");
       } else if (sendBookingStatusUpdate) {
-        sendBookingStatusUpdate(full, current, status, reason).catch((e) =>
-          logger.warn("[Bookings] sendBookingStatusUpdate:", e.message),
-        );
+        asyncNoThrow(sendBookingStatusUpdate(full, current, status, reason), "sendBookingStatusUpdate");
       }
     }
 
     if (full?.user_id) {
-      createNotificationInternal({
-        userId:      full.user_id,
-        userEmail:   full.email,
-        type:        `booking_${status}`,
-        title:       `Booking ${status.charAt(0).toUpperCase() + status.slice(1)}`,
-        message:     getStatusMessage(status),
-        actionUrl:   "/my-bookings",
-        actionLabel: "View Booking",
-        category:    "booking",
-        priority:    status === "cancelled" ? "urgent" : "normal",
-        senderType:  "admin",
-        senderId:    adminId,
-      }).catch(() => {});
+      asyncNoThrow(
+        createNotificationInternal({
+          userId: full.user_id,
+          userEmail: full.email,
+          type: `booking_${status}`,
+          title: `Booking ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+          message: getStatusMessage(status),
+          actionUrl: "/my-bookings",
+          actionLabel: "View Booking",
+          category: "booking",
+          priority: status === "cancelled" ? "urgent" : "normal",
+          senderType: "admin",
+          senderId: adminId,
+        }),
+        "updateStatus notification",
+      );
     }
 
-    return res.json({ success: true, message: `Status updated to ${status}`, data: full });
+    return res.json({
+      success: true,
+      message: `Status updated to ${status}`,
+      data: full,
+    });
   } catch (err) {
     logger.error("[Bookings] updateStatus:", err.message);
     next(err);
@@ -1376,55 +1780,60 @@ exports.confirm = (req, res, next) => {
   req.body.status = "confirmed";
   return exports.updateStatus(req, res, next);
 };
+
 exports.cancel = (req, res, next) => {
   req.body.status = "cancelled";
   return exports.updateStatus(req, res, next);
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   SEND COUNTDOWN EMAILS
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   COUNTDOWN EMAILS
+═════════════════════════════════════════════════════════════════════ */
 exports.sendCountdownEmails = async (req, res, next) => {
   try {
     const { rows } = await query(
       `SELECT b.*,
-              d.name  AS destination_name,
-              c.name  AS country_name,
+              COALESCE(d.name, b.destination_name) AS destination_name,
+              COALESCE(c.name, b.country_name, b.country) AS country_name,
               s.title AS service_name,
               p.title AS package_name
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
-         LEFT JOIN countries    c ON d.country_id     = c.id
-         LEFT JOIN services     s ON b.service_id     = s.id
-         LEFT JOIN packages     p ON b.package_id     = p.id
-         WHERE b.status     = 'confirmed'
-           AND b.travel_date >= CURRENT_DATE
-           AND b.email IS NOT NULL`,
+         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services s ON b.service_id = s.id
+         LEFT JOIN packages p ON b.package_id = p.id
+        WHERE b.status = 'confirmed'
+          AND b.travel_date >= CURRENT_DATE
+          AND b.email IS NOT NULL`,
     );
 
-    let sent = 0, skipped = 0, failed = 0;
+    let sent = 0;
+    let skipped = 0;
+    let failed = 0;
 
     for (const booking of rows) {
-      if (!sendTripCountdownEmail) { skipped++; continue; }
+      if (!sendTripCountdownEmail) {
+        skipped++;
+        continue;
+      }
+
       try {
         const result = await sendTripCountdownEmail(booking);
         if (result?.success) sent++;
         else skipped++;
       } catch (e) {
         failed++;
-        logger.warn(
-          `[Bookings] Countdown email failed for ${safe(booking.booking_number, "?")}:`,
-          e.message,
-        );
+        logger.warn(`[Bookings] Countdown email failed for ${booking.booking_number}:`, e.message);
       }
     }
 
     logger.info(`[Bookings] Countdown run: sent=${sent} skipped=${skipped} failed=${failed}`);
+
     if (res) {
       return res.json({
         success: true,
         message: "Countdown emails processed",
-        stats:   { total: rows.length, sent, skipped, failed },
+        stats: { total: rows.length, sent, skipped, failed },
       });
     }
   } catch (err) {
@@ -1434,135 +1843,212 @@ exports.sendCountdownEmails = async (req, res, next) => {
 };
 
 if (process.env.NODE_ENV === "production") {
-  const TWENTY_FOUR_HOURS = 24 * 60 * 60 * 1000;
+  const DAY = 24 * 60 * 60 * 1000;
+
   setTimeout(() => {
     exports.sendCountdownEmails(null, null, (err) => {
       if (err) logger.warn("[Bookings] Startup countdown run failed:", err.message);
     });
+
     setInterval(() => {
       exports.sendCountdownEmails(null, null, (err) => {
         if (err) logger.warn("[Bookings] Daily countdown run failed:", err.message);
       });
-    }, TWENTY_FOUR_HOURS).unref();
+    }, DAY).unref();
   }, 5 * 60 * 1000).unref();
 }
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    DELETE
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.remove = async (req, res, next) => {
   try {
-    const id      = parseInt(req.params.id, 10);
-    const adminId = safe(req.admin?.id || req.user?.id);
+    const id = safeId(req.params.id);
+    const adminId = req.admin?.id || req.user?.id || null;
 
     const { rows } = await query(
       `SELECT id, booking_number, user_id, email, destination_id, service_id
-         FROM bookings WHERE id=$1`,
+         FROM bookings
+        WHERE id=$1`,
       [id],
     );
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    if (!rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
     const b = rows[0];
+
     await query("DELETE FROM bookings WHERE id=$1", [id]);
 
-    if (b.destination_id)
+    if (b.destination_id) {
       query(
         "UPDATE destinations SET booking_count=GREATEST(0,booking_count-1) WHERE id=$1",
         [b.destination_id],
       ).catch(() => {});
-    if (b.service_id)
+    }
+
+    if (b.service_id) {
       query(
         "UPDATE services SET booking_count=GREATEST(0,booking_count-1) WHERE id=$1",
         [b.service_id],
       ).catch(() => {});
-
-    if (b.user_id) {
-      createNotificationInternal({
-        userId:     b.user_id,
-        userEmail:  safe(b.email),
-        type:       "booking_deleted",
-        title:      "Booking Removed",
-        message:    `Your booking ${safe(b.booking_number, "—")} has been removed.`,
-        priority:   "urgent",
-        category:   "booking",
-        senderType: "admin",
-        senderId:   adminId,
-      }).catch(() => {});
     }
 
-    logActivity(id, "deleted", `Booking ${safe(b.booking_number)} deleted`, adminId);
-    return res.json({ success: true, message: "Booking deleted successfully" });
-  } catch (err) { next(err); }
+    if (b.user_id) {
+      asyncNoThrow(
+        createNotificationInternal({
+          userId: b.user_id,
+          userEmail: b.email,
+          type: "booking_deleted",
+          title: "Booking Removed",
+          message: `Your booking ${b.booking_number} has been removed.`,
+          priority: "urgent",
+          category: "booking",
+          senderType: "admin",
+          senderId: adminId,
+        }),
+        "remove notification",
+      );
+    }
+
+    await logActivity(id, "deleted", `Booking ${b.booking_number} deleted`, adminId);
+
+    return res.json({
+      success: true,
+      message: "Booking deleted successfully",
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   BULK STATUS UPDATE
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   BULK STATUS
+═════════════════════════════════════════════════════════════════════ */
 exports.bulkUpdateStatus = async (req, res, next) => {
   try {
-    const { booking_ids, status } = req.body;
-    const adminId = safe(req.admin?.id || req.user?.id);
+    const bookingIds = req.body.booking_ids;
+    const status = safeText(req.body.status, null);
+    const adminId = req.admin?.id || req.user?.id || null;
 
-    if (!Array.isArray(booking_ids) || !booking_ids.length)
-      return res.status(400).json({ success: false, error: "booking_ids must be a non-empty array" });
-    if (!Object.values(BOOKING_STATUS).includes(status))
-      return res.status(400).json({ success: false, error: "Invalid status" });
+    if (!Array.isArray(bookingIds) || !bookingIds.length) {
+      return res.status(400).json({
+        success: false,
+        error: "booking_ids must be a non-empty array",
+      });
+    }
+
+    if (!Object.values(BOOKING_STATUS).includes(status)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid status",
+      });
+    }
 
     const results = { success: [], failed: [] };
 
-    for (const bid of booking_ids) {
+    for (const rawId of bookingIds) {
+      const bid = safeId(rawId);
+
       try {
         const { rows } = await query("SELECT status FROM bookings WHERE id=$1", [bid]);
-        if (!rows[0]) { results.failed.push({ id: bid, reason: "Not found" }); continue; }
-        if (!isValidTransition(rows[0].status, status)) {
-          results.failed.push({ id: bid, reason: `Transition ${rows[0].status}→${status} not allowed` });
+
+        if (!rows[0]) {
+          results.failed.push({ id: rawId, reason: "Not found" });
           continue;
         }
-        await query("UPDATE bookings SET status=$1, updated_at=NOW() WHERE id=$2", [status, bid]);
-        logActivity(bid, `bulk_${status}`, `Bulk: ${rows[0].status}→${status}`, adminId);
+
+        if (!isValidTransition(rows[0].status, status)) {
+          results.failed.push({
+            id: bid,
+            reason: `Transition ${rows[0].status}→${status} not allowed`,
+          });
+          continue;
+        }
+
+        await query(
+          "UPDATE bookings SET status=$1, updated_at=NOW() WHERE id=$2",
+          [status, bid],
+        );
+
+        await logActivity(
+          bid,
+          `bulk_${status}`,
+          `Bulk: ${rows[0].status}→${status}`,
+          adminId,
+        );
+
         results.success.push(bid);
       } catch (e) {
-        results.failed.push({ id: bid, reason: e.message });
+        results.failed.push({ id: rawId, reason: e.message });
       }
     }
 
     return res.json({
       success: true,
-      message: `Updated ${results.success.length} of ${booking_ids.length} bookings`,
-      data:    results,
+      message: `Updated ${results.success.length} of ${bookingIds.length} bookings`,
+      data: results,
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    EXPORT
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.export = async (req, res, next) => {
   try {
     const { format = "json", status, date_from, date_to } = req.query;
+
     const params = [];
-    const conds  = ["1=1"];
+    const conds = ["1=1"];
     let pi = 1;
 
-    if (status)    { conds.push(`b.status=$${pi++}`);      params.push(status); }
-    if (date_from) { conds.push(`b.created_at>=$${pi++}`); params.push(date_from); }
-    if (date_to)   { conds.push(`b.created_at<=$${pi++}`); params.push(date_to); }
+    if (status) {
+      conds.push(`b.status=$${pi++}`);
+      params.push(status);
+    }
+
+    if (date_from) {
+      conds.push(`b.created_at>=$${pi++}`);
+      params.push(date_from);
+    }
+
+    if (date_to) {
+      conds.push(`b.created_at<=$${pi++}`);
+      params.push(date_to);
+    }
 
     const { rows } = await query(
-      `SELECT b.booking_number, b.full_name, b.email, b.phone, b.nationality,
-              b.travel_date, b.return_date, b.number_of_travelers,
-              b.accommodation_type, b.special_requests, b.email_verified,
-              b.status, b.payment_status, b.source, b.created_at,
-              d.name AS destination,
-              c.name AS destination_country,
+      `SELECT b.booking_number,
+              b.full_name,
+              b.email,
+              b.phone,
+              b.nationality,
+              b.travel_date,
+              b.return_date,
+              b.number_of_travelers,
+              b.accommodation_type,
+              b.special_requests,
+              b.email_verified,
+              b.status,
+              b.payment_status,
+              b.source,
+              b.created_at,
+              COALESCE(d.name, b.destination_name) AS destination,
+              COALESCE(c.name, b.country_name, b.country) AS destination_country,
               s.title AS service
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
-         LEFT JOIN countries    c ON d.country_id     = c.id
-         LEFT JOIN services     s ON b.service_id     = s.id
-         WHERE ${conds.join(" AND ")}
-         ORDER BY b.created_at DESC`,
+         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services s ON b.service_id = s.id
+        WHERE ${conds.join(" AND ")}
+        ORDER BY b.created_at DESC`,
       params,
     );
 
@@ -1571,23 +2057,32 @@ exports.export = async (req, res, next) => {
         res.setHeader("Content-Type", "text/csv");
         return res.status(200).send("");
       }
+
       const headers = Object.keys(rows[0]);
       let csv = headers.join(",") + "\n";
+
       for (const row of rows) {
-        csv += headers.map((h) => {
-          const v = row[h] == null ? "" : String(row[h]);
-          return /[,"\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
-        }).join(",") + "\n";
+        csv += headers
+          .map((h) => {
+            const v = row[h] == null ? "" : String(row[h]);
+            return /[,"\n\r]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+          })
+          .join(",") + "\n";
       }
+
       res.setHeader("Content-Type", "text/csv; charset=utf-8");
-      res.setHeader("Content-Disposition", `attachment; filename="altuvera-bookings-${Date.now()}.csv"`);
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="altuvera-bookings-${Date.now()}.csv"`,
+      );
+
       return res.send(csv);
     }
 
     return res.json({
-      success:     true,
-      data:        rows,
-      total:       rows.length,
+      success: true,
+      data: rows,
+      total: rows.length,
       exported_at: new Date().toISOString(),
     });
   } catch (err) {
@@ -1596,146 +2091,217 @@ exports.export = async (req, res, next) => {
   }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    ADD NOTES
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.addNotes = async (req, res, next) => {
   try {
-    const id      = parseInt(req.params.id, 10);
-    const adminId = safe(req.admin?.id || req.user?.id);
-    const { admin_notes, internal_notes } = req.body;
+    const id = safeId(req.params.id);
+    const adminId = req.admin?.id || req.user?.id || null;
 
-    if (!admin_notes && !internal_notes)
-      return res.status(400).json({ success: false, error: "At least one note field required" });
+    const admin_notes = safeText(req.body.admin_notes, null);
+    const internal_notes = safeText(req.body.internal_notes, null);
 
-    const sets   = [];
+    if (!admin_notes && !internal_notes) {
+      return res.status(400).json({
+        success: false,
+        error: "At least one note field required",
+      });
+    }
+
+    const sets = [];
     const params = [];
     let pi = 1;
     const TS = "TO_CHAR(NOW(),'YYYY-MM-DD HH24:MI')";
 
     if (admin_notes) {
-      sets.push(`admin_notes = COALESCE(admin_notes,'') || E'\\n[' || ${TS} || '] ' || $${pi++}`);
+      sets.push(
+        `admin_notes = COALESCE(admin_notes,'') || E'\\n[' || ${TS} || '] ' || $${pi++}`,
+      );
       params.push(admin_notes);
     }
+
     if (internal_notes) {
-      sets.push(`internal_notes = COALESCE(internal_notes,'') || E'\\n[' || ${TS} || '] ' || $${pi++}`);
+      sets.push(
+        `internal_notes = COALESCE(internal_notes,'') || E'\\n[' || ${TS} || '] ' || $${pi++}`,
+      );
       params.push(internal_notes);
     }
 
     params.push(id);
+
     const { rows } = await query(
-      `UPDATE bookings SET ${sets.join(", ")}, updated_at=NOW() WHERE id=$${pi} RETURNING *`,
+      `UPDATE bookings
+          SET ${sets.join(", ")}, updated_at=NOW()
+        WHERE id=$${pi}
+        RETURNING *`,
       params,
     );
 
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
+    if (!rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
-    logActivity(id, "notes_added", "Notes updated", adminId);
-    return res.json({ success: true, message: "Notes added", data: rows[0] });
-  } catch (err) { next(err); }
+    await logActivity(id, "notes_added", "Notes updated", adminId);
+
+    return res.json({
+      success: true,
+      message: "Notes added",
+      data: rows[0],
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   UPCOMING / RECENT / MOST-BOOKED
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   UPCOMING / RECENT / MOST BOOKED
+═════════════════════════════════════════════════════════════════════ */
 exports.getUpcoming = async (req, res, next) => {
   try {
-    const days  = safeInt(req.query.days,  30, 1, 365);
+    const days = safeInt(req.query.days, 30, 1, 365);
     const limit = safeInt(req.query.limit, 20, 1, 100);
+
     const { rows } = await query(
       `SELECT b.*,
-              d.name  AS destination_name,
-              c.name  AS country_name,
+              COALESCE(d.name, b.destination_name) AS destination_name,
+              COALESCE(c.name, b.country_name, b.country) AS country_name,
               s.title AS service_name
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
-         LEFT JOIN countries    c ON d.country_id     = c.id
-         LEFT JOIN services     s ON b.service_id     = s.id
-         WHERE b.status IN ('confirmed','pending')
-           AND b.travel_date >= CURRENT_DATE
-           AND b.travel_date <= CURRENT_DATE + $1
-         ORDER BY b.travel_date ASC
-         LIMIT $2`,
+         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services s ON b.service_id = s.id
+        WHERE b.status IN ('confirmed','pending')
+          AND b.travel_date >= CURRENT_DATE
+          AND b.travel_date <= CURRENT_DATE + $1
+        ORDER BY b.travel_date ASC
+        LIMIT $2`,
       [days, limit],
     );
-    return res.json({ success: true, data: rows, period: `Next ${days} days` });
-  } catch (err) { next(err); }
+
+    return res.json({
+      success: true,
+      data: rows,
+      period: `Next ${days} days`,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.getRecent = async (req, res, next) => {
   try {
     const limit = safeInt(req.query.limit, 10, 1, 100);
+
     const { rows } = await query(
-      `SELECT b.id, b.booking_number, b.booking_type,
-              b.full_name, b.email,
-              b.status, b.payment_status, b.email_verified,
-              b.travel_date, b.return_date, b.number_of_travelers, b.created_at,
-              d.name      AS destination_name,
-              d.image_url AS destination_image,
-              s.title     AS service_name,
-              p.title     AS package_name
+      `SELECT b.id,
+              b.booking_number,
+              b.booking_type,
+              b.full_name,
+              b.email,
+              b.status,
+              b.payment_status,
+              b.email_verified,
+              b.travel_date,
+              b.return_date,
+              b.number_of_travelers,
+              b.created_at,
+              COALESCE(d.name, b.destination_name) AS destination_name,
+              COALESCE(d.image_url, d.thumbnail_url) AS destination_image,
+              s.title AS service_name,
+              p.title AS package_name
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
-         LEFT JOIN services     s ON b.service_id     = s.id
-         LEFT JOIN packages     p ON b.package_id     = p.id
-         ORDER BY b.created_at DESC
-         LIMIT $1`,
+         LEFT JOIN services s ON b.service_id = s.id
+         LEFT JOIN packages p ON b.package_id = p.id
+        ORDER BY b.created_at DESC
+        LIMIT $1`,
       [limit],
     );
-    return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+
+    return res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.getMostBookedDestinations = async (req, res, next) => {
   try {
-    const limit  = safeInt(req.query.limit, 10, 1, 50);
+    const limit = safeInt(req.query.limit, 10, 1, 50);
     const period = req.query.period;
+
     const df =
-      period === "month" ? "AND b.created_at>=NOW()-INTERVAL '30 days'" :
-      period === "year"  ? "AND b.created_at>=NOW()-INTERVAL '365 days'" : "";
+      period === "month"
+        ? "AND b.created_at>=NOW()-INTERVAL '30 days'"
+        : period === "year"
+          ? "AND b.created_at>=NOW()-INTERVAL '365 days'"
+          : "";
 
     const { rows } = await query(
-      `SELECT d.id, d.name, d.slug, d.image_url,
-              d.short_description, d.difficulty,
+      `SELECT d.id,
+              d.name,
+              d.slug,
+              d.image_url,
+              d.short_description,
+              d.difficulty,
               c.name AS country_name,
               c.slug AS country_slug,
               COUNT(b.id)::INTEGER AS booking_count,
               COALESCE(SUM(b.number_of_travelers),0)::INTEGER AS total_travelers
          FROM destinations d
-         LEFT JOIN bookings  b ON b.destination_id = d.id ${df}
-         LEFT JOIN countries c ON d.country_id     = c.id
-         WHERE d.is_active = true
-         GROUP BY d.id, d.name, d.slug, d.image_url,
-                  d.short_description, d.difficulty, c.name, c.slug
-         ORDER BY booking_count DESC, total_travelers DESC
-         LIMIT $1`,
+         LEFT JOIN bookings b ON b.destination_id = d.id ${df}
+         LEFT JOIN countries c ON d.country_id = c.id
+        WHERE d.is_active = true
+        GROUP BY d.id, d.name, d.slug, d.image_url,
+                 d.short_description, d.difficulty, c.name, c.slug
+        ORDER BY booking_count DESC, total_travelers DESC
+        LIMIT $1`,
       [limit],
     );
-    return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+
+    return res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
-   BY-DESTINATION / BY-COUNTRY / STATS
-═══════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════
+   DESTINATION / COUNTRY STATS
+═════════════════════════════════════════════════════════════════════ */
 exports.getBookingsByDestination = async (req, res, next) => {
   try {
-    const destId = parseInt(req.params.destinationId, 10);
-    if (!destId || destId < 1)
-      return res.status(400).json({ success: false, error: "Invalid destination ID" });
+    const destId = safeId(req.params.destinationId);
+
+    if (!destId) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid destination ID",
+      });
+    }
 
     const period = req.query.period;
     const df =
-      period === "month" ? "AND b.created_at>=NOW()-INTERVAL '30 days'" :
-      period === "year"  ? "AND b.created_at>=NOW()-INTERVAL '365 days'" : "";
+      period === "month"
+        ? "AND b.created_at>=NOW()-INTERVAL '30 days'"
+        : period === "year"
+          ? "AND b.created_at>=NOW()-INTERVAL '365 days'"
+          : "";
 
     const [destRes, statsRes] = await Promise.all([
       query(
         `SELECT d.*, c.name AS country_name, c.slug AS country_slug
            FROM destinations d
            LEFT JOIN countries c ON d.country_id = c.id
-           WHERE d.id = $1`,
+          WHERE d.id = $1`,
         [destId],
       ),
       query(
@@ -1745,235 +2311,307 @@ exports.getBookingsByDestination = async (req, res, next) => {
                 COUNT(*) FILTER (WHERE b.status='cancelled')::INTEGER AS cancelled,
                 COALESCE(SUM(b.number_of_travelers),0)::INTEGER AS total_travelers
            FROM bookings b
-           WHERE b.destination_id = $1 ${df}`,
+          WHERE b.destination_id = $1 ${df}`,
         [destId],
       ),
     ]);
 
-    if (!destRes.rows[0])
-      return res.status(404).json({ success: false, error: "Destination not found" });
+    if (!destRes.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Destination not found",
+      });
+    }
 
     return res.json({
       success: true,
-      data:    { destination: destRes.rows[0], stats: statsRes.rows[0] },
+      data: {
+        destination: destRes.rows[0],
+        stats: statsRes.rows[0],
+      },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.getBookingsByCountry = async (req, res, next) => {
   try {
-    const countryId = parseInt(req.params.countryId, 10);
-    if (!countryId || countryId < 1)
-      return res.status(400).json({ success: false, error: "Invalid country ID" });
+    const countryId = safeId(req.params.countryId);
+
+    if (!countryId) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid country ID",
+      });
+    }
 
     const period = req.query.period;
     const df =
-      period === "month" ? "AND b.created_at>=NOW()-INTERVAL '30 days'" :
-      period === "year"  ? "AND b.created_at>=NOW()-INTERVAL '365 days'" : "";
+      period === "month"
+        ? "AND b.created_at>=NOW()-INTERVAL '30 days'"
+        : period === "year"
+          ? "AND b.created_at>=NOW()-INTERVAL '365 days'"
+          : "";
 
     const [cRes, sRes] = await Promise.all([
       query(
         `SELECT id, name, slug, image_url, flag_url, continent
-           FROM countries WHERE id=$1`,
+           FROM countries
+          WHERE id=$1`,
         [countryId],
       ),
       query(
         `SELECT COUNT(DISTINCT b.id)::INTEGER AS total_bookings,
                 COALESCE(SUM(b.number_of_travelers),0)::INTEGER AS total_travelers
            FROM bookings b
-           JOIN destinations d ON b.destination_id = d.id
-           WHERE d.country_id = $1 ${df}`,
+           LEFT JOIN destinations d ON b.destination_id = d.id
+          WHERE COALESCE(b.country_id, d.country_id) = $1 ${df}`,
         [countryId],
       ),
     ]);
 
-    if (!cRes.rows[0])
-      return res.status(404).json({ success: false, error: "Country not found" });
+    if (!cRes.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Country not found",
+      });
+    }
 
     return res.json({
       success: true,
-      data:    { country: cRes.rows[0], stats: sRes.rows[0] },
+      data: {
+        country: cRes.rows[0],
+        stats: sRes.rows[0],
+      },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.getCountriesBookingStats = async (req, res, next) => {
   try {
     const period = req.query.period;
+
     const df =
-      period === "month" ? "AND b.created_at>=NOW()-INTERVAL '30 days'" :
-      period === "year"  ? "AND b.created_at>=NOW()-INTERVAL '365 days'" : "";
+      period === "month"
+        ? "AND b.created_at>=NOW()-INTERVAL '30 days'"
+        : period === "year"
+          ? "AND b.created_at>=NOW()-INTERVAL '365 days'"
+          : "";
 
     const { rows } = await query(`
-      SELECT c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent,
+      SELECT c.id,
+             c.name,
+             c.slug,
+             c.image_url,
+             c.flag_url,
+             c.continent,
              COUNT(DISTINCT b.id)::INTEGER AS total_bookings,
              COUNT(DISTINCT d.id)::INTEGER AS destinations_offered,
              COALESCE(SUM(b.number_of_travelers),0)::INTEGER AS total_travelers
         FROM countries c
         LEFT JOIN destinations d ON d.country_id = c.id AND d.is_active = true
-        LEFT JOIN bookings     b ON b.destination_id = d.id ${df}
-        WHERE c.is_active = true
-        GROUP BY c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent
-        ORDER BY total_bookings DESC
+        LEFT JOIN bookings b ON COALESCE(b.country_id, d.country_id) = c.id ${df}
+       WHERE c.is_active = true
+       GROUP BY c.id, c.name, c.slug, c.image_url, c.flag_url, c.continent
+       ORDER BY total_bookings DESC
     `);
-    return res.json({ success: true, data: rows });
-  } catch (err) { next(err); }
+
+    return res.json({
+      success: true,
+      data: rows,
+    });
+  } catch (err) {
+    next(err);
+  }
 };
 
 exports.getDestinationsBookingStats = async (req, res, next) => {
   try {
     const { period, country_id, page = 1, limit = 20 } = req.query;
+
     const df =
-      period === "month" ? "AND b.created_at>=NOW()-INTERVAL '30 days'" :
-      period === "year"  ? "AND b.created_at>=NOW()-INTERVAL '365 days'" : "";
+      period === "month"
+        ? "AND b.created_at>=NOW()-INTERVAL '30 days'"
+        : period === "year"
+          ? "AND b.created_at>=NOW()-INTERVAL '365 days'"
+          : "";
 
     const params = [];
-    const conds  = ["d.is_active=true"];
+    const conds = ["d.is_active=true"];
     let pi = 1;
 
     if (country_id) {
       conds.push(`d.country_id=$${pi++}`);
-      params.push(parseInt(country_id, 10));
+      params.push(safeId(country_id));
     }
 
-    const where    = conds.join(" AND ");
+    const where = conds.join(" AND ");
     const limitNum = safeInt(limit, 20, 1, 100);
-    const pageNum  = safeInt(page,  1,  1, 9999);
-    const offset   = (pageNum - 1) * limitNum;
+    const pageNum = safeInt(page, 1, 1, 9999);
+    const offset = (pageNum - 1) * limitNum;
 
     const [dataRes, countRes] = await Promise.all([
       query(
-        `SELECT d.id, d.name, d.slug, d.image_url, d.difficulty, d.rating, d.review_count,
-                c.id   AS country_id,
+        `SELECT d.id,
+                d.name,
+                d.slug,
+                d.image_url,
+                d.difficulty,
+                d.rating,
+                d.review_count,
+                c.id AS country_id,
                 c.name AS country_name,
                 c.slug AS country_slug,
                 COUNT(b.id)::INTEGER AS total_bookings,
                 COALESCE(SUM(b.number_of_travelers),0)::INTEGER AS total_travelers
            FROM destinations d
-           LEFT JOIN countries c ON d.country_id     = c.id
-           LEFT JOIN bookings  b ON b.destination_id = d.id ${df}
-           WHERE ${where}
-           GROUP BY d.id, d.name, d.slug, d.image_url,
-                    d.difficulty, d.rating, d.review_count,
-                    c.id, c.name, c.slug
-           ORDER BY total_bookings DESC
-           LIMIT $${pi} OFFSET $${pi + 1}`,
+           LEFT JOIN countries c ON d.country_id = c.id
+           LEFT JOIN bookings b ON b.destination_id = d.id ${df}
+          WHERE ${where}
+          GROUP BY d.id, d.name, d.slug, d.image_url,
+                   d.difficulty, d.rating, d.review_count,
+                   c.id, c.name, c.slug
+          ORDER BY total_bookings DESC
+          LIMIT $${pi} OFFSET $${pi + 1}`,
         [...params, limitNum, offset],
       ),
       query(`SELECT COUNT(*) FROM destinations d WHERE ${where}`, params),
     ]);
 
-    const total = parseInt(safe(countRes.rows[0].count, 0), 10);
+    const total = parseInt(countRes.rows[0].count, 10);
+
     return res.json({
       success: true,
-      data:    dataRes.rows,
+      data: dataRes.rows,
       pagination: {
         total,
-        page:        pageNum,
-        limit:       limitNum,
+        page: pageNum,
+        limit: limitNum,
         total_pages: Math.ceil(total / limitNum),
-        has_next:    pageNum < Math.ceil(total / limitNum),
-        has_prev:    pageNum > 1,
+        has_next: pageNum < Math.ceil(total / limitNum),
+        has_prev: pageNum > 1,
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
-/* ═══════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════
    CANCELLATION / REFUND REQUESTS
-═══════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════ */
 exports.requestCancellation = async (req, res, next) => {
   try {
-    const id   = parseInt(req.params.id, 10);
+    const id = safeId(req.params.id);
     const user = req.user;
-    const { type = "cancellation", reason = "" } = req.body || {};
+    const type = safeText(req.body?.type, "cancellation");
+    const reason = safeText(req.body?.reason, "");
 
-    if (!["cancellation", "refund"].includes(type))
+    if (!["cancellation", "refund"].includes(type)) {
       return res.status(400).json({
         success: false,
-        error:   "type must be 'cancellation' or 'refund'",
+        error: "type must be 'cancellation' or 'refund'",
       });
-    if (!String(safe(reason, "")).trim())
+    }
+
+    if (!reason) {
       return res.status(400).json({
         success: false,
-        error:   "Please provide a reason for your request.",
+        error: "Please provide a reason for your request.",
       });
+    }
 
     const { rows } = await query("SELECT * FROM bookings WHERE id=$1", [id]);
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
+
+    if (!rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
     const booking = rows[0];
 
-    if (booking.user_id && booking.user_id !== user.id)
+    if (booking.user_id && user?.id && booking.user_id !== user.id) {
       return res.status(403).json({
         success: false,
-        error:   "This booking does not belong to your account.",
+        error: "This booking does not belong to your account.",
       });
+    }
 
-    if (booking.cancel_request_status === CANCEL_REQUEST_STATUS.PENDING)
+    if (booking.cancel_request_status === CANCEL_REQUEST_STATUS.PENDING) {
       return res.status(409).json({
         success: false,
-        error:   "You already have a pending request for this booking.",
-        data:    booking,
+        error: "You already have a pending request for this booking.",
+        data: booking,
       });
+    }
 
-    if (!isEligibleForRequest(booking, type))
+    if (!isEligibleForRequest(booking, type)) {
       return res.status(409).json({
         success: false,
-        error:   `This booking (status: ${booking.status}) is not eligible for a ${type} request.`,
+        error: `This booking (status: ${booking.status}) is not eligible for a ${type} request.`,
       });
+    }
 
     const updated = await query(
       `UPDATE bookings
-         SET cancel_request_type    = $2,
-             cancel_request_reason  = $3,
-             cancel_requested_at    = NOW(),
-             cancel_request_status  = $4,
-             cancel_admin_response  = NULL,
-             cancel_reviewed_at     = NULL,
-             cancel_reviewed_by     = NULL,
-             refund_amount          = NULL
-       WHERE id = $1
-       RETURNING *`,
-      [id, type, String(reason).trim(), CANCEL_REQUEST_STATUS.PENDING],
+          SET cancel_request_type = $2,
+              cancel_request_reason = $3,
+              cancel_requested_at = NOW(),
+              cancel_request_status = $4,
+              cancel_admin_response = NULL,
+              cancel_reviewed_at = NULL,
+              cancel_reviewed_by = NULL,
+              refund_amount = NULL
+        WHERE id = $1
+        RETURNING *`,
+      [id, type, reason, CANCEL_REQUEST_STATUS.PENDING],
     );
 
     const full = await getBookingDetail(id);
 
-    logActivity(
+    await logActivity(
       id,
       `cancel_request_${type}`,
-      `User requested ${type}. Reason: ${String(reason).trim()}`,
-      user.id,
+      `User requested ${type}. Reason: ${reason}`,
+      user?.id || null,
     );
 
     if (sendCancellationRequestAck && (full || booking)) {
-      sendCancellationRequestAck(full || booking, type).catch((e) =>
-        logger.warn("[Bookings] sendCancellationRequestAck:", e.message),
+      asyncNoThrow(
+        sendCancellationRequestAck(full || booking, type),
+        "sendCancellationRequestAck",
       );
     }
 
     const io = getIO();
-    createNotificationInternal({
-      targetScope: "role",
-      targetRole:  "admin",
-      type:        "booking_cancel_request",
-      title:       `New ${type} request — ${safe(booking.booking_number, "—")}`,
-      message:     `${safe(booking.full_name, "A user")} requested a ${type} for booking ${safe(booking.booking_number, "—")}.`,
-      actionUrl:   "/bookings",
-      actionLabel: "Review Request",
-      category:    "booking",
-      priority:    "high",
-      senderType:  "user",
-      senderId:    user.id,
-      io,
-    }).catch(() => {});
+
+    asyncNoThrow(
+      createNotificationInternal({
+        targetScope: "role",
+        targetRole: "admin",
+        type: "booking_cancel_request",
+        title: `New ${type} request — ${booking.booking_number}`,
+        message: `${booking.full_name || "A user"} requested a ${type} for booking ${booking.booking_number}.`,
+        actionUrl: "/bookings",
+        actionLabel: "Review Request",
+        category: "booking",
+        priority: "high",
+        senderType: "user",
+        senderId: user?.id || null,
+        io,
+      }),
+      "requestCancellation admin notification",
+    );
 
     return res.json({
       success: true,
       message: `Your ${type} request has been submitted for review.`,
-      data:    full || updated.rows[0],
+      data: full || updated.rows[0],
     });
   } catch (err) {
     logger.error("[Bookings] requestCancellation:", err.message);
@@ -1983,114 +2621,162 @@ exports.requestCancellation = async (req, res, next) => {
 
 exports.reviewCancellation = async (req, res, next) => {
   try {
-    const id      = parseInt(req.params.id, 10);
-    const adminId = safe(req.admin?.id || req.user?.id);
-    const { decision, admin_response = "", refund_amount = null } = req.body || {};
+    const id = safeId(req.params.id);
+    const adminId = req.admin?.id || req.user?.id || null;
 
-    if (!["approved", "rejected"].includes(decision))
+    const decision = safeText(req.body?.decision, null);
+    const adminResponse = safeText(req.body?.admin_response, null);
+    const refundAmount = safeFloat(req.body?.refund_amount, null);
+
+    if (!["approved", "rejected"].includes(decision)) {
       return res.status(400).json({
         success: false,
-        error:   "decision must be 'approved' or 'rejected'",
+        error: "decision must be 'approved' or 'rejected'",
       });
+    }
 
     const { rows } = await query("SELECT * FROM bookings WHERE id=$1", [id]);
-    if (!rows[0])
-      return res.status(404).json({ success: false, error: "Booking not found" });
 
-    const booking     = rows[0];
-    const requestType = safe(booking.cancel_request_type, "cancellation");
+    if (!rows[0]) {
+      return res.status(404).json({
+        success: false,
+        error: "Booking not found",
+      });
+    }
 
-    if (booking.cancel_request_status !== CANCEL_REQUEST_STATUS.PENDING)
+    const booking = rows[0];
+    const requestType = booking.cancel_request_type || "cancellation";
+
+    if (booking.cancel_request_status !== CANCEL_REQUEST_STATUS.PENDING) {
       return res.status(409).json({
         success: false,
-        error:   "No pending request to review for this booking.",
+        error: "No pending request to review for this booking.",
       });
+    }
 
     if (decision === "rejected") {
       await query(
         `UPDATE bookings
-           SET cancel_request_status = $2,
-               cancel_reviewed_at    = NOW(),
-               cancel_reviewed_by    = $3,
-               cancel_admin_response = $4
-         WHERE id = $1`,
-        [id, CANCEL_REQUEST_STATUS.REJECTED, adminId, String(admin_response).trim() || null],
+            SET cancel_request_status = $2,
+                cancel_reviewed_at = NOW(),
+                cancel_reviewed_by = $3,
+                cancel_admin_response = $4,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [id, CANCEL_REQUEST_STATUS.REJECTED, adminId, adminResponse],
       );
-      logActivity(
-        id, "cancel_request_rejected",
-        `Admin rejected ${requestType} request.${admin_response ? " Response: " + String(admin_response).trim() : ""}`,
+
+      await logActivity(
+        id,
+        "cancel_request_rejected",
+        `Admin rejected ${requestType} request${adminResponse ? `. Response: ${adminResponse}` : ""}`,
         adminId,
       );
     } else {
       const newStatus =
         requestType === "refund"
-          ? booking.status === "completed" ? "refunded" : "cancelled"
+          ? booking.status === "completed"
+            ? "refunded"
+            : "cancelled"
           : "cancelled";
 
-      const params  = [
-        newStatus, CANCEL_REQUEST_STATUS.APPROVED, adminId,
-        String(admin_response).trim() || null,
-        requestType === "refund" ? safeFloat(refund_amount) : null,
-        id,
+      const sets = [
+        "status=$1",
+        "cancel_request_status=$2",
+        "cancel_reviewed_at=NOW()",
+        "cancel_reviewed_by=$3",
+        "cancel_admin_response=$4",
+        "updated_at=NOW()",
       ];
-      let pi        = 6;
-      let setClause = `status=$1, cancel_request_status=$2,
-         cancel_reviewed_at=NOW(), cancel_reviewed_by=$3,
-         cancel_admin_response=$4, refund_amount=$5,
-         updated_at=NOW()`;
+
+      const params = [
+        newStatus,
+        CANCEL_REQUEST_STATUS.APPROVED,
+        adminId,
+        adminResponse,
+      ];
+
+      let pi = 5;
 
       if (newStatus === "cancelled") {
-        setClause += `, cancelled_at=NOW(), cancellation_reason=$${pi++}`;
-        params.splice(5, 0, safe(booking.cancel_request_reason, `Approved ${requestType} request`));
+        sets.push("cancelled_at=NOW()");
+        sets.push(`cancellation_reason=$${pi++}`);
+        params.push(booking.cancel_request_reason || `Approved ${requestType} request`);
       }
 
-      await query(`UPDATE bookings SET ${setClause} WHERE id=$${pi}`, params);
-      logActivity(
-        id, "cancel_request_approved",
-        `Admin approved ${requestType} → ${newStatus}.${admin_response ? " Response: " + String(admin_response).trim() : ""}`,
+      if (requestType === "refund" && refundAmount != null) {
+        sets.push(`refund_amount=$${pi++}`);
+        params.push(refundAmount);
+      }
+
+      params.push(id);
+
+      await query(
+        `UPDATE bookings
+            SET ${sets.join(", ")}
+          WHERE id=$${pi}`,
+        params,
+      );
+
+      await logActivity(
+        id,
+        "cancel_request_approved",
+        `Admin approved ${requestType} → ${newStatus}${adminResponse ? `. Response: ${adminResponse}` : ""}`,
         adminId,
       );
     }
 
-    const full     = await getBookingDetail(id);
+    const full = await getBookingDetail(id);
     const approved = decision === "approved";
-    const io       = getIO();
+    const io = getIO();
 
-    createNotificationInternal({
-      userId:      booking.user_id,
-      userEmail:   booking.email,
-      targetScope: "individual",
-      type:        approved ? "booking_cancel_approved" : "booking_cancel_rejected",
-      title:       approved
-        ? `Your ${requestType} request was approved`
-        : `Your ${requestType} request was declined`,
-      message:     approved
-        ? `Your ${requestType} request for booking ${safe(booking.booking_number, "—")} has been approved.`
-        : `Your ${requestType} request for booking ${safe(booking.booking_number, "—")} was declined.${admin_response ? " Note: " + String(admin_response).trim() : ""}`,
-      actionUrl:   "/my-bookings",
-      actionLabel: "View Booking",
-      category:    "booking",
-      priority:    "urgent",
-      senderType:  "admin",
-      senderId:    adminId,
-      io,
-    }).catch(() => {});
+    asyncNoThrow(
+      createNotificationInternal({
+        userId: booking.user_id,
+        userEmail: booking.email,
+        targetScope: "individual",
+        type: approved ? "booking_cancel_approved" : "booking_cancel_rejected",
+        title: approved
+          ? `Your ${requestType} request was approved`
+          : `Your ${requestType} request was declined`,
+        message: approved
+          ? `Your ${requestType} request for booking ${booking.booking_number} has been approved.`
+          : `Your ${requestType} request for booking ${booking.booking_number} was declined.${adminResponse ? " Note: " + adminResponse : ""}`,
+        actionUrl: "/my-bookings",
+        actionLabel: "View Booking",
+        category: "booking",
+        priority: "urgent",
+        senderType: "admin",
+        senderId: adminId,
+        io,
+      }),
+      "reviewCancellation user notification",
+    );
 
     if (sendBookingStatusUpdate && full?.email) {
-      const currentStatus = approved
-        ? (requestType === "refund" ? "refunded" : "cancelled")
+      const currentStatus = full.status;
+      const targetStatus = approved
+        ? requestType === "refund"
+          ? "refunded"
+          : "cancelled"
         : full.status;
-      const reason = String(admin_response).trim() ||
-        (approved ? `Your ${requestType} request was approved.` : `Your ${requestType} request was declined.`);
-      sendBookingStatusUpdate(full, full.status, currentStatus, reason).catch((e) =>
-        logger.warn("[Bookings] reviewCancellation status email:", e.message),
+
+      const reason =
+        adminResponse ||
+        (approved
+          ? `Your ${requestType} request was approved.`
+          : `Your ${requestType} request was declined.`);
+
+      asyncNoThrow(
+        sendBookingStatusUpdate(full, currentStatus, targetStatus, reason),
+        "reviewCancellation status email",
       );
     }
 
     return res.json({
       success: true,
       message: `Request ${decision}.`,
-      data:    full,
+      data: full,
     });
   } catch (err) {
     logger.error("[Bookings] reviewCancellation:", err.message);
@@ -2101,19 +2787,18 @@ exports.reviewCancellation = async (req, res, next) => {
 exports.getCancellationRequests = async (req, res, next) => {
   try {
     const status = req.query.status || CANCEL_REQUEST_STATUS.PENDING;
-    const page   = Math.max(1, parseInt(req.query.page  || "1",  10));
-    const limit  = Math.min(100, parseInt(req.query.limit || "20", 10));
+    const page = Math.max(1, parseInt(req.query.page || "1", 10));
+    const limit = Math.min(100, parseInt(req.query.limit || "20", 10));
     const offset = (page - 1) * limit;
 
     const { rows } = await query(
-      `SELECT
-          b.*,
-          COALESCE(d.name, b.destination_name) AS destination_name,
-          COALESCE(u.full_name, b.full_name)   AS user_name,
-          u.email                              AS user_email
-        FROM bookings b
-        LEFT JOIN destinations d ON d.id = b.destination_id
-        LEFT JOIN users        u ON u.id = b.user_id
+      `SELECT b.*,
+              COALESCE(d.name, b.destination_name) AS destination_name,
+              COALESCE(u.full_name, b.full_name) AS user_name,
+              u.email AS user_email
+         FROM bookings b
+         LEFT JOIN destinations d ON d.id = b.destination_id
+         LEFT JOIN users u ON u.id = b.user_id
         WHERE b.cancel_request_status = $1
         ORDER BY b.cancel_requested_at ASC NULLS LAST, b.created_at DESC
         LIMIT $2 OFFSET $3`,
@@ -2124,19 +2809,24 @@ exports.getCancellationRequests = async (req, res, next) => {
       `SELECT COUNT(*) FROM bookings WHERE cancel_request_status=$1`,
       [status],
     );
-    const total = parseInt(safe(countRes.rows[0].count, 0), 10);
+
+    const total = parseInt(countRes.rows[0].count, 10);
 
     return res.json({
       success: true,
-      data:     rows,
+      data: rows,
       bookings: rows,
       pagination: {
-        page, limit, total,
+        page,
+        limit,
+        total,
         total_pages: Math.ceil(total / limit),
-        has_next:    page < Math.ceil(total / limit),
+        has_next: page < Math.ceil(total / limit),
       },
     });
-  } catch (err) { next(err); }
+  } catch (err) {
+    next(err);
+  }
 };
 
 module.exports = exports;
