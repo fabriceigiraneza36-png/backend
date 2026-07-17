@@ -604,97 +604,136 @@ const safeSend = async (to, subject, html, label = "") => {
    ═══════════════════  EMAIL TEMPLATES  ═══════════════════════════════════
 ════════════════════════════════════════════════════════════════════════════ */
 
-/* ─────────────────────────────────────────────────────────────────────────
-   1. VERIFICATION LINK
-───────────────────────────────────────────────────────────────────────── */
-const sendBookingVerificationLink = async (booking, token) => {
-  if (!booking?.email || !token) {
-    logger.warn("[BookingEmails] sendBookingVerificationLink: missing email/token");
-    return { success: false };
+// utils/bookingEmails.js
+
+const FRONTEND_URL = (
+  process.env.FRONTEND_URL ||
+  process.env.PUBLIC_URL ||
+  "https://www.altuverasafaris.com"
+).replace(/\/+$/, ""); // strip trailing slashes
+
+const API_URL = (
+  process.env.API_URL ||
+  process.env.BACKEND_URL ||
+  "https://altuvera-api.onrender.com"  // ← your Render URL
+).replace(/\/+$/, "");
+
+/**
+ * Build a verification URL that hits the BACKEND endpoint directly.
+ * The backend then redirects the user to the frontend after marking verified.
+ */
+const buildVerificationLink = (token) => {
+  if (!token) {
+    throw new Error("buildVerificationLink: token is required");
   }
+  // Backend endpoint that handles the verification and redirects
+  return `${API_URL}/api/bookings/verify-email/${encodeURIComponent(token)}`;
+};
 
-  const verifyUrl = `${ENV.backendUrl}/api/bookings/verify-email/${token}`;
-  const dest = tripName(booking);
+exports.sendBookingVerificationLink = async (booking, token) => {
+  try {
+    if (!booking?.email) {
+      throw new Error("sendBookingVerificationLink: booking.email is missing");
+    }
+    if (!token) {
+      throw new Error("sendBookingVerificationLink: token is missing");
+    }
 
-  const html = shell({
-    preheader: `Confirm your ${dest} booking — link expires in 24 hours.`,
-    heroBadge: `<span style="display:inline-block;padding:7px 18px;
-      background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
-      border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
-      font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
-      ✉ Verify Your Email
-    </span>`,
-    heroTitle: "One click away from your adventure",
-    heroSubtitle: "Please confirm your email address to send your booking to our travel team.",
-    body: `
-      ${greet(booking.full_name)}
-      ${para(`Thank you for choosing <strong style="color:${T.g700};">${esc(ENV.appName)}</strong>.
-        Please verify your email address so we can send your booking request to our team.`)}
+    const verifyUrl   = buildVerificationLink(token);
+    const displayName = booking.full_name || "traveller";
+    const destination =
+      booking.destination_name ||
+      booking.package_name ||
+      booking.service_name ||
+      "your adventure";
 
-      ${bookingSummary(booking)}
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <title>Confirm Your Booking</title>
+      </head>
+      <body style="margin:0;padding:0;background:#f0fdf4;font-family:'Segoe UI',Arial,sans-serif;">
+        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f0fdf4;padding:40px 20px;">
+          <tr>
+            <td align="center">
+              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(5,150,105,.08);">
+                <!-- Header -->
+                <tr>
+                  <td style="background:linear-gradient(135deg,#059669,#047857);padding:32px 40px;text-align:center;">
+                    <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">
+                      🌍 Altuvera Safaris
+                    </h1>
+                  </td>
+                </tr>
+                <!-- Body -->
+                <tr>
+                  <td style="padding:40px;">
+                    <h2 style="margin:0 0 16px;color:#022c22;font-size:22px;font-weight:600;">
+                      Hi ${displayName}! 👋
+                    </h2>
+                    <p style="margin:0 0 20px;color:#334155;font-size:15px;line-height:1.7;">
+                      Thanks for booking <strong>${destination}</strong> with us.
+                      Please confirm your email so our team can start planning your journey.
+                    </p>
+                    <p style="margin:0 0 28px;color:#334155;font-size:15px;line-height:1.7;">
+                      Your booking reference is:
+                      <strong style="color:#059669;font-family:monospace;">${booking.booking_number}</strong>
+                    </p>
+                    <!-- CTA Button -->
+                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
+                      <tr>
+                        <td align="center" style="padding:8px 0 24px;">
+                          <a href="${verifyUrl}"
+                             style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#059669,#047857);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:12px;box-shadow:0 4px 16px rgba(5,150,105,.28);">
+                            ✅ Confirm Your Booking
+                          </a>
+                        </td>
+                      </tr>
+                    </table>
+                    <p style="margin:0 0 12px;color:#64748b;font-size:12px;line-height:1.6;">
+                      If the button doesn't work, copy and paste this link into your browser:
+                    </p>
+                    <p style="margin:0 0 28px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;color:#0f172a;font-size:12px;line-height:1.5;word-break:break-all;font-family:monospace;">
+                      ${verifyUrl}
+                    </p>
+                    <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.6;">
+                      This link expires in 24 hours. If you didn't request this, please ignore this email.
+                    </p>
+                  </td>
+                </tr>
+                <!-- Footer -->
+                <tr>
+                  <td style="background:#f0fdf4;padding:20px 40px;text-align:center;border-top:1px solid #d1fae5;">
+                    <p style="margin:0;color:#059669;font-size:12px;font-weight:600;">
+                      Altuvera Safaris · East Africa
+                    </p>
+                    <p style="margin:4px 0 0;color:#94a3b8;font-size:11px;">
+                      Need help? Reply to this email or WhatsApp us at +250 785 751 391
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+        </table>
+      </body>
+      </html>
+    `;
 
-      <!-- Verify button block -->
-      <div style="background:linear-gradient(135deg,${T.g50},${T.g100});
-        border:1.5px solid ${T.g300};border-radius:18px;padding:32px 28px;
-        text-align:center;margin:28px 0;">
+    // Send via your Resend client (or whichever provider you use)
+    const result = await sendEmail({
+      to:      booking.email,
+      subject: `Confirm Your Booking — ${destination} | Altuvera`,
+      html,
+    });
 
-        <p style="margin:0 0 6px;font-family:'Inter',sans-serif;font-size:11px;
-          font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
-          Email Verification
-        </p>
-        <p style="margin:0 0 22px;font-family:'Inter',sans-serif;font-size:14px;
-          color:${T.n700};line-height:1.6;">
-          Valid for <strong>24 hours</strong>
-        </p>
-
-        <a href="${verifyUrl}" class="btn-primary"
-          style="display:inline-block;padding:16px 44px;
-            background:linear-gradient(135deg,#10b981,#047857);
-            color:#ffffff !important;text-decoration:none;border-radius:100px;
-            font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
-            box-shadow:0 8px 28px rgba(5,150,105,.4);">
-          Verify My Booking
-        </a>
-
-        <p style="margin:22px 0 0;font-family:'Inter',sans-serif;font-size:11px;
-          color:${T.n500};">Or copy this link:</p>
-        <p style="margin:6px 0 0;font-family:'Inter',sans-serif;font-size:11px;
-          word-break:break-all;">
-          <a href="${verifyUrl}" style="color:${T.g600};text-decoration:none;">
-            ${esc(verifyUrl)}
-          </a>
-        </p>
-      </div>
-
-      <!-- After verification -->
-      <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
-        font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
-        After Verification
-      </p>
-      ${stepList([
-        "Our travel team receives your request",
-        "We contact you within <strong>24 hours</strong>",
-        "You receive a personalised quote — <strong>no payment required</strong>",
-        "Once approved, we confirm your adventure",
-      ])}
-
-      ${divider()}
-
-      ${ctaBlock("Chat on WhatsApp", WA_URL, "Visit Website", ENV.frontendUrl)}
-
-      <p style="margin:24px 0 0;font-family:'Inter',sans-serif;font-size:11.5px;
-        color:${T.n500};text-align:center;line-height:1.6;">
-        Didn't submit this booking? Simply ignore this email — no account will be created.
-      </p>
-    `,
-  });
-
-  return safeSend(
-    booking.email,
-    `Confirm Your Booking — ${dest} | ${ENV.appName}`,
-    html,
-    "sendBookingVerificationLink",
-  );
+    return { success: true, messageId: result.messageId };
+  } catch (err) {
+    console.error("[BookingEmails] sendBookingVerificationLink failed:", err.message);
+    throw err;
+  }
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
