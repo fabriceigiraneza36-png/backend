@@ -1,43 +1,20 @@
 // utils/bookingEmails.js
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA SAFARIS — Premium Booking Email System
+ * ALTUVERA SAFARIS — Premium Email Templates (v2.0)
  * ═══════════════════════════════════════════════════════════════════════════════
- *
- * All emails use a consistent, gorgeous green/white branded template that
- * matches the Altuvera website aesthetic. Every email is:
- *   ✅ Mobile-first responsive
- *   ✅ Works in Gmail, Outlook, Apple Mail, Yahoo
- *   ✅ WCAG accessible (contrast, alt text, semantic structure)
- *   ✅ Dark-mode aware
- *   ✅ Plain-text fallbacks
- *   ✅ No broken [object Object] — all values safely stringified
- *
- * Functions exported:
- *   sendBookingVerificationLink    — guest submits → verify email first
- *   sendBookingReceivedEmail       — after verification / auth submit
- *   sendAdminBookingNotification   — alert admin of new verified booking
- *   sendBookingConfirmation        — admin confirms booking
- *   sendBookingStatusUpdate        — any status change
- *   sendBookingCancellation        — booking cancelled
- *   sendTripCountdownEmail         — X days to departure milestones
- *   sendCancellationRequestAck     — user requested cancellation/refund
+ * Refined, professional, polished. Concise messaging, gorgeous design.
+ * Green/white theme · Playfair Display + Inter fonts · Hero images ·
+ * Colorful branded social icons · Fully responsive · Dark-mode aware.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 "use strict";
 
 const logger = require("./logger");
 
-/* ─── Resolve the best available sendEmail function ─────────────────────── */
+/* ─── Resolve sendEmail ──────────────────────────────────────────────────── */
 let _send = null;
-
-const SENDER_PATHS = [
-  "../utils/email",
-  "../services/emailService",
-  "../utils/emailService",
-];
-
-for (const p of SENDER_PATHS) {
+for (const p of ["../utils/email", "../services/emailService", "../utils/emailService"]) {
   try {
     const mod = require(p);
     if (typeof mod.sendEmail === "function") {
@@ -47,10 +24,9 @@ for (const p of SENDER_PATHS) {
     }
   } catch { /* try next */ }
 }
-
 if (!_send) {
-  logger.warn("[BookingEmails] ⚠️  No email sender found — using console fallback");
-  _send = async ({ to, subject, html }) => {
+  logger.warn("[BookingEmails] ⚠️  No sender found — using console fallback");
+  _send = async ({ to, subject }) => {
     logger.info(`[BookingEmails:console] TO: ${to} | SUBJECT: ${subject}`);
     return { success: true, provider: "console" };
   };
@@ -58,61 +34,62 @@ if (!_send) {
 
 /* ─── Environment ────────────────────────────────────────────────────────── */
 const ENV = {
-  appName:      process.env.APP_NAME      || "Altuvera Safaris",
-  frontendUrl:  process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
-  backendUrl:   process.env.BACKEND_URL   || "https://backend-jd8f.onrender.com",
-  adminEmail:   process.env.ADMIN_EMAIL   || "altuverasafari@gmail.com",
-  supportEmail: process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
-  supportPhone: process.env.SUPPORT_PHONE || "+250 785 751 391",
-  whatsappNum:  process.env.WHATSAPP_NUMBER || "250785751391",
+  appName:      process.env.APP_NAME       || "Altuvera Safaris",
+  frontendUrl:  process.env.FRONTEND_URL   || "https://www.altuverasafaris.com",
+  backendUrl:   process.env.BACKEND_URL    || "https://backend-jd8f.onrender.com",
+  adminEmail:   process.env.ADMIN_EMAIL    || "info@altuverasafaris.com",
+  supportEmail: process.env.SUPPORT_EMAIL  || "info@altuverasafaris.com",
+  supportPhone: process.env.SUPPORT_PHONE  || "+250 785 751 391",
+  whatsappNum:  process.env.WHATSAPP_NUMBER|| "250785751391",
   year:         new Date().getFullYear(),
+
+  // Brand assets (replace with your Cloudinary URLs)
+  logoUrl:      process.env.EMAIL_LOGO_URL ||
+    "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png",
+  heroImage:    process.env.EMAIL_HERO_URL ||
+    "https://res.cloudinary.com/doijjawna/image/upload/v1781342220/ChatGPT_Image_Jun_13_2026_11_16_51_AM_oibwwb.png",
+
+  // Social
+  social: {
+    instagram: "https://www.instagram.com/altuverasafaris/",
+    facebook:  "https://www.facebook.com/profile.php?id=61591972225527",
+    twitter:   "https://x.com/altuverasafari",
+    linkedin:  "https://www.linkedin.com/in/altuvera-safari-14b9033b5/",
+  },
 };
 
 const WA_URL = `https://wa.me/${ENV.whatsappNum}`;
 
 /* ════════════════════════════════════════════════════════════════════════════
-   ── UTILITY FUNCTIONS ────────────────────────────────────────────────────
+   HELPERS
 ════════════════════════════════════════════════════════════════════════════ */
-
-/** Safely stringify any value for display */
-const safe = (v, fallback = "—") => {
-  if (v === null || v === undefined) return fallback;
-  if (typeof v === "object") {
-    try { return JSON.stringify(v); } catch { return fallback; }
-  }
-  return String(v).trim() || fallback;
+const safe = (v, fb = "—") => {
+  if (v == null) return fb;
+  if (typeof v === "object") { try { return JSON.stringify(v); } catch { return fb; } }
+  return String(v).trim() || fb;
 };
 
-/** HTML-escape a string */
-const esc = (v, fallback = "—") => {
-  const s = safe(v, fallback);
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-};
+const esc = (v, fb = "—") =>
+  safe(v, fb)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#039;");
 
-/** Format a date for display */
 const fmtDate = (d) => {
   if (!d) return "—";
   try {
     const dt = new Date(d);
-    if (isNaN(dt.getTime())) return safe(d);
+    if (isNaN(dt)) return safe(d);
     return dt.toLocaleDateString("en-US", {
-      weekday: "long", year: "numeric",
-      month: "long", day: "numeric",
+      weekday: "long", year: "numeric", month: "long", day: "numeric",
     });
   } catch { return safe(d); }
 };
 
-/** Format date + time */
 const fmtDateTime = (d) => {
   if (!d) return "—";
   try {
     const dt = new Date(d);
-    if (isNaN(dt.getTime())) return safe(d);
+    if (isNaN(dt)) return safe(d);
     return dt.toLocaleString("en-US", {
       year: "numeric", month: "short", day: "numeric",
       hour: "2-digit", minute: "2-digit",
@@ -120,7 +97,6 @@ const fmtDateTime = (d) => {
   } catch { return safe(d); }
 };
 
-/** Days until a date (from today) */
 const daysUntil = (d) => {
   if (!d) return null;
   try {
@@ -129,102 +105,113 @@ const daysUntil = (d) => {
   } catch { return null; }
 };
 
-/** Human-readable countdown */
 const humanCountdown = (d) => {
   const days = daysUntil(d);
   if (days === null) return "—";
-  if (days <= 0)  return "today";
+  if (days <= 0) return "today";
   if (days === 1) return "tomorrow";
-  if (days < 7)   return `in ${days} days`;
-  if (days < 30)  {
-    const w = Math.floor(days / 7), r = days % 7;
-    return r > 0 ? `in ${w} week${w>1?"s":""} & ${r} day${r>1?"s":""}` : `in ${w} week${w>1?"s":""}`;
+  if (days < 7) return `in ${days} days`;
+  if (days < 30) {
+    const w = Math.floor(days / 7);
+    return `in ${w} week${w > 1 ? "s" : ""}`;
   }
   if (days < 365) {
-    const m = Math.floor(days / 30), r = days % 30;
-    return r > 3 ? `in ${m} month${m>1?"s":""} & ${r} days` : `in ${m} month${m>1?"s":""}`;
+    const m = Math.floor(days / 30);
+    return `in ${m} month${m > 1 ? "s" : ""}`;
   }
-  const y = Math.floor(days / 365);
-  return `in ${y} year${y>1?"s":""}`;
+  return `in ${Math.floor(days / 365)} year${days >= 730 ? "s" : ""}`;
 };
 
-/** Strip HTML to plain text */
 const toPlain = (html = "") =>
-  html
-    .replace(/<style[\s\S]*?<\/style>/gi, "")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/\s{2,}/g, " ")
-    .trim()
-    .slice(0, 6000);
+  html.replace(/<style[\s\S]*?<\/style>/gi, "")
+      .replace(/<[^>]+>/g, " ")
+      .replace(/\s{2,}/g, " ").trim().slice(0, 6000);
 
-/** Extract best trip name from booking object */
 const tripName = (b) =>
   safe(b.destination_name || b.service_name || b.package_name ||
     b.destination || b.service || b.package, "Your Trip");
 
-/** Status badge colour config */
-const STATUS_STYLE = {
-  pending:   { bg: "#fef3c7", color: "#92400e", border: "#fde68a", label: "Pending Review"  },
-  confirmed: { bg: "#d1fae5", color: "#065f46", border: "#6ee7b7", label: "Confirmed ✓"     },
-  completed: { bg: "#dbeafe", color: "#1e40af", border: "#93c5fd", label: "Completed"        },
-  cancelled: { bg: "#fee2e2", color: "#991b1b", border: "#fca5a5", label: "Cancelled"        },
-  "on-hold": { bg: "#f3e8ff", color: "#6b21a8", border: "#d8b4fe", label: "On Hold"          },
-  refunded:  { bg: "#fff7ed", color: "#9a3412", border: "#fdba74", label: "Refunded"         },
-};
-
-const statusBadge = (s = "pending") => {
-  const st = STATUS_STYLE[s] || STATUS_STYLE.pending;
-  return `<span style="display:inline-block;padding:5px 18px;
-    background:${st.bg};color:${st.color};border:1.5px solid ${st.border};
-    border-radius:30px;font-size:12px;font-weight:800;letter-spacing:.05em;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-    ${st.label}
-  </span>`;
-};
-
 /* ════════════════════════════════════════════════════════════════════════════
-   ── DESIGN TOKENS ────────────────────────────────────────────────────────
+   DESIGN TOKENS
 ════════════════════════════════════════════════════════════════════════════ */
 const T = {
-  // Brand greens
-  g900: "#064e3b",
-  g800: "#065f46",
-  g700: "#047857",
-  g600: "#059669",
-  g500: "#10b981",
-  g400: "#34d399",
-  g200: "#a7f3d0",
-  g100: "#d1fae5",
-  g50:  "#f0fdf4",
+  // Greens
+  g900: "#022c22", g800: "#064e3b", g700: "#047857",
+  g600: "#059669", g500: "#10b981", g400: "#34d399",
+  g300: "#6ee7b7", g200: "#a7f3d0", g100: "#d1fae5", g50: "#f0fdf4",
   // Neutrals
-  n900: "#0f172a",
-  n700: "#374151",
-  n500: "#6b7280",
-  n300: "#d1d5db",
-  n100: "#f3f4f6",
+  n900: "#0f172a", n800: "#1e293b", n700: "#334155",
+  n500: "#64748b", n400: "#94a3b8", n300: "#cbd5e1",
+  n200: "#e2e8f0", n100: "#f1f5f9", n50:  "#f8fafc",
   white: "#ffffff",
   // Semantic
-  amber: "#f59e0b",
-  amberLight: "#fffbeb",
-  amberBorder: "#fde68a",
-  red: "#dc2626",
-  redLight: "#fef2f2",
-  blue: "#3b82f6",
-  blueLight: "#eff6ff",
+  amber: "#f59e0b", amberBg: "#fffbeb", amberBd: "#fde68a",
+  red:   "#dc2626", redBg:   "#fef2f2", redBd:   "#fecaca",
+  blue:  "#3b82f6", blueBg:  "#eff6ff", blueBd:  "#bfdbfe",
+};
+
+const STATUS = {
+  pending:   { bg: T.amberBg, color: "#92400e", bd: T.amberBd, label: "Pending Review" },
+  confirmed: { bg: T.g100,    color: T.g800,    bd: T.g300,    label: "Confirmed" },
+  completed: { bg: T.blueBg,  color: "#1e40af", bd: T.blueBd,  label: "Completed" },
+  cancelled: { bg: T.redBg,   color: "#991b1b", bd: T.redBd,   label: "Cancelled" },
+  "on-hold": { bg: "#f3e8ff", color: "#6b21a8", bd: "#d8b4fe", label: "On Hold" },
+  refunded:  { bg: "#fff7ed", color: "#9a3412", bd: "#fdba74", label: "Refunded" },
+};
+
+const statusPill = (s = "pending") => {
+  const st = STATUS[s] || STATUS.pending;
+  return `<span style="display:inline-block;padding:6px 16px;background:${st.bg};
+    color:${st.color};border:1.5px solid ${st.bd};border-radius:100px;
+    font-size:11px;font-weight:800;letter-spacing:.08em;text-transform:uppercase;
+    font-family:'Inter',-apple-system,sans-serif;">${st.label}</span>`;
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   ── BASE EMAIL SHELL ─────────────────────────────────────────────────────
+   SOCIAL ICONS (colorful, hosted PNGs — reliable in all clients)
+════════════════════════════════════════════════════════════════════════════ */
+const SOCIAL_ICONS = {
+  instagram: "https://cdn-icons-png.flaticon.com/128/2111/2111463.png",
+  facebook:  "https://cdn-icons-png.flaticon.com/128/5968/5968764.png",
+  twitter:   "https://cdn-icons-png.flaticon.com/128/5968/5968958.png",
+  linkedin:  "https://cdn-icons-png.flaticon.com/128/174/174857.png",
+  whatsapp:  "https://cdn-icons-png.flaticon.com/128/3670/3670051.png",
+  email:     "https://cdn-icons-png.flaticon.com/128/732/732200.png",
+  phone:     "https://cdn-icons-png.flaticon.com/128/597/597177.png",
+  location:  "https://cdn-icons-png.flaticon.com/128/684/684908.png",
+};
+
+const socialBar = () => `
+  <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
+    <tr>
+      ${[
+        ["instagram", ENV.social.instagram],
+        ["facebook",  ENV.social.facebook],
+        ["twitter",   ENV.social.twitter],
+        ["linkedin",  ENV.social.linkedin],
+      ].map(([key, url]) => `
+        <td style="padding:0 6px;">
+          <a href="${esc(url)}" target="_blank" style="text-decoration:none;">
+            <img src="${SOCIAL_ICONS[key]}" width="34" height="34" alt="${key}"
+              style="display:block;border-radius:10px;border:0;outline:none;" />
+          </a>
+        </td>
+      `).join("")}
+    </tr>
+  </table>`;
+
+/* ════════════════════════════════════════════════════════════════════════════
+   EMAIL SHELL (base template)
 ════════════════════════════════════════════════════════════════════════════ */
 const shell = ({
-  preheader  = "",
-  body       = "",
-  headerIcon = "🌍",
-  headerBadge = "",
+  preheader = "",
+  body = "",
+  showHero = true,
+  heroBadge = "",
+  heroTitle = "",
+  heroSubtitle = "",
 }) => `<!DOCTYPE html>
-<html lang="en" xmlns="http://www.w3.org/1999/xhtml"
-  xmlns:v="urn:schemas-microsoft-com:vml"
-  xmlns:o="urn:schemas-microsoft-com:office:office">
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
   <meta charset="UTF-8" />
   <meta http-equiv="X-UA-Compatible" content="IE=edge" />
@@ -233,352 +220,175 @@ const shell = ({
   <meta name="supported-color-schemes" content="light dark" />
   <title>${esc(ENV.appName)}</title>
   <!--[if mso]>
-  <noscript><xml><o:OfficeDocumentSettings>
-    <o:PixelsPerInch>96</o:PixelsPerInch>
-  </o:OfficeDocumentSettings></xml></noscript>
+  <noscript><xml><o:OfficeDocumentSettings><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript>
   <![endif]-->
+  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:wght@600;700;800&family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <style>
-    /* ── Reset ── */
-    *, *::before, *::after { box-sizing: border-box; }
-    body, table, td, p, a, li, blockquote {
-      -webkit-text-size-adjust: 100%;
-      -ms-text-size-adjust: 100%;
-    }
-    table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
-    img { border: 0; outline: none; text-decoration: none;
-          -ms-interpolation-mode: bicubic; display: block; }
-    body { margin: 0; padding: 0; width: 100% !important; }
+    * { box-sizing: border-box; }
+    body, table, td, p, a { -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%; }
+    table, td { mso-table-lspace:0pt; mso-table-rspace:0pt; }
+    img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; display:block; }
+    body { margin:0; padding:0; width:100% !important; background:#f0fdf4;
+           font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
 
-    /* ── Body & wrapper ── */
-    .email-body {
-      background-color: ${T.g50};
-      padding: 32px 0 48px;
-    }
-    .email-wrapper {
-      width: 100%;
-      max-width: 600px;
-      margin: 0 auto;
-    }
+    .wrap { width:100%; background:#f0fdf4; padding:32px 16px 48px; }
+    .card { max-width:620px; margin:0 auto; background:#ffffff; border-radius:24px;
+            overflow:hidden; box-shadow:0 12px 48px rgba(5,150,105,.15),
+                                         0 4px 12px rgba(0,0,0,.04); }
 
-    /* ── Card ── */
-    .email-card {
-      background: ${T.white};
-      border-radius: 24px;
-      overflow: hidden;
-      box-shadow: 0 8px 48px rgba(5, 150, 105, 0.12),
-                  0 2px 8px rgba(0,0,0,0.06);
-      border: 1px solid ${T.g100};
-    }
+    /* Hero */
+    .hero { position:relative; text-align:center; }
+    .hero-overlay { background:linear-gradient(135deg, rgba(2,44,34,.85), rgba(4,120,87,.75)); }
 
-    /* ── Header ── */
-    .email-header {
-      background: linear-gradient(
-        145deg,
-        #022c22 0%,
-        #064e3b 35%,
-        #047857 70%,
-        #059669 100%
-      );
-      padding: 44px 40px 36px;
-      text-align: center;
-      position: relative;
-    }
+    /* Buttons */
+    .btn-primary { display:inline-block; padding:15px 40px;
+      background:linear-gradient(135deg,#10b981,#047857); color:#ffffff !important;
+      text-decoration:none; border-radius:100px; font-size:15px; font-weight:700;
+      letter-spacing:.01em; box-shadow:0 8px 24px rgba(5,150,105,.35);
+      font-family:'Inter',sans-serif; }
+    .btn-secondary { display:inline-block; padding:12px 30px; background:#ffffff;
+      color:#047857 !important; text-decoration:none; border-radius:100px;
+      font-size:14px; font-weight:600; border:2px solid #a7f3d0;
+      font-family:'Inter',sans-serif; }
+    .btn-wa { display:inline-block; padding:14px 32px; background:#25D366;
+      color:#ffffff !important; text-decoration:none; border-radius:100px;
+      font-size:14px; font-weight:700; box-shadow:0 6px 18px rgba(37,211,102,.3);
+      font-family:'Inter',sans-serif; }
 
-    /* ── Info box ── */
-    .info-box {
-      background: ${T.g50};
-      border: 1.5px solid ${T.g200};
-      border-radius: 16px;
-      overflow: hidden;
-      margin: 20px 0;
-    }
-    .info-box-header {
-      background: linear-gradient(135deg, #022c22, #047857);
-      padding: 12px 20px;
-    }
-    .info-box-header span {
-      font-size: 12px;
-      font-weight: 800;
-      color: rgba(255,255,255,0.9);
-      text-transform: uppercase;
-      letter-spacing: .1em;
-    }
-    .info-row {
-      display: flex;
-      padding: 12px 20px;
-      border-bottom: 1px solid ${T.g100};
-      align-items: flex-start;
-      gap: 12px;
-    }
-    .info-row:last-child { border-bottom: none; }
-    .info-label {
-      font-size: 11.5px;
-      font-weight: 700;
-      color: ${T.n500};
-      text-transform: uppercase;
-      letter-spacing: .07em;
-      white-space: nowrap;
-      flex-shrink: 0;
-      min-width: 110px;
-      padding-top: 2px;
-    }
-    .info-value {
-      font-size: 14px;
-      font-weight: 600;
-      color: ${T.n900};
-      line-height: 1.5;
-      word-break: break-word;
-    }
+    /* Info table */
+    .info-tbl { width:100%; border-collapse:separate; border-spacing:0;
+      background:#f8fafc; border-radius:14px; overflow:hidden; }
+    .info-tbl td { padding:11px 18px; font-family:'Inter',sans-serif; font-size:13.5px;
+      border-bottom:1px solid #e2e8f0; vertical-align:top; }
+    .info-tbl tr:last-child td { border-bottom:none; }
+    .info-tbl .lbl { font-size:10.5px; font-weight:700; color:#64748b;
+      text-transform:uppercase; letter-spacing:.08em; white-space:nowrap; width:130px; }
+    .info-tbl .val { font-weight:600; color:#0f172a; }
+    .info-tbl .highlight { color:#047857; font-weight:800; font-family:'Inter',sans-serif; }
 
-    /* ── CTA button ── */
-    .cta-primary {
-      display: inline-block;
-      padding: 16px 44px;
-      background: linear-gradient(135deg, #10b981, #047857);
-      color: #fff !important;
-      text-decoration: none;
-      border-radius: 50px;
-      font-size: 16px;
-      font-weight: 800;
-      letter-spacing: .02em;
-      box-shadow: 0 6px 24px rgba(5, 150, 105, 0.4);
-    }
-    .cta-secondary {
-      display: inline-block;
-      padding: 12px 28px;
-      background: ${T.white};
-      color: ${T.g700} !important;
-      text-decoration: none;
-      border-radius: 50px;
-      font-size: 14px;
-      font-weight: 700;
-      border: 2px solid ${T.g200};
-    }
-    .wa-btn {
-      display: inline-block;
-      padding: 12px 28px;
-      background: #25D366;
-      color: #fff !important;
-      text-decoration: none;
-      border-radius: 50px;
-      font-size: 14px;
-      font-weight: 700;
-    }
-
-    /* ── Countdown ── */
-    .countdown-box {
-      background: linear-gradient(145deg, #022c22, #064e3b, #047857);
-      border-radius: 20px;
-      padding: 32px 24px;
-      text-align: center;
-      margin: 24px 0;
-    }
-    .countdown-number {
-      font-size: 80px;
-      font-weight: 900;
-      color: #34d399;
-      line-height: 1;
-      font-family: 'Courier New', 'Lucida Console', monospace;
-      display: block;
-    }
-    .countdown-label {
-      font-size: 14px;
-      color: rgba(255,255,255,.7);
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .15em;
-      margin-top: 8px;
-      display: block;
-    }
-    .countdown-sub {
-      font-size: 16px;
-      color: rgba(255,255,255,.85);
-      margin-top: 14px;
-      line-height: 1.5;
-    }
-
-    /* ── Notice boxes ── */
-    .notice-warning {
-      background: ${T.amberLight};
-      border: 1.5px solid ${T.amberBorder};
-      border-left: 4px solid ${T.amber};
-      border-radius: 0 14px 14px 0;
-      padding: 16px 20px;
-      margin: 20px 0;
-    }
-    .notice-info {
-      background: ${T.blueLight};
-      border: 1.5px solid #bfdbfe;
-      border-left: 4px solid ${T.blue};
-      border-radius: 0 14px 14px 0;
-      padding: 16px 20px;
-      margin: 20px 0;
-    }
-    .notice-success {
-      background: ${T.g50};
-      border: 1.5px solid ${T.g200};
-      border-left: 4px solid ${T.g500};
-      border-radius: 0 14px 14px 0;
-      padding: 16px 20px;
-      margin: 20px 0;
-    }
-    .notice-error {
-      background: ${T.redLight};
-      border: 1.5px solid #fca5a5;
-      border-left: 4px solid ${T.red};
-      border-radius: 0 14px 14px 0;
-      padding: 16px 20px;
-      margin: 20px 0;
-    }
-
-    /* ── Step list ── */
-    .step-list { list-style: none; margin: 0; padding: 0; }
-    .step-item {
-      display: flex;
-      align-items: flex-start;
-      gap: 14px;
-      padding: 12px 0;
-      border-bottom: 1px solid ${T.g100};
-    }
-    .step-item:last-child { border-bottom: none; }
-    .step-num {
-      width: 28px;
-      height: 28px;
-      border-radius: 50%;
-      background: linear-gradient(135deg, #10b981, #047857);
-      color: #fff;
-      font-size: 13px;
-      font-weight: 800;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex-shrink: 0;
-    }
-
-    /* ── Divider ── */
-    .divider {
-      height: 1px;
-      background: linear-gradient(90deg, transparent, ${T.g200}, transparent);
-      margin: 28px 0;
-      border: none;
-    }
-
-    /* ── Footer ── */
-    .email-footer {
-      background: #f8fafc;
-      border-top: 1px solid ${T.n300};
-      padding: 28px 40px;
-      text-align: center;
-    }
-
-    /* ── Dark mode ── */
+    /* Dark mode */
     @media (prefers-color-scheme: dark) {
-      .email-body   { background-color: #0a1628 !important; }
-      .email-card   { background: #111827 !important; border-color: #1f2937 !important; }
-      .info-box     { background: #1f2937 !important; border-color: #374151 !important; }
-      .info-row     { border-color: #374151 !important; }
-      .info-value   { color: #f9fafb !important; }
-      .email-footer { background: #1f2937 !important; border-color: #374151 !important; }
+      .wrap { background:#0a1628 !important; }
+      .card { background:#111827 !important; }
+      .info-tbl { background:#1f2937 !important; }
+      .info-tbl td { border-color:#374151 !important; color:#e5e7eb !important; }
+      .info-tbl .val { color:#f9fafb !important; }
+      .greeting, .body-text { color:#cbd5e1 !important; }
+      .headline { color:#f8fafc !important; }
+      .footer { background:#111827 !important; }
+      .footer p, .footer a { color:#94a3b8 !important; }
     }
 
-    /* ── Mobile ── */
-    @media only screen and (max-width: 600px) {
-      .email-body   { padding: 0 !important; }
-      .email-card   { border-radius: 0 !important; }
-      .email-header { padding: 32px 20px 24px !important; }
-      .email-content{ padding: 24px 20px !important; }
-      .email-footer { padding: 20px !important; }
-      .countdown-number { font-size: 56px !important; }
-      .cta-primary  { padding: 14px 28px !important; font-size: 15px !important; }
-      .info-label   { min-width: 90px !important; }
-      .info-row     { flex-direction: column; gap: 4px !important; }
+    /* Mobile */
+    @media only screen and (max-width:620px) {
+      .wrap { padding:0 !important; }
+      .card { border-radius:0 !important; }
+      .content { padding:28px 20px !important; }
+      .hero-inner { padding:40px 20px !important; }
+      .hero-title { font-size:26px !important; }
+      .info-tbl .lbl { display:block; width:auto !important; padding-bottom:2px !important; }
+      .info-tbl .val { display:block; padding-top:0 !important; }
+      .info-tbl td { padding:14px 16px 8px !important; }
+      .btn-primary, .btn-secondary, .btn-wa { display:block !important; margin:8px auto !important;
+        max-width:280px !important; text-align:center !important; }
     }
   </style>
 </head>
-<body class="email-body">
-  <!-- Preheader (hidden) -->
-  <div aria-hidden="true" style="display:none;max-height:0;overflow:hidden;
-    mso-hide:all;font-size:1px;line-height:1px;color:${T.g50};">
+<body>
+  <!-- Preheader -->
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;
+    font-size:1px;line-height:1px;color:#f0fdf4;">
     ${esc(preheader)}&nbsp;&#8203;&zwnj;&nbsp;&#8203;&zwnj;&nbsp;
   </div>
 
-  <div class="email-wrapper" style="width:100%;max-width:600px;margin:0 auto;padding:0 16px;">
-    <div class="email-card">
+  <div class="wrap">
+    <div class="card">
 
-      <!-- ── HEADER ─────────────────────────────────────────── -->
-      <div class="email-header">
-        <!-- Top accent line -->
-        <div style="position:absolute;top:0;left:0;right:0;height:4px;
-          background:linear-gradient(90deg,#34d399,#10b981,#059669,#34d399);"></div>
+      ${showHero ? `
+      <!-- ═══ HERO ═══ -->
+      <div class="hero" style="background-image:url('${ENV.heroImage}');
+        background-size:cover;background-position:center;background-color:#022c22;">
+        <div class="hero-overlay">
+          <div class="hero-inner" style="padding:56px 40px;text-align:center;">
 
-        <!-- Logo icon -->
-        <div style="width:72px;height:72px;border-radius:20px;
-          background:rgba(255,255,255,.12);backdrop-filter:blur(8px);
-          border:1.5px solid rgba(255,255,255,.2);
-          display:inline-flex;align-items:center;justify-content:center;
-          margin-bottom:16px;font-size:36px;line-height:1;">
-          ${headerIcon}
-        </div>
+            <!-- Logo -->
+            <img src="${ENV.logoUrl}" width="80" height="80" alt="${esc(ENV.appName)}"
+              style="display:block;margin:0 auto 20px;border-radius:16px;
+              background:rgba(255,255,255,.15);padding:8px;" />
 
-        <!-- Brand name -->
-        <div>
-          <a href="${ENV.frontendUrl}" style="text-decoration:none;">
-            <span style="font-size:28px;font-weight:900;color:#fff;
-              letter-spacing:-.5px;display:block;
-              font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+            <!-- Brand name -->
+            <h1 style="margin:0;color:#ffffff;font-family:'Playfair Display',Georgia,serif;
+              font-size:32px;font-weight:700;letter-spacing:-.5px;line-height:1.2;">
               ${esc(ENV.appName)}
-            </span>
-          </a>
-          <span style="font-size:11px;color:rgba(255,255,255,.6);
-            text-transform:uppercase;letter-spacing:2.5px;font-weight:700;
-            display:block;margin-top:4px;">
-            Premium East African Safaris
-          </span>
+            </h1>
+            <p style="margin:6px 0 0;color:#a7f3d0;font-size:11px;font-weight:600;
+              letter-spacing:3px;text-transform:uppercase;font-family:'Inter',sans-serif;">
+              Premium East African Safaris
+            </p>
+
+            ${heroBadge ? `<div style="margin-top:24px;">${heroBadge}</div>` : ""}
+
+            ${heroTitle ? `
+            <h2 class="hero-title" style="margin:28px 0 8px;color:#ffffff;
+              font-family:'Playfair Display',Georgia,serif;font-size:30px;
+              font-weight:700;line-height:1.25;letter-spacing:-.5px;">
+              ${esc(heroTitle)}
+            </h2>` : ""}
+
+            ${heroSubtitle ? `
+            <p style="margin:0;color:rgba(255,255,255,.85);font-size:15px;
+              line-height:1.6;max-width:440px;margin-left:auto;margin-right:auto;
+              font-family:'Inter',sans-serif;">
+              ${esc(heroSubtitle)}
+            </p>` : ""}
+          </div>
         </div>
-
-        <!-- Optional badge pill -->
-        ${headerBadge ? `<div style="margin-top:18px;">${headerBadge}</div>` : ""}
       </div>
-      <!-- ── END HEADER ───────────────────────────────────────── -->
+      ` : ""}
 
-      <!-- ── BODY ──────────────────────────────────────────────── -->
-      <div class="email-content" style="padding:36px 40px 32px;">
+      <!-- ═══ BODY ═══ -->
+      <div class="content" style="padding:40px 44px;">
         ${body}
       </div>
-      <!-- ── END BODY ─────────────────────────────────────────── -->
 
-      <!-- ── FOOTER ───────────────────────────────────────────── -->
-      <div class="email-footer">
-        <!-- WhatsApp -->
-        <div style="margin-bottom:18px;">
-          <a href="${WA_URL}" class="wa-btn"
-            style="display:inline-block;padding:10px 24px;background:#25D366;
-              color:#fff;text-decoration:none;border-radius:30px;
-              font-size:13px;font-weight:700;">
-            💬 &nbsp;WhatsApp Support
-          </a>
+      <!-- ═══ FOOTER ═══ -->
+      <div class="footer" style="background:#f8fafc;border-top:1px solid #e2e8f0;
+        padding:32px 40px;text-align:center;">
+
+        <!-- Social icons -->
+        <div style="margin-bottom:20px;">
+          ${socialBar()}
         </div>
 
-        <!-- Links -->
-        <p style="margin:0 0 10px;font-size:12px;color:${T.n500};">
-          <a href="${ENV.frontendUrl}" style="color:${T.n500};text-decoration:none;margin:0 8px;">
-            Website
-          </a>
-          <span style="color:${T.n300};">|</span>
-          <a href="mailto:${ENV.supportEmail}" style="color:${T.n500};text-decoration:none;margin:0 8px;">
-            ${esc(ENV.supportEmail)}
-          </a>
-          <span style="color:${T.n300};">|</span>
-          <a href="${ENV.frontendUrl}/destinations" style="color:${T.n500};text-decoration:none;margin:0 8px;">
-            Destinations
-          </a>
-        </p>
+        <!-- Contact strip -->
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 16px;">
+          <tr>
+            <td style="padding:0 10px;">
+              <a href="mailto:${ENV.supportEmail}" style="text-decoration:none;color:#64748b;
+                font-size:12px;font-family:'Inter',sans-serif;font-weight:500;">
+                <img src="${SOCIAL_ICONS.email}" width="14" height="14"
+                  style="display:inline-block;vertical-align:middle;margin-right:5px;border:0;" alt="" />
+                ${esc(ENV.supportEmail)}
+              </a>
+            </td>
+            <td style="color:#cbd5e1;">·</td>
+            <td style="padding:0 10px;">
+              <a href="${ENV.frontendUrl}" style="text-decoration:none;color:#64748b;
+                font-size:12px;font-family:'Inter',sans-serif;font-weight:500;">
+                🌐 altuverasafaris.com
+              </a>
+            </td>
+          </tr>
+        </table>
 
-        <p style="margin:0;font-size:11px;color:${T.n300};">
+        <p style="margin:0 0 6px;font-size:11.5px;color:#94a3b8;
+          font-family:'Inter',sans-serif;line-height:1.6;">
+          Crafting unforgettable East African adventures since ${ENV.year}
+        </p>
+        <p style="margin:0;font-size:11px;color:#cbd5e1;font-family:'Inter',sans-serif;">
           © ${ENV.year} ${esc(ENV.appName)} · All rights reserved
         </p>
       </div>
-      <!-- ── END FOOTER ─────────────────────────────────────── -->
 
     </div>
   </div>
@@ -586,31 +396,16 @@ const shell = ({
 </html>`;
 
 /* ════════════════════════════════════════════════════════════════════════════
-   ── REUSABLE COMPONENTS ──────────────────────────────────────────────────
+   REUSABLE BLOCKS
 ════════════════════════════════════════════════════════════════════════════ */
 
-/** Info/detail row */
+/** Info table row */
 const row = (label, value, highlight = false) => {
   const v = safe(value);
   if (!v || v === "—") return "";
   return `<tr>
-    <td class="info-label" style="
-      font-size:11.5px;font-weight:700;color:${T.n500};
-      text-transform:uppercase;letter-spacing:.07em;
-      white-space:nowrap;padding:11px 0 11px 20px;
-      vertical-align:top;min-width:120px;
-      border-bottom:1px solid ${T.g100};">
-      ${esc(label)}
-    </td>
-    <td class="info-value" style="
-      font-size:14px;font-weight:${highlight ? "800" : "600"};
-      color:${highlight ? T.g700 : T.n900};
-      padding:11px 20px 11px 12px;
-      vertical-align:top;line-height:1.5;
-      word-break:break-word;
-      border-bottom:1px solid ${T.g100};">
-      ${esc(v)}
-    </td>
+    <td class="lbl">${esc(label)}</td>
+    <td class="val ${highlight ? "highlight" : ""}">${esc(v)}</td>
   </tr>`;
 };
 
@@ -619,117 +414,184 @@ const infoTable = (title, rows) => {
   const content = rows.filter(Boolean).join("");
   if (!content.trim()) return "";
   return `
-    <div style="background:${T.g50};border:1.5px solid ${T.g200};
-      border-radius:16px;overflow:hidden;margin:20px 0;">
-      <div style="background:linear-gradient(135deg,#022c22 0%,#047857 100%);
-        padding:12px 20px;">
-        <span style="font-size:12px;font-weight:800;
-          color:rgba(255,255,255,.9);text-transform:uppercase;letter-spacing:.1em;">
-          ${esc(title)}
-        </span>
-      </div>
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-        style="border-collapse:collapse;">
+    <div style="margin:24px 0;">
+      ${title ? `
+      <p style="margin:0 0 10px;font-size:11px;font-weight:700;color:#047857;
+        text-transform:uppercase;letter-spacing:.12em;font-family:'Inter',sans-serif;">
+        ${esc(title)}
+      </p>` : ""}
+      <table class="info-tbl" role="presentation" cellpadding="0" cellspacing="0">
         <tbody>${content}</tbody>
       </table>
     </div>`;
 };
 
-/** Step / next-steps list */
-const stepList = (steps) => steps.map((s, i) => `
-  <tr>
-    <td style="width:36px;padding:10px 0 10px 20px;vertical-align:top;">
-      <div style="width:28px;height:28px;border-radius:50%;
-        background:linear-gradient(135deg,#10b981,#047857);
-        color:#fff;font-size:13px;font-weight:800;text-align:center;
-        line-height:28px;font-family:monospace;">
-        ${i + 1}
-      </div>
-    </td>
-    <td style="padding:10px 20px 10px 12px;font-size:13.5px;
-      color:${T.n700};line-height:1.6;vertical-align:middle;
-      border-bottom:${i < steps.length - 1 ? `1px solid ${T.g100}` : "none"};">
-      ${esc(s)}
-    </td>
-  </tr>`
-).join("");
-
-/** Full booking summary block */
+/** Booking summary */
 const bookingSummary = (b) => {
-  const dest    = tripName(b);
+  const dest = tripName(b);
   const country = safe(b.country_name || b.country);
   const travelers = Number(b.number_of_travelers) || 1;
-  const adults    = Number(b.number_of_adults);
-  const children  = Number(b.number_of_children);
-  const travelersStr = adults > 0
-    ? `${travelers} (${adults} adult${adults>1?"s":""}${children>0 ? `, ${children} child${children>1?"ren":""}` : ""})`
-    : `${travelers}`;
+  const adults = Number(b.number_of_adults);
+  const children = Number(b.number_of_children);
+  const trStr = adults > 0
+    ? `${travelers} (${adults} adult${adults > 1 ? "s" : ""}${children > 0 ? `, ${children} child${children > 1 ? "ren" : ""}` : ""})`
+    : String(travelers);
 
-  return infoTable("📋 Booking Details", [
-    row("Booking Ref",   b.booking_number, true),
-    row("Status",        b.status ? STATUS_STYLE[b.status]?.label || b.status : null),
+  return infoTable("Booking Summary", [
+    row("Reference",     b.booking_number, true),
     row("Destination",   dest !== "Your Trip" ? dest : null),
     row("Country",       country !== "—" ? country : null),
     row("Departure",     fmtDate(b.travel_date)),
     row("Return",        fmtDate(b.return_date)),
-    row("Flexible",      b.flexible_dates ? `Yes${b.flexible_months?.length ? ` — ${Array.isArray(b.flexible_months) ? b.flexible_months.join(", ") : b.flexible_months}` : ""}` : null),
-    row("Travelers",     travelers > 0 ? travelersStr : null),
-    row("Group Type",    b.group_type),
+    row("Travelers",     travelers > 0 ? trStr : null),
     row("Accommodation", b.accommodation_type),
-    row("Submitted",     fmtDateTime(b.created_at || new Date())),
   ]);
 };
 
-/** CTA button row */
+/** Section heading */
+const heading = (text) => `
+  <h1 class="headline" style="margin:0 0 14px;font-family:'Playfair Display',Georgia,serif;
+    font-size:26px;font-weight:700;color:#0f172a;line-height:1.3;letter-spacing:-.3px;">
+    ${esc(text)}
+  </h1>`;
+
+/** Body paragraph */
+const para = (html) => `
+  <p class="body-text" style="margin:0 0 16px;font-family:'Inter',sans-serif;
+    font-size:15px;color:#334155;line-height:1.7;">
+    ${html}
+  </p>`;
+
+/** Greeting */
+const greet = (name) => `
+  <p class="greeting" style="margin:0 0 6px;font-family:'Inter',sans-serif;
+    font-size:16px;color:#0f172a;font-weight:600;">
+    Hi ${esc(safe(name, "there"))},
+  </p>`;
+
+/** CTA block */
 const ctaBlock = (primaryText, primaryUrl, secondaryText, secondaryUrl) => `
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="margin-top:28px;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 20px;">
     <tr><td align="center" style="padding-bottom:${secondaryText ? "12px" : "0"};">
-      <a href="${esc(primaryUrl)}" class="cta-primary"
-        style="display:inline-block;padding:16px 44px;
+      <a href="${esc(primaryUrl)}" class="btn-primary"
+        style="display:inline-block;padding:15px 40px;
           background:linear-gradient(135deg,#10b981,#047857);
-          color:#fff;text-decoration:none;border-radius:50px;
-          font-size:16px;font-weight:800;
-          box-shadow:0 6px 24px rgba(5,150,105,.4);">
+          color:#ffffff !important;text-decoration:none;border-radius:100px;
+          font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+          box-shadow:0 8px 24px rgba(5,150,105,.35);">
         ${esc(primaryText)}
       </a>
     </td></tr>
     ${secondaryText && secondaryUrl ? `
     <tr><td align="center">
-      <a href="${esc(secondaryUrl)}" class="cta-secondary"
-        style="display:inline-block;padding:11px 28px;
-          background:#fff;color:${T.g700};text-decoration:none;
-          border-radius:50px;font-size:14px;font-weight:700;
-          border:2px solid ${T.g200};">
+      <a href="${esc(secondaryUrl)}" class="btn-secondary"
+        style="display:inline-block;padding:12px 30px;background:#ffffff;
+          color:#047857 !important;text-decoration:none;border-radius:100px;
+          font-family:'Inter',sans-serif;font-size:14px;font-weight:600;
+          border:2px solid #a7f3d0;">
         ${esc(secondaryText)}
       </a>
     </td></tr>` : ""}
   </table>`;
 
-/** Section heading */
-const heading = (text, emoji = "") => `
-  <h1 style="margin:0 0 10px;font-size:24px;font-weight:900;
-    color:${T.n900};line-height:1.3;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
-    ${emoji ? emoji + " " : ""}${esc(text)}
-  </h1>`;
+/** Divider */
+const divider = () => `
+  <div style="height:1px;background:linear-gradient(90deg,transparent,#e2e8f0,transparent);
+    margin:24px 0;"></div>`;
 
-/** Body paragraph */
-const para = (text, style = "") => `
-  <p style="margin:0 0 16px;font-size:15px;color:${T.n700};
-    line-height:1.75;${style}">
-    ${text}
-  </p>`;
+/** Notice box */
+const notice = (type, title, message) => {
+  const styles = {
+    info:    { bg: T.blueBg,  bd: T.blueBd,  border: T.blue,  color: "#1e40af" },
+    success: { bg: T.g50,     bd: T.g200,    border: T.g500,  color: T.g800 },
+    warning: { bg: T.amberBg, bd: T.amberBd, border: T.amber, color: "#92400e" },
+    error:   { bg: T.redBg,   bd: T.redBd,   border: T.red,   color: "#991b1b" },
+  };
+  const s = styles[type] || styles.info;
+  return `
+  <div style="background:${s.bg};border:1px solid ${s.bd};border-left:4px solid ${s.border};
+    border-radius:0 12px 12px 0;padding:14px 18px;margin:18px 0;">
+    ${title ? `
+    <p style="margin:0 0 4px;font-family:'Inter',sans-serif;font-size:11px;
+      font-weight:700;color:${s.color};text-transform:uppercase;letter-spacing:.08em;">
+      ${esc(title)}
+    </p>` : ""}
+    <p style="margin:0;font-family:'Inter',sans-serif;font-size:14px;
+      color:${s.color};line-height:1.6;">
+      ${message}
+    </p>
+  </div>`;
+};
 
-/** Safe send wrapper — never throws */
+/** Countdown display */
+const countdownBox = (days, destination, travelDate) => `
+  <div style="background:linear-gradient(145deg,#022c22,#064e3b,#047857);
+    border-radius:20px;padding:36px 24px;text-align:center;margin:24px 0;
+    box-shadow:0 8px 28px rgba(4,120,87,.25);">
+
+    <p style="margin:0 0 10px;font-family:'Inter',sans-serif;font-size:11px;
+      font-weight:700;color:#a7f3d0;text-transform:uppercase;letter-spacing:.15em;">
+      Your Adventure Begins
+    </p>
+
+    ${days > 1 ? `
+    <div style="font-family:'Playfair Display',Georgia,serif;font-size:${days >= 100 ? "68px" : "88px"};
+      font-weight:800;color:#34d399;line-height:1;">
+      ${days}
+    </div>
+    <p style="margin:6px 0 0;font-family:'Inter',sans-serif;font-size:13px;
+      color:rgba(255,255,255,.7);font-weight:600;text-transform:uppercase;
+      letter-spacing:.15em;">
+      day${days !== 1 ? "s" : ""} to go
+    </p>` : `
+    <div style="font-family:'Playfair Display',Georgia,serif;font-size:44px;
+      font-weight:800;color:#34d399;line-height:1.2;">
+      ${days === 0 ? "Today!" : "Tomorrow!"}
+    </div>`}
+
+    <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.15);">
+      <p style="margin:0;font-family:'Inter',sans-serif;font-size:15px;
+        color:#ffffff;font-weight:600;">
+        ${esc(destination)}
+      </p>
+      <p style="margin:4px 0 0;font-family:'Inter',sans-serif;font-size:13px;
+        color:rgba(255,255,255,.65);">
+        ${fmtDate(travelDate)}
+      </p>
+    </div>
+  </div>`;
+
+/** Numbered step */
+const step = (num, text) => `
+  <tr>
+    <td style="width:34px;padding:10px 12px 10px 0;vertical-align:top;">
+      <div style="width:26px;height:26px;border-radius:50%;
+        background:linear-gradient(135deg,#10b981,#047857);color:#ffffff;
+        font-family:'Inter',sans-serif;font-size:12px;font-weight:800;
+        text-align:center;line-height:26px;">
+        ${num}
+      </div>
+    </td>
+    <td style="padding:10px 0;font-family:'Inter',sans-serif;font-size:14px;
+      color:#334155;line-height:1.6;vertical-align:middle;">
+      ${text}
+    </td>
+  </tr>`;
+
+const stepList = (items) => `
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:8px 0;">
+    ${items.map((t, i) => step(i + 1, t)).join("")}
+  </table>`;
+
+/** Safe send wrapper */
 const safeSend = async (to, subject, html, label = "") => {
   try {
     if (!to) {
       logger.warn(`[BookingEmails] ${label}: no recipient — skipping`);
       return { success: false, error: "No recipient" };
     }
-    const plain = toPlain(html);
-    const result = await _send({ to, subject, html, text: plain });
+    const text = toPlain(html);
+    const result = await _send({ to, subject, html, text });
     logger.info(`[BookingEmails] ✅ ${label} → ${to}`);
     return result || { success: true };
   } catch (err) {
@@ -739,243 +601,194 @@ const safeSend = async (to, subject, html, label = "") => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   ═══════════════════  EMAIL FUNCTIONS  ═══════════════════════════════════
+   ═══════════════════  EMAIL TEMPLATES  ═══════════════════════════════════
 ════════════════════════════════════════════════════════════════════════════ */
 
 /* ─────────────────────────────────────────────────────────────────────────
-   1.  BOOKING VERIFICATION LINK
-       Called right after a guest submits the form.
-       Admin is NOT notified until user clicks this link.
+   1. VERIFICATION LINK
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingVerificationLink = async (booking, token) => {
   if (!booking?.email || !token) {
-    logger.warn("[BookingEmails] sendBookingVerificationLink: missing email or token");
+    logger.warn("[BookingEmails] sendBookingVerificationLink: missing email/token");
     return { success: false };
   }
 
   const verifyUrl = `${ENV.backendUrl}/api/bookings/verify-email/${token}`;
   const dest = tripName(booking);
-  const name = safe(booking.full_name, "Explorer");
 
   const html = shell({
-    preheader: `One click to confirm your ${dest} booking — Ref ${safe(booking.booking_number)}. Link expires in 24 hours.`,
-    headerIcon: "📧",
-    headerBadge: `<div style="display:inline-block;padding:8px 20px;
-      background:rgba(255,255,255,.15);border:1.5px solid rgba(255,255,255,.3);
-      border-radius:30px;font-size:13px;font-weight:700;color:#fff;">
-      ⏳ Email Verification Required
-    </div>`,
+    preheader: `Confirm your ${dest} booking — link expires in 24 hours.`,
+    heroBadge: `<span style="display:inline-block;padding:7px 18px;
+      background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
+      border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
+      font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
+      ✉ Verify Your Email
+    </span>`,
+    heroTitle: "One click away from your adventure",
+    heroSubtitle: "Please confirm your email address to send your booking to our travel team.",
     body: `
-      ${heading("One step away from your adventure!", "✉️")}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,`)}
-      ${para(`Thank you for choosing <strong>${esc(ENV.appName)}</strong>!
-        Your booking request has been received, but we need to
-        <strong>verify your email address</strong> before sending it to our
-        travel team. Please click the button below — it only takes a second.`)}
+      ${greet(booking.full_name)}
+      ${para(`Thank you for choosing <strong style="color:${T.g700};">${esc(ENV.appName)}</strong>.
+        Please verify your email address so we can send your booking request to our team.`)}
 
       ${bookingSummary(booking)}
 
-      <!-- Big verify box -->
-      <div style="background:linear-gradient(135deg,${T.g50},#dcfce7);
-        border:2px solid ${T.g400};border-radius:20px;
-        padding:32px 28px;margin:24px 0;text-align:center;">
-        <div style="font-size:48px;margin-bottom:14px;">🔐</div>
-        <p style="margin:0 0 6px;font-size:12px;font-weight:800;
-          color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
+      <!-- Verify button block -->
+      <div style="background:linear-gradient(135deg,${T.g50},${T.g100});
+        border:1.5px solid ${T.g300};border-radius:18px;padding:32px 28px;
+        text-align:center;margin:28px 0;">
+
+        <p style="margin:0 0 6px;font-family:'Inter',sans-serif;font-size:11px;
+          font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
           Email Verification
         </p>
-        <p style="margin:0 0 24px;font-size:14px;color:${T.n700};line-height:1.6;">
-          This link is valid for <strong>24 hours</strong>.
-          Click below to confirm your request.
+        <p style="margin:0 0 22px;font-family:'Inter',sans-serif;font-size:14px;
+          color:${T.n700};line-height:1.6;">
+          Valid for <strong>24 hours</strong>
         </p>
-        <a href="${verifyUrl}"
-          style="display:inline-block;padding:18px 52px;
+
+        <a href="${verifyUrl}" class="btn-primary"
+          style="display:inline-block;padding:16px 44px;
             background:linear-gradient(135deg,#10b981,#047857);
-            color:#fff;text-decoration:none;border-radius:50px;
-            font-size:17px;font-weight:900;
-            box-shadow:0 8px 28px rgba(5,150,105,.45);
-            letter-spacing:.02em;">
-          ✅ &nbsp;Verify &amp; Confirm My Booking
+            color:#ffffff !important;text-decoration:none;border-radius:100px;
+            font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+            box-shadow:0 8px 28px rgba(5,150,105,.4);">
+          Verify My Booking
         </a>
-        <p style="margin:20px 0 0;font-size:11.5px;color:${T.n500};">
-          Button not working? Copy this link into your browser:
-        </p>
-        <p style="margin:6px 0 0;font-size:11px;word-break:break-all;">
-          <a href="${verifyUrl}" style="color:${T.g600};">${esc(verifyUrl)}</a>
+
+        <p style="margin:22px 0 0;font-family:'Inter',sans-serif;font-size:11px;
+          color:${T.n500};">Or copy this link:</p>
+        <p style="margin:6px 0 0;font-family:'Inter',sans-serif;font-size:11px;
+          word-break:break-all;">
+          <a href="${verifyUrl}" style="color:${T.g600};text-decoration:none;">
+            ${esc(verifyUrl)}
+          </a>
         </p>
       </div>
 
-      <!-- What happens next -->
-      <div style="background:${T.amberLight};border:1.5px solid ${T.amberBorder};
-        border-radius:16px;padding:20px;margin:20px 0;">
-        <p style="margin:0 0 14px;font-size:13px;font-weight:800;
-          color:#92400e;text-transform:uppercase;letter-spacing:.07em;">
-          ⚡ After verification:
-        </p>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-          ${stepList([
-            "Your request goes straight to our expert travel team",
-            "We'll contact you within <strong>24 hours</strong> to discuss your perfect itinerary",
-            "You'll receive a personalised quote — <strong>no payment required now</strong>",
-            "Once you're happy, we'll confirm your adventure officially!",
-          ])}
-        </table>
-      </div>
+      <!-- After verification -->
+      <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
+        font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
+        After Verification
+      </p>
+      ${stepList([
+        "Our travel team receives your request",
+        "We contact you within <strong>24 hours</strong>",
+        "You receive a personalised quote — <strong>no payment required</strong>",
+        "Once approved, we confirm your adventure",
+      ])}
 
-      ${ctaBlock(
-        "💬 Chat on WhatsApp Instead",
-        WA_URL,
-        "🏠 Visit Our Website",
-        ENV.frontendUrl,
-      )}
+      ${divider()}
 
-      <hr class="divider" style="border:none;height:1px;
-        background:linear-gradient(90deg,transparent,${T.g200},transparent);
-        margin:28px 0;" />
+      ${ctaBlock("Chat on WhatsApp", WA_URL, "Visit Website", ENV.frontendUrl)}
 
-      <p style="font-size:12px;color:${T.n500};text-align:center;line-height:1.6;margin:0;">
-        This email was sent because someone submitted a booking at
-        <a href="${ENV.frontendUrl}" style="color:${T.g600};">${esc(ENV.appName)}</a>
-        using this address. If this wasn't you, simply ignore this email —
-        your address will not be saved.
+      <p style="margin:24px 0 0;font-family:'Inter',sans-serif;font-size:11.5px;
+        color:${T.n500};text-align:center;line-height:1.6;">
+        Didn't submit this booking? Simply ignore this email — no account will be created.
       </p>
     `,
   });
 
   return safeSend(
     booking.email,
-    `✅ Confirm Your Booking — ${dest} | ${ENV.appName}`,
+    `Confirm Your Booking — ${dest} | ${ENV.appName}`,
     html,
     "sendBookingVerificationLink",
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   2.  BOOKING RECEIVED (sent to customer after verification / auth submit)
+   2. BOOKING RECEIVED
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingReceivedEmail = async (booking) => {
   if (!booking?.email) return { success: false };
 
   const dest = tripName(booking);
-  const name = safe(booking.full_name, "Explorer");
 
   const html = shell({
-    preheader: `We've received your booking for ${dest}! Our team will contact you within 24 hours — Ref ${safe(booking.booking_number)}.`,
-    headerIcon: "🎉",
-    headerBadge: statusBadge("pending"),
+    preheader: `Booking received for ${dest} — we'll contact you within 24 hours.`,
+    heroBadge: statusPill("pending"),
+    heroTitle: "Your journey begins here",
+    heroSubtitle: "We've received your booking request and our team is already reviewing it.",
     body: `
-      ${heading("Your booking request is with us!", "🌍")}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>, wonderful news!`)}
-      ${para(`Your safari booking request for <strong>${esc(dest)}</strong>
-        has been received and is now with our expert travel team.
-        We'll personally reach out within
-        <strong style="color:${T.g600};">24 hours</strong>
-        to start crafting your perfect itinerary.`)}
+      ${greet(booking.full_name)}
+      ${para(`We're delighted you chose <strong style="color:${T.g700};">${esc(ENV.appName)}</strong>
+        for your <strong>${esc(dest)}</strong> adventure. Our travel experts will contact you
+        within <strong style="color:${T.g600};">24 hours</strong> to craft your perfect itinerary.`)}
 
       ${bookingSummary(booking)}
 
-      <!-- What happens next -->
-      <div style="background:${T.g50};border:1.5px solid ${T.g200};
-        border-radius:16px;padding:20px;margin:20px 0;">
-        <p style="margin:0 0 14px;font-size:13px;font-weight:800;
-          color:${T.g800};text-transform:uppercase;letter-spacing:.07em;">
-          📋 What happens next?
-        </p>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-          ${stepList([
-            "Our team reviews your request and destination availability",
-            "A dedicated safari coordinator contacts you within <strong>24 hours</strong>",
-            "We design a fully personalised itinerary just for your group",
-            "You receive a custom quote — <strong>no payment required at this stage</strong>",
-            "Once you approve, we confirm your booking and the adventure begins! 🦁",
-          ])}
-        </table>
-      </div>
+      <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
+        font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
+        What Happens Next
+      </p>
+      ${stepList([
+        "Our team reviews availability for your dates",
+        "A dedicated coordinator contacts you within <strong>24 hours</strong>",
+        "We design your personalised itinerary",
+        "You receive a custom quote — <strong>no payment required yet</strong>",
+        "Once approved, we confirm your booking",
+      ])}
 
-      <!-- Instant contact -->
-      <div style="background:linear-gradient(135deg,#022c22,#047857);
-        border-radius:16px;padding:24px;text-align:center;margin:24px 0;">
-        <p style="margin:0 0 8px;font-size:15px;font-weight:700;color:#fff;">
-          Can't wait? Reach us instantly on WhatsApp!
-        </p>
-        <p style="margin:0 0 18px;font-size:13px;color:rgba(255,255,255,.7);">
-          Our safari experts are available 7 days a week
-        </p>
-        <a href="${WA_URL}"
-          style="display:inline-block;padding:13px 32px;
-            background:#25D366;color:#fff;text-decoration:none;
-            border-radius:40px;font-size:15px;font-weight:800;">
-          💬 &nbsp;Chat on WhatsApp
-        </a>
-      </div>
+      ${notice("info", "While You Wait",
+        `Feel free to <a href="${WA_URL}" style="color:${T.blue};font-weight:600;">
+          chat with us on WhatsApp</a> if you have any questions — our experts are available 7 days a week.`)}
 
-      ${ctaBlock(
-        "Track My Booking",
-        `${ENV.frontendUrl}/my-bookings`,
-        `📧 Email Support`,
-        `mailto:${ENV.supportEmail}`,
-      )}
+      ${ctaBlock("Track My Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `🌍 Booking Received — Ref ${safe(booking.booking_number)} | ${ENV.appName}`,
+    `Booking Received — ${safe(booking.booking_number)} | ${ENV.appName}`,
     html,
     "sendBookingReceivedEmail",
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   3.  ADMIN NOTIFICATION (after email verification or auth booking)
+   3. ADMIN NOTIFICATION
 ───────────────────────────────────────────────────────────────────────── */
 const sendAdminBookingNotification = async (booking) => {
-  if (!ENV.adminEmail) {
-    logger.warn("[BookingEmails] sendAdminBookingNotification: ADMIN_EMAIL not set");
-    return { success: false };
-  }
+  if (!ENV.adminEmail) return { success: false };
 
-  const dest    = tripName(booking);
-  const name    = safe(booking.full_name, "Unknown");
-  const email   = safe(booking.email);
-  const phone   = safe(booking.phone);
-  const wa      = phone !== "—" ? phone.replace(/\D/g, "") : null;
+  const dest = tripName(booking);
+  const name = safe(booking.full_name);
+  const email = safe(booking.email);
+  const phone = safe(booking.phone);
+  const wa = phone !== "—" ? phone.replace(/\D/g, "") : null;
   const adminUrl = `${ENV.frontendUrl}/admin/bookings`;
   const travelers = Number(booking.number_of_travelers) || 1;
 
   const html = shell({
-    preheader: `ACTION REQUIRED: New verified booking ${safe(booking.booking_number)} from ${name} for ${dest}.`,
-    headerIcon: "🔔",
-    headerBadge: `<div style="display:inline-block;padding:8px 20px;
-      background:rgba(255,255,255,.15);border:1.5px solid rgba(255,255,255,.3);
-      border-radius:30px;font-size:13px;font-weight:700;color:#fff;">
-      🔔 Admin Alert — Action Required
-    </div>`,
+    preheader: `New booking: ${name} → ${dest} (${safe(booking.booking_number)})`,
+    heroBadge: `<span style="display:inline-block;padding:7px 18px;
+      background:rgba(245,158,11,.25);border:1.5px solid rgba(251,191,36,.6);
+      border-radius:100px;color:#fef3c7;font-family:'Inter',sans-serif;
+      font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
+      🔔 Action Required
+    </span>`,
+    heroTitle: "New Verified Booking",
+    heroSubtitle: `${name} has submitted a booking for ${dest}. Ready for your review.`,
     body: `
-      ${heading("New Verified Booking Received", "🔔")}
-      ${para(`A customer has verified their email. This booking is now
-        <strong>awaiting your review and approval</strong>.
-        Please log in to the admin panel to process this request.`)}
-
-      <!-- Quick stat pills -->
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-        style="margin:20px 0;">
+      <!-- Quick stats -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
         <tr>
           ${[
-            ["Booking #", safe(booking.booking_number)],
+            ["Reference", safe(booking.booking_number)],
             ["Travelers", String(travelers)],
-            ["Source",    safe(booking.source, "website")],
-            ["Verified",  "✅ Yes"],
+            ["Source", safe(booking.source, "website")],
+            ["Verified", "✓ Yes"],
           ].map(([l, v]) => `
           <td style="width:25%;padding:0 4px;vertical-align:top;">
-            <div style="background:${T.g50};border:1.5px solid ${T.g200};
-              border-radius:12px;padding:12px 8px;text-align:center;">
-              <div style="font-size:15px;font-weight:900;color:${T.g800};
-                white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            <div style="background:${T.g50};border:1px solid ${T.g200};
+              border-radius:12px;padding:14px 10px;text-align:center;">
+              <div style="font-family:'Inter',sans-serif;font-size:15px;font-weight:800;
+                color:${T.g800};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
                 ${esc(v)}
               </div>
-              <div style="font-size:10px;color:${T.n500};margin-top:3px;
-                text-transform:uppercase;letter-spacing:.06em;font-weight:700;">
+              <div style="font-family:'Inter',sans-serif;font-size:10px;color:${T.n500};
+                margin-top:4px;text-transform:uppercase;letter-spacing:.08em;font-weight:600;">
                 ${esc(l)}
               </div>
             </div>
@@ -983,371 +796,247 @@ const sendAdminBookingNotification = async (booking) => {
         </tr>
       </table>
 
-      ${infoTable("👤 Customer Information", [
-        row("Full Name",    name),
-        row("Email",        email),
-        row("Phone",        phone),
-        row("WhatsApp",     booking.whatsapp),
-        row("Nationality",  booking.nationality),
-        row("Country",      booking.country),
-        row("Group Type",   booking.group_type),
-        row("Contact Pref", booking.preferred_contact_method),
+      ${infoTable("Customer", [
+        row("Name",        name),
+        row("Email",       email),
+        row("Phone",       phone),
+        row("WhatsApp",    booking.whatsapp),
+        row("Nationality", booking.nationality),
+        row("Country",     booking.country),
       ])}
 
-      ${infoTable("🗺️ Trip Details", [
-        row("Booking Ref",   booking.booking_number, true),
+      ${infoTable("Trip", [
+        row("Reference",     booking.booking_number, true),
         row("Destination",   dest),
         row("Country",       booking.country_name),
         row("Departure",     fmtDate(booking.travel_date)),
         row("Return",        fmtDate(booking.return_date)),
-        row("Flexible",      booking.flexible_dates ? `Yes${booking.flexible_months?.length ? ` — ${Array.isArray(booking.flexible_months) ? booking.flexible_months.join(", ") : booking.flexible_months}` : ""}` : "No"),
         row("Adults",        booking.number_of_adults),
         row("Children",      booking.number_of_children),
-        row("Total",         String(travelers)),
         row("Accommodation", booking.accommodation_type),
         row("Dietary",       booking.dietary_requirements),
         row("Submitted",     fmtDateTime(booking.created_at)),
-        row("Status",        booking.status),
       ])}
 
-      ${booking.special_requests ? `
-      <div style="background:${T.amberLight};border:1.5px solid ${T.amberBorder};
-        border-radius:14px;padding:18px 20px;margin:16px 0;">
-        <p style="margin:0 0 8px;font-size:12px;font-weight:800;color:#92400e;
-          text-transform:uppercase;letter-spacing:.08em;">
-          💬 Customer Special Requests
-        </p>
-        <p style="margin:0;font-size:14px;color:#78350f;line-height:1.65;
-          white-space:pre-wrap;">${esc(booking.special_requests)}</p>
-      </div>` : ""}
+      ${booking.special_requests ? notice("warning", "Special Requests",
+        `<span style="white-space:pre-wrap;">${esc(booking.special_requests)}</span>`) : ""}
 
-      <!-- Action buttons -->
-      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-        style="margin-top:28px;">
-        <tr>
-          <td align="center" style="padding-bottom:12px;">
-            <a href="${esc(adminUrl)}"
-              style="display:inline-block;padding:16px 44px;
-                background:linear-gradient(135deg,#10b981,#047857);
-                color:#fff;text-decoration:none;border-radius:50px;
-                font-size:16px;font-weight:900;">
-              🖥️ &nbsp;Open Admin Panel
-            </a>
-          </td>
-        </tr>
-        <tr>
-          <td align="center">
-            <a href="mailto:${esc(email)}?subject=Re: Your ${esc(dest)} Booking — ${esc(safe(booking.booking_number))}"
-              style="display:inline-block;padding:11px 28px;margin:4px;
-                background:#fff;color:${T.g700};text-decoration:none;
-                border-radius:50px;font-size:14px;font-weight:700;
-                border:2px solid ${T.g200};">
-              📧 Reply to Customer
-            </a>
-            ${wa ? `
-            <a href="https://wa.me/${wa}"
-              style="display:inline-block;padding:11px 28px;margin:4px;
-                background:#25D366;color:#fff;text-decoration:none;
-                border-radius:50px;font-size:14px;font-weight:700;">
-              💬 WhatsApp Customer
-            </a>` : ""}
-          </td>
-        </tr>
+      <!-- Actions -->
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 8px;">
+        <tr><td align="center" style="padding-bottom:12px;">
+          <a href="${esc(adminUrl)}" class="btn-primary"
+            style="display:inline-block;padding:16px 44px;
+              background:linear-gradient(135deg,#10b981,#047857);
+              color:#ffffff !important;text-decoration:none;border-radius:100px;
+              font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+              box-shadow:0 8px 24px rgba(5,150,105,.35);">
+            Open Admin Panel
+          </a>
+        </td></tr>
+        <tr><td align="center">
+          <a href="mailto:${esc(email)}?subject=Re: Your ${esc(dest)} Booking — ${esc(safe(booking.booking_number))}"
+            style="display:inline-block;padding:11px 24px;margin:4px;
+              background:#ffffff;color:${T.g700} !important;text-decoration:none;
+              border-radius:100px;font-family:'Inter',sans-serif;font-size:13px;
+              font-weight:600;border:2px solid ${T.g200};">
+            Reply to Customer
+          </a>
+          ${wa ? `
+          <a href="https://wa.me/${wa}"
+            style="display:inline-block;padding:11px 24px;margin:4px;
+              background:#25D366;color:#ffffff !important;text-decoration:none;
+              border-radius:100px;font-family:'Inter',sans-serif;font-size:13px;font-weight:600;">
+            WhatsApp Customer
+          </a>` : ""}
+        </td></tr>
       </table>
     `,
   });
 
   return safeSend(
     ENV.adminEmail,
-    `🔔 New Booking: ${safe(booking.booking_number)} — ${name} → ${dest} | ${ENV.appName}`,
+    `[New Booking] ${safe(booking.booking_number)} — ${name} → ${dest}`,
     html,
     "sendAdminBookingNotification",
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   4.  BOOKING CONFIRMED (admin approves → sent to customer)
+   4. BOOKING CONFIRMED
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingConfirmation = async (booking) => {
   if (!booking?.email) return { success: false };
 
-  const dest    = tripName(booking);
-  const name    = safe(booking.full_name, "Explorer");
-  const days    = daysUntil(booking.travel_date);
-  const countdown = booking.travel_date ? humanCountdown(booking.travel_date) : null;
+  const dest = tripName(booking);
+  const days = daysUntil(booking.travel_date);
 
   const html = shell({
-    preheader: `🎉 Your ${dest} adventure is officially confirmed! ${countdown ? `Your trip is ${countdown}.` : ""} Ref ${safe(booking.booking_number)}.`,
-    headerIcon: "🎊",
-    headerBadge: statusBadge("confirmed"),
+    preheader: `Your ${dest} adventure is confirmed! ${days !== null ? humanCountdown(booking.travel_date) : ""}`,
+    heroBadge: statusPill("confirmed"),
+    heroTitle: "Your adventure is confirmed",
+    heroSubtitle: `Pack your bags — ${dest} is waiting for you.`,
     body: `
-      ${heading("Your adventure is officially confirmed!", "🎉")}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,
-        we have incredible news —`)}
-      ${para(`Your safari adventure to <strong>${esc(dest)}</strong>
-        has been <strong style="color:${T.g600};">officially confirmed</strong>
-        by our travel team. Pack your bags — Africa is waiting for you! 🌍`)}
+      ${greet(booking.full_name)}
+      ${para(`Wonderful news — your safari to <strong style="color:${T.g700};">${esc(dest)}</strong>
+        has been <strong>officially confirmed</strong>. We're excited to be part of your journey.`)}
 
-      <!-- Countdown -->
-      ${countdown && days !== null && days >= 0 ? `
-      <div class="countdown-box" style="
-        background:linear-gradient(145deg,#022c22,#064e3b,#047857);
-        border-radius:20px;padding:36px 24px;text-align:center;margin:24px 0;">
-        <span style="font-size:12px;font-weight:800;color:${T.g400};
-          text-transform:uppercase;letter-spacing:.2em;display:block;
-          margin-bottom:12px;">
-          Your trip is
-        </span>
-        <span class="countdown-number" style="
-          font-size:${days < 10 ? "88px" : "72px"};font-weight:900;
-          color:#34d399;line-height:1;display:block;
-          font-family:'Courier New','Lucida Console',monospace;">
-          ${days === 0 ? "TODAY" : days === 1 ? "TOMORROW" : humanCountdown(booking.travel_date).toUpperCase()}
-        </span>
-        <span class="countdown-label" style="
-          font-size:14px;color:rgba(255,255,255,.65);font-weight:700;
-          text-transform:uppercase;letter-spacing:.15em;
-          margin-top:10px;display:block;">
-          ✈️ ${esc(dest)}
-        </span>
-        <p style="margin:14px 0 0;font-size:15px;color:rgba(255,255,255,.8);
-          line-height:1.5;">
-          ${fmtDate(booking.travel_date)}
-        </p>
-      </div>` : ""}
+      ${days !== null && days >= 0 ? countdownBox(days, dest, booking.travel_date) : ""}
 
       ${bookingSummary({ ...booking, status: "confirmed" })}
 
       ${booking.confirmation_code ? `
-      <div style="background:${T.g50};border:2px solid ${T.g400};
-        border-radius:16px;padding:24px;text-align:center;margin:20px 0;">
-        <p style="margin:0 0 8px;font-size:11px;font-weight:800;color:${T.g600};
-          text-transform:uppercase;letter-spacing:.15em;">
+      <div style="background:${T.g50};border:2px solid ${T.g400};border-radius:14px;
+        padding:22px;text-align:center;margin:20px 0;">
+        <p style="margin:0 0 6px;font-family:'Inter',sans-serif;font-size:10.5px;
+          font-weight:700;color:${T.g600};text-transform:uppercase;letter-spacing:.15em;">
           Confirmation Code
         </p>
-        <p style="margin:0;font-size:36px;font-weight:900;color:${T.g700};
-          font-family:'Courier New',monospace;letter-spacing:8px;">
+        <p style="margin:0;font-family:'Inter',sans-serif;font-size:28px;font-weight:800;
+          color:${T.g700};letter-spacing:6px;">
           ${esc(booking.confirmation_code)}
-        </p>
-        <p style="margin:8px 0 0;font-size:12px;color:${T.n500};">
-          Keep this safe — you may need it for check-in
         </p>
       </div>` : ""}
 
-      <!-- Important next steps -->
-      <div style="background:${T.g50};border:1.5px solid ${T.g200};
-        border-radius:16px;padding:20px;margin:20px 0;">
-        <p style="margin:0 0 14px;font-size:13px;font-weight:800;
-          color:${T.g800};text-transform:uppercase;letter-spacing:.07em;">
-          📌 Important next steps
-        </p>
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
-          ${stepList([
-            "Ensure your passport is valid for at least <strong>6 months</strong> beyond your return date",
-            "Check visa requirements for your destination country",
-            "Arrange comprehensive travel insurance",
-            "Your safari coordinator will contact you with a detailed itinerary",
-            "We'll send countdown reminders as your departure approaches 🦁",
-          ])}
-        </table>
-      </div>
+      <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
+        font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
+        Before You Travel
+      </p>
+      ${stepList([
+        "Ensure your passport is valid for at least <strong>6 months</strong>",
+        "Check visa requirements for your destination",
+        "Arrange comprehensive travel insurance",
+        "Your coordinator will send a detailed itinerary shortly",
+      ])}
 
-      ${ctaBlock(
-        "View My Booking",
-        `${ENV.frontendUrl}/my-bookings`,
-        "💬 Chat on WhatsApp",
-        WA_URL,
-      )}
+      ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Chat on WhatsApp", WA_URL)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `✅ Confirmed: ${safe(booking.booking_number)} — ${dest} | ${ENV.appName}`,
+    `Confirmed: ${dest} — ${safe(booking.booking_number)} | ${ENV.appName}`,
     html,
     "sendBookingConfirmation",
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   5.  BOOKING STATUS UPDATE (generic — on-hold, completed, etc.)
+   5. STATUS UPDATE
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "") => {
   if (!booking?.email) return { success: false };
 
-  const dest  = tripName(booking);
-  const name  = safe(booking.full_name, "Explorer");
-  const st    = STATUS_STYLE[toStatus] || STATUS_STYLE.pending;
-  const from  = STATUS_STYLE[fromStatus]?.label || safe(fromStatus);
+  const dest = tripName(booking);
+  const st = STATUS[toStatus] || STATUS.pending;
+  const fromLabel = STATUS[fromStatus]?.label || safe(fromStatus);
 
-  const msgs = {
-    pending:   "Your booking is under review. Our team will be in touch shortly.",
-    confirmed: "Wonderful! Your booking has been confirmed. Get ready for an incredible adventure!",
-    "on-hold": "Your booking is temporarily on hold pending some additional details. Our team will contact you shortly.",
-    completed: "Your safari journey is marked as completed. We hope it was truly extraordinary! 🌟",
-    cancelled: "Your booking has been cancelled. We're sorry to see this happen.",
-    refunded:  "Your refund has been processed. Please allow 5–10 business days to appear.",
+  const messages = {
+    pending:   "Your booking is being reviewed. We'll be in touch shortly.",
+    confirmed: "Your booking is confirmed. Get ready for an incredible adventure!",
+    "on-hold": "Your booking is temporarily on hold pending additional details.",
+    completed: "Your safari is complete. Thank you for travelling with us.",
+    cancelled: "Your booking has been cancelled.",
+    refunded:  "Your refund has been processed. Please allow 5–10 business days.",
   };
-
-  const statusIcon = {
-    confirmed: "🎉", "on-hold": "⏸️", completed: "🏆",
-    cancelled: "❌", refunded: "💰", pending: "⏳",
-  };
-
-  const icon = statusIcon[toStatus] || "🔄";
-  const msg  = msgs[toStatus] || "Your booking status has been updated.";
 
   const html = shell({
-    preheader: `Your booking ${safe(booking.booking_number)} is now: ${st.label}. ${msg}`,
-    headerIcon: icon,
-    headerBadge: statusBadge(toStatus),
+    preheader: `Booking ${safe(booking.booking_number)}: ${st.label}`,
+    heroBadge: statusPill(toStatus),
+    heroTitle: `Status Updated: ${st.label}`,
+    heroSubtitle: messages[toStatus] || "Your booking status has been updated.",
     body: `
-      ${heading(`Booking Status Update`, icon)}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,`)}
-      ${para(msg)}
+      ${greet(booking.full_name)}
+      ${para(messages[toStatus] || "Your booking status has been updated.")}
 
-      ${infoTable("🔄 Status Change", [
-        row("Booking Ref",     booking.booking_number, true),
-        row("Destination",     dest !== "Your Trip" ? dest : null),
-        row("Travel Date",     fmtDate(booking.travel_date)),
-        row("Previous Status", from),
-        row("New Status",      st.label),
-        row("Updated",         fmtDateTime(new Date())),
+      ${infoTable("Status Change", [
+        row("Reference",   booking.booking_number, true),
+        row("Destination", dest !== "Your Trip" ? dest : null),
+        row("Travel Date", fmtDate(booking.travel_date)),
+        row("Previous",    fromLabel),
+        row("Now",         st.label),
+        row("Updated",     fmtDateTime(new Date())),
       ])}
 
-      ${reason ? `
-      <div style="background:${T.amberLight};border:1.5px solid ${T.amberBorder};
-        border-left:4px solid ${T.amber};border-radius:0 14px 14px 0;
-        padding:16px 20px;margin:16px 0;">
-        <p style="margin:0 0 6px;font-size:12px;font-weight:800;color:#92400e;
-          text-transform:uppercase;letter-spacing:.07em;">
-          📝 Note from our team
-        </p>
-        <p style="margin:0;font-size:14px;color:#78350f;line-height:1.65;">
-          ${esc(reason)}
-        </p>
-      </div>` : ""}
+      ${reason ? notice("info", "Note from Our Team", esc(reason)) : ""}
 
-      ${toStatus === "completed" ? `
-      <div style="background:linear-gradient(135deg,${T.g50},#dcfce7);
-        border:2px solid ${T.g300};border-radius:16px;
-        padding:24px;text-align:center;margin:20px 0;">
-        <p style="margin:0 0 6px;font-size:20px;font-weight:900;color:${T.g800};">
-          🌟 Thank you for travelling with us!
-        </p>
-        <p style="margin:0;font-size:14px;color:${T.n700};line-height:1.6;">
-          We hope your adventure was everything you dreamed of.
-          We'd love to read your review — and even more, plan your next journey!
-        </p>
-      </div>
-      ` : ""}
+      ${toStatus === "completed" ? notice("success", "Thank You",
+        "We'd love to hear about your experience — leave us a review and let's plan your next adventure!") : ""}
 
-      ${ctaBlock(
-        "View My Booking",
-        `${ENV.frontendUrl}/my-bookings`,
-        "Get Support",
-        `mailto:${ENV.supportEmail}`,
-      )}
+      ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `${icon} Booking ${st.label} — ${safe(booking.booking_number)} | ${ENV.appName}`,
+    `Booking ${st.label} — ${safe(booking.booking_number)} | ${ENV.appName}`,
     html,
     `sendBookingStatusUpdate(${fromStatus}→${toStatus})`,
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   6.  BOOKING CANCELLATION (shorthand)
+   6. CANCELLATION
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingCancellation = async (booking, reason = "") => {
   if (!booking?.email) return { success: false };
 
   const dest = tripName(booking);
-  const name = safe(booking.full_name, "Explorer");
 
   const html = shell({
-    preheader: `Your booking ${safe(booking.booking_number)} for ${dest} has been cancelled.${reason ? " " + reason : ""}`,
-    headerIcon: "❌",
-    headerBadge: statusBadge("cancelled"),
+    preheader: `Booking ${safe(booking.booking_number)} cancelled.`,
+    heroBadge: statusPill("cancelled"),
+    heroTitle: "Booking Cancelled",
+    heroSubtitle: "We're sorry to see this booking cancelled. Africa will be here when you're ready.",
     body: `
-      ${heading("Booking Cancelled", "❌")}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,`)}
-      ${para(`We're sorry to inform you that your booking for
-        <strong>${esc(dest)}</strong> has been cancelled.
-        We understand this is disappointing and we apologise for any inconvenience.`)}
+      ${greet(booking.full_name)}
+      ${para(`We're sorry to inform you that your booking for <strong>${esc(dest)}</strong>
+        has been cancelled. We apologise for any inconvenience this may cause.`)}
 
-      ${infoTable("📋 Cancelled Booking", [
-        row("Booking Ref",  booking.booking_number, true),
-        row("Destination",  dest !== "Your Trip" ? dest : null),
-        row("Travel Date",  fmtDate(booking.travel_date)),
-        row("Status",       "Cancelled"),
-        row("Cancelled On", fmtDateTime(new Date())),
+      ${infoTable("Cancelled Booking", [
+        row("Reference",   booking.booking_number, true),
+        row("Destination", dest !== "Your Trip" ? dest : null),
+        row("Travel Date", fmtDate(booking.travel_date)),
+        row("Cancelled",   fmtDateTime(new Date())),
       ])}
 
-      ${reason ? `
-      <div style="background:${T.redLight};border:1.5px solid #fca5a5;
-        border-left:4px solid ${T.red};border-radius:0 14px 14px 0;
-        padding:16px 20px;margin:16px 0;">
-        <p style="margin:0 0 6px;font-size:12px;font-weight:800;color:#991b1b;
-          text-transform:uppercase;letter-spacing:.07em;">
-          📝 Cancellation Reason
-        </p>
-        <p style="margin:0;font-size:14px;color:#7f1d1d;line-height:1.65;">
-          ${esc(reason)}
-        </p>
-      </div>` : ""}
+      ${reason ? notice("error", "Cancellation Reason", esc(reason)) : ""}
 
-      <div style="background:${T.blueLight};border:1.5px solid #bfdbfe;
-        border-left:4px solid ${T.blue};border-radius:0 14px 14px 0;
-        padding:16px 20px;margin:16px 0;">
-        <p style="margin:0;font-size:14px;color:#1e40af;line-height:1.65;">
-          💳 &nbsp;If you made a payment, a <strong>full refund will be
-          processed within 5–10 business days</strong> to your original
-          payment method.
-        </p>
-      </div>
+      ${notice("info", "Refund Information",
+        "If a payment was made, a full refund will be processed within 5–10 business days to your original payment method.")}
 
-      <!-- Africa will wait -->
-      <div style="background:linear-gradient(135deg,#022c22,#047857);
-        border-radius:16px;padding:24px;text-align:center;margin:24px 0;">
-        <p style="margin:0 0 6px;font-size:18px;font-weight:800;color:#fff;">
-          🌍 Africa will be here when you're ready
-        </p>
-        <p style="margin:0 0 18px;font-size:14px;color:rgba(255,255,255,.75);line-height:1.6;">
-          We'd love to plan your next adventure whenever you're ready.
-          Our destinations aren't going anywhere!
+      <!-- Rebook -->
+      <div style="background:linear-gradient(135deg,#022c22,#047857);border-radius:16px;
+        padding:28px 24px;text-align:center;margin:24px 0;">
+        <h3 style="margin:0 0 8px;font-family:'Playfair Display',Georgia,serif;
+          font-size:22px;font-weight:700;color:#ffffff;">
+          Ready when you are
+        </h3>
+        <p style="margin:0 0 20px;font-family:'Inter',sans-serif;font-size:14px;
+          color:rgba(255,255,255,.8);line-height:1.6;">
+          Our destinations aren't going anywhere. Let's plan your next adventure.
         </p>
         <a href="${ENV.frontendUrl}/destinations"
-          style="display:inline-block;padding:12px 32px;
-            background:rgba(255,255,255,.15);border:1.5px solid rgba(255,255,255,.3);
-            color:#fff;text-decoration:none;border-radius:30px;
-            font-size:14px;font-weight:700;">
-          Browse Destinations →
+          style="display:inline-block;padding:12px 32px;background:#ffffff;
+            color:${T.g700} !important;text-decoration:none;border-radius:100px;
+            font-family:'Inter',sans-serif;font-size:13px;font-weight:700;">
+          Browse Destinations
         </a>
       </div>
 
-      ${ctaBlock(
-        "💬 Talk to Our Team",
-        WA_URL,
-        "📧 Email Support",
-        `mailto:${ENV.supportEmail}`,
-      )}
+      ${ctaBlock("Talk to Our Team", WA_URL, "Email Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `❌ Booking Cancelled — ${safe(booking.booking_number)} | ${ENV.appName}`,
+    `Cancelled — ${safe(booking.booking_number)} | ${ENV.appName}`,
     html,
     "sendBookingCancellation",
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   7.  TRIP COUNTDOWN EMAIL (milestone reminders)
+   7. TRIP COUNTDOWN
 ───────────────────────────────────────────────────────────────────────── */
 const sendTripCountdownEmail = async (booking) => {
   if (!booking?.email || !booking?.travel_date) return { success: false };
@@ -1358,93 +1047,84 @@ const sendTripCountdownEmail = async (booking) => {
   const MILESTONES = [60, 30, 14, 7, 3, 1, 0];
   if (!MILESTONES.includes(days)) return { success: false, error: "Not a milestone" };
 
-  const dest    = tripName(booking);
-  const name    = safe(booking.full_name, "Explorer");
-  const countdown = humanCountdown(booking.travel_date);
+  const dest = tripName(booking);
 
   const CONTENT = {
-    0:  {
-      emoji: "🚀", urgency: "TODAY IS THE DAY!",
-      headline: "Your adventure starts TODAY!",
-      sub: "This is it! Your African safari begins today. Safe travels — enjoy every magical moment!",
+    0: {
+      urgency: "Today is the day!",
+      title: "Your adventure starts today",
+      sub: "This is it — safe travels and enjoy every magical moment.",
       tips: [
-        "✅ Double-check you have passport, tickets, and all documents",
-        "✅ Arrive at the airport at least 3 hours before departure",
-        "✅ Charge all your devices — you'll want to capture everything",
-        "✅ Our guide will meet you at the arranged location",
-        "🦁 Africa is ready to take your breath away — enjoy every second!",
+        "Double-check passport, tickets, and documents",
+        "Arrive at airport 3 hours before departure",
+        "Charge all devices — capture every moment",
+        "Our guide will meet you at the arranged location",
       ],
     },
-    1:  {
-      emoji: "✈️", urgency: "TOMORROW IS THE DAY!",
-      headline: "You leave tomorrow!",
-      sub: "The big day is almost here! Time for final preparations.",
+    1: {
+      urgency: "One day to go",
+      title: "You leave tomorrow",
+      sub: "Time for final preparations. Get a good night's sleep!",
       tips: [
-        "🧳 Lay out everything you need tonight",
-        "📋 Confirm your transfer and pick-up time with our team",
-        "💊 Pack any medications in your carry-on bag",
-        "🔋 Charge all devices and clear memory cards",
-        "😴 Get a good night's sleep — adventure awaits!",
+        "Lay out everything you need tonight",
+        "Confirm pick-up time with our team",
+        "Pack medications in your carry-on",
+        "Charge all devices and clear memory cards",
       ],
     },
-    3:  {
-      emoji: "🔥", urgency: "3 DAYS TO GO!",
-      headline: "3 days and counting!",
-      sub: "You're almost there! Here are your final preparation tips.",
+    3: {
+      urgency: "3 days to go",
+      title: "Almost there",
+      sub: "Your African adventure is just three days away.",
       tips: [
-        "🎒 Finalise your packing — don't forget layers for morning game drives",
-        "📂 Print copies of your booking confirmation and travel insurance",
-        "📱 Download offline maps for your destination",
-        "💴 Get some local currency for tips and small purchases",
-        "⏰ Confirm your pick-up or transfer time with our team",
+        "Finalise packing — include layers for morning drives",
+        "Print booking confirmation and travel insurance",
+        "Download offline maps for your destination",
+        "Get local currency for tips and small purchases",
       ],
     },
-    7:  {
-      emoji: "⚡", urgency: "ONE WEEK TO GO!",
-      headline: "One week until your safari!",
-      sub: "Your adventure is exactly one week away. Here's your pre-departure checklist.",
+    7: {
+      urgency: "One week to go",
+      title: "Your safari is next week",
+      sub: "Here's your pre-departure checklist.",
       tips: [
-        "🧴 Complete your packing — check the weather forecast for your destination",
-        "🛂 Confirm your passport is valid for 6+ months",
-        "📱 Save our guide's contact number in your phone",
-        "📷 Test your camera and pack extra memory cards",
-        "🎉 Share your excitement — tell friends and family you're going to Africa!",
+        "Complete packing — check weather forecast",
+        "Confirm passport valid for 6+ months",
+        "Save your guide's contact number",
+        "Test camera and pack extra memory cards",
       ],
     },
     14: {
-      emoji: "📅", urgency: "2 WEEKS TO GO!",
-      headline: "Two weeks to go!",
-      sub: "Your East African adventure is just two weeks away. Here's how to prepare.",
+      urgency: "Two weeks to go",
+      title: "Two weeks until adventure",
+      sub: "Time to prepare for your East African safari.",
       tips: [
-        "🧳 Start packing non-essential items early",
-        "💉 Ensure any required vaccinations are completed",
-        "🏥 Pick up any prescription medications you need for the trip",
-        "📋 Review your booking itinerary and contact us with any questions",
-        "📷 Charge and test all camera equipment",
+        "Start packing non-essential items",
+        "Ensure vaccinations are completed",
+        "Pick up prescription medications",
+        "Review your itinerary and ask any questions",
       ],
     },
     30: {
-      emoji: "🗓️", urgency: "ONE MONTH TO GO!",
-      headline: "One month until your safari!",
-      sub: "Your adventure is exactly one month away. A few things to take care of now.",
+      urgency: "One month to go",
+      title: "One month until your safari",
+      sub: "The countdown begins — here's what to prepare.",
       tips: [
-        "✈️ Book any internal flights or transfers if not already arranged",
-        "🎒 Start planning your packing list — layers are key for safari mornings",
-        "🛡️ Confirm your travel insurance covers adventure activities",
-        "📖 Start reading about the wildlife and culture you'll encounter",
-        "🌍 Share your itinerary with a trusted contact at home",
+        "Book internal flights or transfers if needed",
+        "Start your packing checklist",
+        "Confirm travel insurance covers activities",
+        "Share your itinerary with a trusted contact",
       ],
     },
     60: {
-      emoji: "🌍", urgency: "60 DAYS TO GO!",
-      headline: "60 days until your adventure!",
-      sub: "Your safari is two months away — the perfect time to start planning.",
+      urgency: "60 days to go",
+      title: "Your adventure in 60 days",
+      sub: "Two months out — the perfect time to plan.",
       tips: [
-        "🛂 Apply for any required visas (processing can take 4–6 weeks)",
-        "💉 Schedule any required vaccinations with your GP",
-        "🛡️ Purchase comprehensive travel insurance now",
-        "🎒 Research what to pack for an East African safari",
-        "📸 Follow us on social media for destination inspiration!",
+        "Apply for required visas (4–6 weeks processing)",
+        "Schedule required vaccinations",
+        "Purchase comprehensive travel insurance",
+        "Research packing essentials for East Africa",
       ],
     },
   };
@@ -1452,159 +1132,87 @@ const sendTripCountdownEmail = async (booking) => {
   const c = CONTENT[days] || CONTENT[7];
 
   const html = shell({
-    preheader: `${c.urgency} — Your ${dest} adventure is ${countdown}. ${c.sub}`,
-    headerIcon: c.emoji,
-    headerBadge: `<div style="display:inline-block;padding:8px 20px;
-      background:rgba(255,255,255,.15);border:1.5px solid rgba(255,255,255,.3);
-      border-radius:30px;font-size:13px;font-weight:700;color:#fff;">
-      ${c.urgency}
-    </div>`,
+    preheader: `${c.urgency} — Your ${dest} adventure. ${c.sub}`,
+    heroBadge: `<span style="display:inline-block;padding:7px 18px;
+      background:rgba(52,211,153,.25);border:1.5px solid rgba(52,211,153,.5);
+      border-radius:100px;color:#a7f3d0;font-family:'Inter',sans-serif;
+      font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
+      ${esc(c.urgency)}
+    </span>`,
+    heroTitle: c.title,
+    heroSubtitle: c.sub,
     body: `
-      ${heading(c.headline)}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,`)}
+      ${greet(booking.full_name)}
       ${para(c.sub)}
 
-      <!-- Countdown display -->
-      <div style="background:linear-gradient(145deg,#022c22,#064e3b,#047857);
-        border-radius:20px;padding:${days <= 1 ? "36px" : "32px"} 24px;
-        text-align:center;margin:24px 0;">
-        ${days > 1 ? `
-        <span style="font-size:${days >= 10 ? "88px" : "100px"};font-weight:900;
-          color:#34d399;line-height:1;display:block;
-          font-family:'Courier New','Lucida Console',monospace;">
-          ${days}
-        </span>
-        <span style="font-size:16px;color:rgba(255,255,255,.75);font-weight:700;
-          text-transform:uppercase;letter-spacing:.15em;display:block;margin-top:8px;">
-          day${days !== 1 ? "s" : ""} to go
-        </span>` : `
-        <span style="font-size:44px;font-weight:900;color:#34d399;
-          display:block;font-family:'Courier New',monospace;letter-spacing:2px;">
-          ${days === 0 ? "TODAY! 🎉" : "TOMORROW! ✈️"}
-        </span>`}
-        <div style="margin-top:16px;padding-top:16px;
-          border-top:1px solid rgba(255,255,255,.15);">
-          <p style="margin:0;font-size:15px;color:rgba(255,255,255,.85);font-weight:600;">
-            ✈️ ${esc(dest)}
-          </p>
-          <p style="margin:6px 0 0;font-size:13px;color:rgba(255,255,255,.55);">
-            ${fmtDate(booking.travel_date)}
-          </p>
-        </div>
-      </div>
+      ${countdownBox(days, dest, booking.travel_date)}
 
-      ${infoTable("📋 Your Trip", [
-        row("Booking Ref",  booking.booking_number, true),
-        row("Destination",  dest !== "Your Trip" ? dest : null),
-        row("Country",      booking.country_name),
-        row("Departure",    fmtDate(booking.travel_date)),
-        row("Return",       fmtDate(booking.return_date)),
-        row("Travelers",    booking.number_of_travelers),
+      ${infoTable("Your Trip", [
+        row("Reference",   booking.booking_number, true),
+        row("Destination", dest !== "Your Trip" ? dest : null),
+        row("Country",     booking.country_name),
+        row("Departure",   fmtDate(booking.travel_date)),
+        row("Return",      fmtDate(booking.return_date)),
+        row("Travelers",   booking.number_of_travelers),
       ])}
 
-      <!-- Checklist -->
-      <div style="background:${T.amberLight};border:1.5px solid ${T.amberBorder};
-        border-radius:16px;padding:20px;margin:20px 0;">
-        <p style="margin:0 0 14px;font-size:13px;font-weight:800;color:#92400e;
-          text-transform:uppercase;letter-spacing:.07em;">
-          ✅ ${days <= 3 ? "Final checklist" : "Preparation tips"}
-        </p>
-        ${c.tips.map(tip => `
-        <p style="margin:0 0 10px;font-size:14px;color:#92400e;
-          line-height:1.6;padding-left:4px;">
-          ${esc(tip)}
-        </p>`).join("")}
-      </div>
-
-      <!-- Need help -->
-      <div style="background:linear-gradient(135deg,#022c22,#047857);
-        border-radius:16px;padding:22px;text-align:center;margin:20px 0;">
-        <p style="margin:0 0 6px;font-size:15px;font-weight:700;color:#fff;">
-          Questions? We're here for you! 🦁
-        </p>
-        <p style="margin:0 0 16px;font-size:13px;color:rgba(255,255,255,.7);">
-          Chat with your safari coordinator any time
-        </p>
-        <a href="${WA_URL}"
-          style="display:inline-block;padding:12px 28px;
-            background:#25D366;color:#fff;text-decoration:none;
-            border-radius:30px;font-size:14px;font-weight:800;">
-          💬 &nbsp;WhatsApp Our Team
-        </a>
-      </div>
-
-      ${ctaBlock(
-        "View Full Booking",
-        `${ENV.frontendUrl}/my-bookings`,
-        "Contact Your Coordinator",
-        `mailto:${ENV.supportEmail}?subject=Countdown query — ${safe(booking.booking_number)}`,
-      )}
-
-      <p style="font-size:12px;color:${T.n500};text-align:center;
-        line-height:1.6;margin-top:20px;">
-        You're receiving countdown emails as your departure approaches. 🌿<br/>
-        To stop, reply with "unsubscribe countdown" to
-        <a href="mailto:${ENV.supportEmail}" style="color:${T.g600};">
-          ${esc(ENV.supportEmail)}
-        </a>
+      <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
+        font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
+        ${days <= 3 ? "Final Checklist" : "Preparation Tips"}
       </p>
+      ${stepList(c.tips)}
+
+      ${ctaBlock("View Full Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Coordinator", `mailto:${ENV.supportEmail}`)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `${c.emoji} ${c.urgency} — ${dest} | ${ENV.appName}`,
+    `${c.urgency} — ${dest} | ${ENV.appName}`,
     html,
     `sendTripCountdownEmail(${days}d)`,
   );
 };
 
 /* ─────────────────────────────────────────────────────────────────────────
-   8.  CANCELLATION REQUEST ACKNOWLEDGEMENT
+   8. CANCELLATION REQUEST ACK
 ───────────────────────────────────────────────────────────────────────── */
 const sendCancellationRequestAck = async (booking, requestType = "cancellation") => {
   if (!booking?.email) return { success: false };
 
-  const dest  = tripName(booking);
-  const name  = safe(booking.full_name, "Explorer");
+  const dest = tripName(booking);
   const label = requestType === "refund" ? "Refund" : "Cancellation";
 
   const html = shell({
-    preheader: `Your ${label.toLowerCase()} request for booking ${safe(booking.booking_number)} has been received. We'll respond within 24–48 hours.`,
-    headerIcon: "📝",
+    preheader: `${label} request received for ${safe(booking.booking_number)}.`,
+    heroBadge: `<span style="display:inline-block;padding:7px 18px;
+      background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
+      border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
+      font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
+      📝 Under Review
+    </span>`,
+    heroTitle: `${label} Request Received`,
+    heroSubtitle: "Our team will review your request within 24–48 hours.",
     body: `
-      ${heading(`${label} Request Received`, "📝")}
-      ${para(`Hi <strong style="color:${T.n900};">${esc(name)}</strong>,`)}
+      ${greet(booking.full_name)}
       ${para(`We've received your <strong>${esc(label.toLowerCase())} request</strong>
-        for booking <strong>${esc(safe(booking.booking_number))}</strong>
-        (${esc(dest)}).
-        Our team will review it carefully and get back to you within
-        <strong style="color:${T.g600};">24–48 hours</strong>.`)}
+        for booking <strong style="color:${T.g700};">${esc(safe(booking.booking_number))}</strong>
+        (${esc(dest)}). Our team will review it and respond within
+        <strong>24–48 hours</strong>.`)}
 
       ${bookingSummary(booking)}
 
-      <div style="background:${T.blueLight};border:1.5px solid #bfdbfe;
-        border-left:4px solid ${T.blue};border-radius:0 14px 14px 0;
-        padding:16px 20px;margin:16px 0;">
-        <p style="margin:0;font-size:14px;color:#1e40af;line-height:1.65;">
-          ℹ️ &nbsp;Your booking remains <strong>active</strong> until your
-          ${label.toLowerCase()} request has been reviewed and approved
-          by our team. We'll notify you by email of our decision.
-        </p>
-      </div>
+      ${notice("info", "Important",
+        `Your booking remains <strong>active</strong> until we've reviewed your ${label.toLowerCase()} request.
+         We'll notify you by email of our decision.`)}
 
-      ${ctaBlock(
-        "View My Booking",
-        `${ENV.frontendUrl}/my-bookings`,
-        "💬 Chat on WhatsApp",
-        WA_URL,
-      )}
+      ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Chat on WhatsApp", WA_URL)}
     `,
   });
 
   return safeSend(
     booking.email,
-    `📝 ${label} Request Received — ${safe(booking.booking_number)} | ${ENV.appName}`,
+    `${label} Request Received — ${safe(booking.booking_number)} | ${ENV.appName}`,
     html,
     "sendCancellationRequestAck",
   );

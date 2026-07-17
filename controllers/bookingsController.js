@@ -81,6 +81,14 @@ try {
   logger.warn("[Bookings] notificationsController not found:", err.message);
 }
 
+/* ── Safe require: messaging (conversations + live chat) ───────────────────── */
+let startBookingConversation = async () => null;
+try {
+  ({ startBookingConversation } = require("../utils/messaging"));
+} catch (err) {
+  logger.warn("[Bookings] messaging util not found:", err.message);
+}
+
 /* ── Safe require: socket bus (live notifications) ────────────────────────── */
 let getIO = () => null;
 try {
@@ -89,6 +97,52 @@ try {
 } catch (err) {
   logger.warn("[Bookings] socketBus not found:", err.message);
 }
+
+/* Send a real-time + in-app + email notification to a single user about a
+   booking event. Used so BOTH admin and user are always informed. */
+const notifyUserBookingEvent = async ({
+  req, user, booking, title, message, actionUrl, actionLabel, priority = "normal",
+}) => {
+  try {
+    const notif = await createNotificationInternal({
+      userId:      user.id || null,
+      userEmail:   user.email || null,
+      type:        "booking_created",
+      category:    "booking",
+      title,
+      message,
+      actionUrl:   actionUrl || "/my-bookings",
+      actionLabel: actionLabel || "View Booking",
+      priority,
+      senderType:  "admin",
+      senderName:  "Altuvera Team",
+      metadata:    { bookingNumber: booking.booking_number || null },
+    }).catch(() => {});
+    return notif;
+  } catch (err) {
+    logger.warn("[Bookings] notifyUserBookingEvent:", err.message);
+    return null;
+  }
+};
+
+/* Notify the admin room (socket + in-app admin notification) about a new request */
+const pingAdminNewRequest = (booking, adminActivityTemplate) => {
+  try {
+    if (adminActivityTemplate) {
+      createNotificationInternal({
+        targetScope: "admin",
+        type:        "booking_created",
+        category:    "booking",
+        title:       "🔔 New booking request",
+        message:     `Booking ${booking.booking_number} from ${booking.full_name || "a traveller"}.`,
+        actionUrl:   "/bookings",
+        actionLabel: "Review",
+        priority:    "high",
+        metadata:    { bookingNumber: booking.booking_number },
+      }).catch(() => {});
+    }
+  } catch { /* non-fatal */ }
+};
 
 /* ══════════════════════════════════════════════════════════════════════════════
    CONSTANTS
@@ -462,52 +516,78 @@ exports.create = async (req, res, next) => {
 
     /* ── AUTHENTICATED USER ── */
     if (emailVerified) {
-      // 1. Confirm receipt to user
+      // 1. Confirm receipt to user (email)
       if (sendBookingReceivedEmail && full) {
         sendBookingReceivedEmail(full).catch((e) =>
           logger.warn("[Bookings] sendBookingReceivedEmail failed:", e.message),
         );
       }
 
-      // 2. Alert admin
+      // 2. Alert admin (email)
       if (sendAdminBookingNotification && full) {
         sendAdminBookingNotification(full).catch((e) =>
           logger.warn("[Bookings] sendAdminBookingNotification failed:", e.message),
         );
       }
 
-      // 3. In-app notification
-      createNotificationInternal({
-        userId:      req.user.id,
-        userEmail:   req.user.email,
-        type:        "booking_created",
-        title:       "Booking Received! 🎉",
-        message:     `Your booking ${bookingNumber} is pending review.`,
+      // 3. In-app + socket notification to the USER (transparent: request received)
+      notifyUserBookingEvent({
+        req,
+        user:    { id: req.user.id, email: req.user.email },
+        booking: full || booking,
+        title:       "Booking Request Received! 🎉",
+        message:     `We've received your booking request ${bookingNumber} and our team has been notified. We'll reply within 24 hours.`,
         actionUrl:   "/my-bookings",
         actionLabel: "Track Booking",
-        category:    "booking",
-        actor:       req.user,
-        adminActivity: {
-          key: "booking_created",
-          type: "booking_created",
-          category: "booking",
-          template: {
-            title:   (n) => `${n} new booking${n > 1 ? "s" : ""} received`,
-            message: (names, n) =>
-              `${n} traveller${n > 1 ? "s" : ""} just requested bookings${n > 1 ? ` (${names})` : ""}.`,
-          },
-        },
-      }).catch(() => {});
+      });
 
-    /* ── GUEST USER ── */
+      // 4. In-app + socket notification to ADMIN (action required)
+      pingAdminNewRequest(full || booking, true);
+
+      // 5. Open a conversation thread for this request (admin ⇄ user chat)
+      if (startBookingConversation) {
+        startBookingConversation(full || booking, {
+          ipAddress: req.ip || req.headers["x-forwarded-for"],
+        }).catch((e) =>
+          logger.warn("[Bookings] startBookingConversation failed:", e.message),
+        );
+      }
+
+    /* ── GUEST USER ──
+       The booking is already saved in DB, so we notify BOTH the admin and the
+       guest immediately. The guest only needs to click the verification link
+       so we know their email is real — but the request is already in the system
+       and the team is alerted straight away. */
     } else {
-      // Send verification link — admin only notified after user clicks it
       if (sendBookingVerificationLink && full) {
         sendBookingVerificationLink(full, verificationToken).catch((e) =>
           logger.error("[Bookings] sendBookingVerificationLink failed:", e.message),
         );
       } else {
         logger.warn("[Bookings] sendBookingVerificationLink not available — verification email skipped");
+      }
+
+      // Notify the GUEST that their request is received (even before verifying)
+      notifyUserBookingEvent({
+        req,
+        user:    { id: null, email: booking.email },
+        booking: full || booking,
+        title:       "Booking Request Received! 🎉",
+        message:     `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. Please confirm your email so our team can start planning.`,
+        actionUrl:   "/booking/verify",
+        actionLabel: "Confirm Email",
+      });
+
+      // Notify the ADMIN of a new pending request
+      pingAdminNewRequest(full || booking, true);
+
+      // Open a conversation thread so the admin can follow up / chat
+      if (startBookingConversation) {
+        startBookingConversation(full || booking, {
+          ipAddress: req.ip || req.headers["x-forwarded-for"],
+        }).catch((e) =>
+          logger.warn("[Bookings] startBookingConversation (guest) failed:", e.message),
+        );
       }
     }
 
@@ -587,10 +667,22 @@ exports.verifyEmail = async (req, res, next) => {
       );
     }
 
-    /* 2. Notify admin — NOW that the user has verified their email */
+    /* 2. Email the admin (verification confirmed) */
     if (sendAdminBookingNotification && full) {
       sendAdminBookingNotification(full).catch((e) =>
         logger.warn("[Bookings] sendAdminBookingNotification after verify failed:", e.message),
+      );
+    }
+
+    /* 2b. In-app + socket ping to admin (request is now verified / actionable) */
+    pingAdminNewRequest(full || booking, true);
+
+    /* 3. Make sure a conversation thread exists for follow-up chat */
+    if (startBookingConversation) {
+      startBookingConversation(full || booking, {
+        ipAddress: req.ip || req.headers["x-forwarded-for"],
+      }).catch((e) =>
+        logger.warn("[Bookings] startBookingConversation (verify) failed:", e.message),
       );
     }
 
