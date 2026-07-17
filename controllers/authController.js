@@ -692,10 +692,13 @@ exports.githubAuth = async (req, res) => {
 /* ════════════════════════════════════════════════════════════════
    GITHUB OAUTH REDIRECT FLOW
 ════════════════════════════════════════════════════════════════ */
+const GITHUB_CALLBACK_URL =
+  process.env.GITHUB_CALLBACK_URL || "https://altuverasafaris.com/auth/github/callback";
+
 exports.githubSignInInit = async (req, res) => {
   if (!process.env.GITHUB_CLIENT_ID)
     return res.status(500).json({ success: false, message: "GitHub auth not configured." });
-  const redirect = `${process.env.BACKEND_URL}/api/users/github/callback`;
+  const redirect = GITHUB_CALLBACK_URL;
   res.redirect(
     `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}` +
     `&redirect_uri=${encodeURIComponent(redirect)}&scope=read:user,user:email`,
@@ -705,7 +708,7 @@ exports.githubSignInInit = async (req, res) => {
 exports.githubSignUpInit = exports.githubSignInInit;
 
 exports.githubCallback = async (req, res) => {
-  const FRONTEND = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  const FRONTEND = process.env.FRONTEND_URL || "https://altuverasafaris.com";
   try {
     const { code } = req.query;
     if (!code || !process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)

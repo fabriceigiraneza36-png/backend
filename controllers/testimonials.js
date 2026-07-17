@@ -108,20 +108,35 @@ const extractUser = (req) => {
 // PUBLIC READ ENDPOINTS
 // ═══════════════════════════════════════════════════════════════════════════
 
-/** GET /api/testimonials — paginated active list */
+/**
+ * GET /api/testimonials — paginated list
+ *   ?active=true  (default) → only active testimonials (public default)
+ *   ?active=all   → every testimonial regardless of active flag
+ *                  (used by the Home page so all approved/submitted stories
+ *                   show; admin can still hide individual ones via is_active)
+ *   ?featured=true → additionally filter by is_featured
+ */
 exports.getAll = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, featured } = req.query;
+    const { page = 1, limit = 20, featured, active = "true" } = req.query;
     const params  = [];
-    const clauses = ["is_active = true"];
+    const clauses = [];
     let   idx     = 1;
+
+    if (active === "all") {
+      // Show every testimonial; admins hide individual ones with is_active.
+    } else {
+      clauses.push(`is_active = ${active === "false" ? "false" : "true"}`);
+    }
 
     if (featured !== undefined) {
       clauses.push(`is_featured = $${idx++}`);
       params.push(featured === "true");
     }
 
-    const where      = `WHERE ${clauses.join(" AND ")}`;
+    const where      = clauses.length
+      ? `WHERE ${clauses.join(" AND ")}`
+      : "";
     const countRes   = await query(
       `SELECT COUNT(*) FROM testimonials ${where}`, params,
     );
