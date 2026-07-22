@@ -793,6 +793,7 @@ app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
+app.use('/api/maintenance',          require('./routes/maintenance'))
 
 // ── Test / Dev routes ─────────────────────────────────────────────────────────
 if (!IS_PROD) {

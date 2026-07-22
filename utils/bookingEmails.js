@@ -1,11 +1,14 @@
 // utils/bookingEmails.js
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA SAFARIS — Premium Email Templates (v2.0)
+ * ALTUVERA SAFARIS — Premium Email Templates (v2.1)
  * ═══════════════════════════════════════════════════════════════════════════════
- * Refined, professional, polished. Concise messaging, gorgeous design.
- * Green/white theme · Playfair Display + Inter fonts · Hero images ·
- * Colorful branded social icons · Fully responsive · Dark-mode aware.
+ * Fixes in v2.1:
+ *  • sendBookingVerificationLink now uses _send (was calling undefined `sendEmail`)
+ *  • Robust URL builder — validates protocol + host, no more "http:///booking/verify"
+ *  • API_URL fallback chain hardened; defaults never produce malformed URLs
+ *  • Single export block at the bottom (no more mixed `exports.x` + module.exports)
+ *  • Verification link points to backend API endpoint that handles redirect
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 "use strict";
@@ -32,24 +35,67 @@ if (!_send) {
   };
 }
 
+/* ─── URL sanitiser ──────────────────────────────────────────────────────── */
+/**
+ * Ensure a URL string:
+ *   • has a protocol (defaults to https://)
+ *   • has no trailing slashes
+ *   • is a valid, parseable URL
+ * Returns fallback if the input is invalid.
+ */
+const sanitiseUrl = (raw, fallback) => {
+  const s = String(raw || "").trim();
+  if (!s) return fallback;
+
+  // Add protocol if missing
+  let candidate = s;
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+
+  // Strip trailing slashes
+  candidate = candidate.replace(/\/+$/, "");
+
+  // Validate
+  try {
+    const u = new URL(candidate);
+    if (!u.hostname || u.hostname === "" || u.hostname.includes("/")) {
+      logger.warn(`[BookingEmails] Invalid URL host: "${raw}" → using fallback`);
+      return fallback;
+    }
+    return candidate;
+  } catch {
+    logger.warn(`[BookingEmails] Malformed URL: "${raw}" → using fallback`);
+    return fallback;
+  }
+};
+
 /* ─── Environment ────────────────────────────────────────────────────────── */
+const FRONTEND_URL = sanitiseUrl(
+  process.env.FRONTEND_URL || process.env.PUBLIC_URL,
+  "https://www.altuverasafaris.com",
+);
+
+const API_URL = sanitiseUrl(
+  process.env.API_URL || process.env.BACKEND_URL,
+  "https://backend-jd8f.onrender.com",
+);
+
 const ENV = {
   appName:      process.env.APP_NAME       || "Altuvera Safaris",
-  frontendUrl:  process.env.FRONTEND_URL   || "https://www.altuverasafaris.com",
-  backendUrl:   process.env.BACKEND_URL    || "https://backend-jd8f.onrender.com",
+  frontendUrl:  FRONTEND_URL,
+  backendUrl:   API_URL,
   adminEmail:   process.env.ADMIN_EMAIL    || "info@altuverasafaris.com",
   supportEmail: process.env.SUPPORT_EMAIL  || "info@altuverasafaris.com",
   supportPhone: process.env.SUPPORT_PHONE  || "+250 785 751 391",
   whatsappNum:  process.env.WHATSAPP_NUMBER|| "250785751391",
   year:         new Date().getFullYear(),
 
-  // Brand assets (replace with your Cloudinary URLs)
   logoUrl:      process.env.EMAIL_LOGO_URL ||
     "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png",
   heroImage:    process.env.EMAIL_HERO_URL ||
     "https://res.cloudinary.com/doijjawna/image/upload/v1781342220/ChatGPT_Image_Jun_13_2026_11_16_51_AM_oibwwb.png",
 
-  // Social
   social: {
     instagram: "https://www.instagram.com/altuverasafaris/",
     facebook:  "https://www.facebook.com/profile.php?id=61591972225527",
@@ -57,6 +103,9 @@ const ENV = {
     linkedin:  "https://www.linkedin.com/in/altuvera-safari-14b9033b5/",
   },
 };
+
+logger.info(`[BookingEmails] FRONTEND_URL = ${ENV.frontendUrl}`);
+logger.info(`[BookingEmails] API_URL      = ${ENV.backendUrl}`);
 
 const WA_URL = `https://wa.me/${ENV.whatsappNum}`;
 
@@ -135,16 +184,13 @@ const tripName = (b) =>
    DESIGN TOKENS
 ════════════════════════════════════════════════════════════════════════════ */
 const T = {
-  // Greens
   g900: "#022c22", g800: "#064e3b", g700: "#047857",
   g600: "#059669", g500: "#10b981", g400: "#34d399",
   g300: "#6ee7b7", g200: "#a7f3d0", g100: "#d1fae5", g50: "#f0fdf4",
-  // Neutrals
   n900: "#0f172a", n800: "#1e293b", n700: "#334155",
   n500: "#64748b", n400: "#94a3b8", n300: "#cbd5e1",
   n200: "#e2e8f0", n100: "#f1f5f9", n50:  "#f8fafc",
   white: "#ffffff",
-  // Semantic
   amber: "#f59e0b", amberBg: "#fffbeb", amberBd: "#fde68a",
   red:   "#dc2626", redBg:   "#fef2f2", redBd:   "#fecaca",
   blue:  "#3b82f6", blueBg:  "#eff6ff", blueBd:  "#bfdbfe",
@@ -168,7 +214,7 @@ const statusPill = (s = "pending") => {
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
-   SOCIAL ICONS (colorful, hosted PNGs — reliable in all clients)
+   SOCIAL ICONS
 ════════════════════════════════════════════════════════════════════════════ */
 const SOCIAL_ICONS = {
   instagram: "https://cdn-icons-png.flaticon.com/128/2111/2111463.png",
@@ -201,7 +247,7 @@ const socialBar = () => `
   </table>`;
 
 /* ════════════════════════════════════════════════════════════════════════════
-   EMAIL SHELL (base template)
+   EMAIL SHELL
 ════════════════════════════════════════════════════════════════════════════ */
 const shell = ({
   preheader = "",
@@ -230,17 +276,12 @@ const shell = ({
     img { border:0; outline:none; text-decoration:none; -ms-interpolation-mode:bicubic; display:block; }
     body { margin:0; padding:0; width:100% !important; background:#f0fdf4;
            font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
-
     .wrap { width:100%; background:#f0fdf4; padding:32px 16px 48px; }
     .card { max-width:620px; margin:0 auto; background:#ffffff; border-radius:24px;
             overflow:hidden; box-shadow:0 12px 48px rgba(5,150,105,.15),
                                          0 4px 12px rgba(0,0,0,.04); }
-
-    /* Hero */
     .hero { position:relative; text-align:center; }
     .hero-overlay { background:linear-gradient(135deg, rgba(2,44,34,.85), rgba(4,120,87,.75)); }
-
-    /* Buttons */
     .btn-primary { display:inline-block; padding:15px 40px;
       background:linear-gradient(135deg,#10b981,#047857); color:#ffffff !important;
       text-decoration:none; border-radius:100px; font-size:15px; font-weight:700;
@@ -254,8 +295,6 @@ const shell = ({
       color:#ffffff !important; text-decoration:none; border-radius:100px;
       font-size:14px; font-weight:700; box-shadow:0 6px 18px rgba(37,211,102,.3);
       font-family:'Inter',sans-serif; }
-
-    /* Info table */
     .info-tbl { width:100%; border-collapse:separate; border-spacing:0;
       background:#f8fafc; border-radius:14px; overflow:hidden; }
     .info-tbl td { padding:11px 18px; font-family:'Inter',sans-serif; font-size:13.5px;
@@ -265,8 +304,6 @@ const shell = ({
       text-transform:uppercase; letter-spacing:.08em; white-space:nowrap; width:130px; }
     .info-tbl .val { font-weight:600; color:#0f172a; }
     .info-tbl .highlight { color:#047857; font-weight:800; font-family:'Inter',sans-serif; }
-
-    /* Dark mode */
     @media (prefers-color-scheme: dark) {
       .wrap { background:#0a1628 !important; }
       .card { background:#111827 !important; }
@@ -278,8 +315,6 @@ const shell = ({
       .footer { background:#111827 !important; }
       .footer p, .footer a { color:#94a3b8 !important; }
     }
-
-    /* Mobile */
     @media only screen and (max-width:620px) {
       .wrap { padding:0 !important; }
       .card { border-radius:0 !important; }
@@ -295,7 +330,6 @@ const shell = ({
   </style>
 </head>
 <body>
-  <!-- Preheader -->
   <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;
     font-size:1px;line-height:1px;color:#f0fdf4;">
     ${esc(preheader)}&nbsp;&#8203;&zwnj;&nbsp;&#8203;&zwnj;&nbsp;
@@ -303,20 +337,14 @@ const shell = ({
 
   <div class="wrap">
     <div class="card">
-
       ${showHero ? `
-      <!-- ═══ HERO ═══ -->
       <div class="hero" style="background-image:url('${ENV.heroImage}');
         background-size:cover;background-position:center;background-color:#022c22;">
         <div class="hero-overlay">
           <div class="hero-inner" style="padding:56px 40px;text-align:center;">
-
-            <!-- Logo -->
             <img src="${ENV.logoUrl}" width="80" height="80" alt="${esc(ENV.appName)}"
               style="display:block;margin:0 auto 20px;border-radius:16px;
               background:rgba(255,255,255,.15);padding:8px;" />
-
-            <!-- Brand name -->
             <h1 style="margin:0;color:#ffffff;font-family:'Playfair Display',Georgia,serif;
               font-size:32px;font-weight:700;letter-spacing:-.5px;line-height:1.2;">
               ${esc(ENV.appName)}
@@ -325,16 +353,13 @@ const shell = ({
               letter-spacing:3px;text-transform:uppercase;font-family:'Inter',sans-serif;">
               Premium East African Safaris
             </p>
-
             ${heroBadge ? `<div style="margin-top:24px;">${heroBadge}</div>` : ""}
-
             ${heroTitle ? `
             <h2 class="hero-title" style="margin:28px 0 8px;color:#ffffff;
               font-family:'Playfair Display',Georgia,serif;font-size:30px;
               font-weight:700;line-height:1.25;letter-spacing:-.5px;">
               ${esc(heroTitle)}
             </h2>` : ""}
-
             ${heroSubtitle ? `
             <p style="margin:0;color:rgba(255,255,255,.85);font-size:15px;
               line-height:1.6;max-width:440px;margin-left:auto;margin-right:auto;
@@ -346,21 +371,15 @@ const shell = ({
       </div>
       ` : ""}
 
-      <!-- ═══ BODY ═══ -->
       <div class="content" style="padding:40px 44px;">
         ${body}
       </div>
 
-      <!-- ═══ FOOTER ═══ -->
       <div class="footer" style="background:#f8fafc;border-top:1px solid #e2e8f0;
         padding:32px 40px;text-align:center;">
-
-        <!-- Social icons -->
         <div style="margin-bottom:20px;">
           ${socialBar()}
         </div>
-
-        <!-- Contact strip -->
         <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 16px;">
           <tr>
             <td style="padding:0 10px;">
@@ -380,7 +399,6 @@ const shell = ({
             </td>
           </tr>
         </table>
-
         <p style="margin:0 0 6px;font-size:11.5px;color:#94a3b8;
           font-family:'Inter',sans-serif;line-height:1.6;">
           Crafting unforgettable East African adventures since ${ENV.year}
@@ -389,7 +407,6 @@ const shell = ({
           © ${ENV.year} ${esc(ENV.appName)} · All rights reserved
         </p>
       </div>
-
     </div>
   </div>
 </body>
@@ -398,8 +415,6 @@ const shell = ({
 /* ════════════════════════════════════════════════════════════════════════════
    REUSABLE BLOCKS
 ════════════════════════════════════════════════════════════════════════════ */
-
-/** Info table row */
 const row = (label, value, highlight = false) => {
   const v = safe(value);
   if (!v || v === "—") return "";
@@ -409,7 +424,6 @@ const row = (label, value, highlight = false) => {
   </tr>`;
 };
 
-/** Info table wrapper */
 const infoTable = (title, rows) => {
   const content = rows.filter(Boolean).join("");
   if (!content.trim()) return "";
@@ -426,7 +440,6 @@ const infoTable = (title, rows) => {
     </div>`;
 };
 
-/** Booking summary */
 const bookingSummary = (b) => {
   const dest = tripName(b);
   const country = safe(b.country_name || b.country);
@@ -448,28 +461,24 @@ const bookingSummary = (b) => {
   ]);
 };
 
-/** Section heading */
 const heading = (text) => `
   <h1 class="headline" style="margin:0 0 14px;font-family:'Playfair Display',Georgia,serif;
     font-size:26px;font-weight:700;color:#0f172a;line-height:1.3;letter-spacing:-.3px;">
     ${esc(text)}
   </h1>`;
 
-/** Body paragraph */
 const para = (html) => `
   <p class="body-text" style="margin:0 0 16px;font-family:'Inter',sans-serif;
     font-size:15px;color:#334155;line-height:1.7;">
     ${html}
   </p>`;
 
-/** Greeting */
 const greet = (name) => `
   <p class="greeting" style="margin:0 0 6px;font-family:'Inter',sans-serif;
     font-size:16px;color:#0f172a;font-weight:600;">
     Hi ${esc(safe(name, "there"))},
   </p>`;
 
-/** CTA block */
 const ctaBlock = (primaryText, primaryUrl, secondaryText, secondaryUrl) => `
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 20px;">
     <tr><td align="center" style="padding-bottom:${secondaryText ? "12px" : "0"};">
@@ -494,12 +503,10 @@ const ctaBlock = (primaryText, primaryUrl, secondaryText, secondaryUrl) => `
     </td></tr>` : ""}
   </table>`;
 
-/** Divider */
 const divider = () => `
   <div style="height:1px;background:linear-gradient(90deg,transparent,#e2e8f0,transparent);
     margin:24px 0;"></div>`;
 
-/** Notice box */
 const notice = (type, title, message) => {
   const styles = {
     info:    { bg: T.blueBg,  bd: T.blueBd,  border: T.blue,  color: "#1e40af" },
@@ -523,17 +530,14 @@ const notice = (type, title, message) => {
   </div>`;
 };
 
-/** Countdown display */
 const countdownBox = (days, destination, travelDate) => `
   <div style="background:linear-gradient(145deg,#022c22,#064e3b,#047857);
     border-radius:20px;padding:36px 24px;text-align:center;margin:24px 0;
     box-shadow:0 8px 28px rgba(4,120,87,.25);">
-
     <p style="margin:0 0 10px;font-family:'Inter',sans-serif;font-size:11px;
       font-weight:700;color:#a7f3d0;text-transform:uppercase;letter-spacing:.15em;">
       Your Adventure Begins
     </p>
-
     ${days > 1 ? `
     <div style="font-family:'Playfair Display',Georgia,serif;font-size:${days >= 100 ? "68px" : "88px"};
       font-weight:800;color:#34d399;line-height:1;">
@@ -548,7 +552,6 @@ const countdownBox = (days, destination, travelDate) => `
       font-weight:800;color:#34d399;line-height:1.2;">
       ${days === 0 ? "Today!" : "Tomorrow!"}
     </div>`}
-
     <div style="margin-top:20px;padding-top:20px;border-top:1px solid rgba(255,255,255,.15);">
       <p style="margin:0;font-family:'Inter',sans-serif;font-size:15px;
         color:#ffffff;font-weight:600;">
@@ -561,7 +564,6 @@ const countdownBox = (days, destination, travelDate) => `
     </div>
   </div>`;
 
-/** Numbered step */
 const step = (num, text) => `
   <tr>
     <td style="width:34px;padding:10px 12px 10px 0;vertical-align:top;">
@@ -583,7 +585,36 @@ const stepList = (items) => `
     ${items.map((t, i) => step(i + 1, t)).join("")}
   </table>`;
 
-/** Safe send wrapper */
+/* ════════════════════════════════════════════════════════════════════════════
+   URL BUILDERS
+════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * Build a verification URL that hits the BACKEND directly.
+ * The backend endpoint marks the booking verified and redirects to frontend.
+ *
+ * Example output:
+ *   https://backend-jd8f.onrender.com/api/bookings/verify-email/abc123xyz
+ */
+const buildVerificationLink = (token) => {
+  if (!token) throw new Error("buildVerificationLink: token is required");
+  const clean = encodeURIComponent(String(token).trim());
+  const url = `${ENV.backendUrl}/api/bookings/verify-email/${clean}`;
+
+  // Sanity check — never let a malformed URL escape
+  try {
+    const u = new URL(url);
+    if (!u.hostname) throw new Error("no host");
+    return url;
+  } catch (err) {
+    logger.error(`[BookingEmails] buildVerificationLink produced invalid URL: "${url}" — ${err.message}`);
+    throw new Error(`Malformed verification URL: ${url}`);
+  }
+};
+
+/* ════════════════════════════════════════════════════════════════════════════
+   SAFE SEND WRAPPER
+════════════════════════════════════════════════════════════════════════════ */
 const safeSend = async (to, subject, html, label = "") => {
   try {
     if (!to) {
@@ -604,135 +635,85 @@ const safeSend = async (to, subject, html, label = "") => {
    ═══════════════════  EMAIL TEMPLATES  ═══════════════════════════════════
 ════════════════════════════════════════════════════════════════════════════ */
 
-// utils/bookingEmails.js
-
-const FRONTEND_URL = (
-  process.env.FRONTEND_URL ||
-  process.env.PUBLIC_URL ||
-  "https://www.altuverasafaris.com"
-).replace(/\/+$/, ""); // strip trailing slashes
-
-const API_URL = (
-  process.env.API_URL ||
-  process.env.BACKEND_URL ||
-  "https://altuvera-api.onrender.com"  // ← your Render URL
-).replace(/\/+$/, "");
-
-/**
- * Build a verification URL that hits the BACKEND endpoint directly.
- * The backend then redirects the user to the frontend after marking verified.
- */
-const buildVerificationLink = (token) => {
-  if (!token) {
-    throw new Error("buildVerificationLink: token is required");
-  }
-  // Backend endpoint that handles the verification and redirects
-  return `${API_URL}/api/bookings/verify-email/${encodeURIComponent(token)}`;
-};
-
-exports.sendBookingVerificationLink = async (booking, token) => {
+/* ─────────────────────────────────────────────────────────────────────────
+   1. VERIFICATION LINK
+───────────────────────────────────────────────────────────────────────── */
+const sendBookingVerificationLink = async (booking, token) => {
   try {
     if (!booking?.email) {
-      throw new Error("sendBookingVerificationLink: booking.email is missing");
+      logger.warn("[BookingEmails] sendBookingVerificationLink: booking.email missing");
+      return { success: false, error: "No email" };
     }
     if (!token) {
-      throw new Error("sendBookingVerificationLink: token is missing");
+      logger.warn("[BookingEmails] sendBookingVerificationLink: token missing");
+      return { success: false, error: "No token" };
     }
 
     const verifyUrl   = buildVerificationLink(token);
-    const displayName = booking.full_name || "traveller";
-    const destination =
-      booking.destination_name ||
-      booking.package_name ||
-      booking.service_name ||
-      "your adventure";
+    const displayName = safe(booking.full_name, "traveller");
+    const destination = tripName(booking);
+    const bookingRef  = safe(booking.booking_number);
 
-    const html = `
-      <!DOCTYPE html>
-      <html>
-      <head>
-        <meta charset="utf-8">
-        <title>Confirm Your Booking</title>
-      </head>
-      <body style="margin:0;padding:0;background:#f0fdf4;font-family:'Segoe UI',Arial,sans-serif;">
-        <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="background:#f0fdf4;padding:40px 20px;">
-          <tr>
-            <td align="center">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="600" style="max-width:600px;background:#ffffff;border-radius:16px;overflow:hidden;box-shadow:0 4px 24px rgba(5,150,105,.08);">
-                <!-- Header -->
-                <tr>
-                  <td style="background:linear-gradient(135deg,#059669,#047857);padding:32px 40px;text-align:center;">
-                    <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;">
-                      🌍 Altuvera Safaris
-                    </h1>
-                  </td>
-                </tr>
-                <!-- Body -->
-                <tr>
-                  <td style="padding:40px;">
-                    <h2 style="margin:0 0 16px;color:#022c22;font-size:22px;font-weight:600;">
-                      Hi ${displayName}! 👋
-                    </h2>
-                    <p style="margin:0 0 20px;color:#334155;font-size:15px;line-height:1.7;">
-                      Thanks for booking <strong>${destination}</strong> with us.
-                      Please confirm your email so our team can start planning your journey.
-                    </p>
-                    <p style="margin:0 0 28px;color:#334155;font-size:15px;line-height:1.7;">
-                      Your booking reference is:
-                      <strong style="color:#059669;font-family:monospace;">${booking.booking_number}</strong>
-                    </p>
-                    <!-- CTA Button -->
-                    <table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%">
-                      <tr>
-                        <td align="center" style="padding:8px 0 24px;">
-                          <a href="${verifyUrl}"
-                             style="display:inline-block;padding:14px 36px;background:linear-gradient(135deg,#059669,#047857);color:#ffffff;text-decoration:none;font-size:15px;font-weight:700;border-radius:12px;box-shadow:0 4px 16px rgba(5,150,105,.28);">
-                            ✅ Confirm Your Booking
-                          </a>
-                        </td>
-                      </tr>
-                    </table>
-                    <p style="margin:0 0 12px;color:#64748b;font-size:12px;line-height:1.6;">
-                      If the button doesn't work, copy and paste this link into your browser:
-                    </p>
-                    <p style="margin:0 0 28px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;color:#0f172a;font-size:12px;line-height:1.5;word-break:break-all;font-family:monospace;">
-                      ${verifyUrl}
-                    </p>
-                    <p style="margin:0;color:#94a3b8;font-size:12px;line-height:1.6;">
-                      This link expires in 24 hours. If you didn't request this, please ignore this email.
-                    </p>
-                  </td>
-                </tr>
-                <!-- Footer -->
-                <tr>
-                  <td style="background:#f0fdf4;padding:20px 40px;text-align:center;border-top:1px solid #d1fae5;">
-                    <p style="margin:0;color:#059669;font-size:12px;font-weight:600;">
-                      Altuvera Safaris · East Africa
-                    </p>
-                    <p style="margin:4px 0 0;color:#94a3b8;font-size:11px;">
-                      Need help? Reply to this email or WhatsApp us at +250 785 751 391
-                    </p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
+    logger.info(`[BookingEmails] Verification link → ${verifyUrl}`);
+
+    const html = shell({
+      preheader: `Confirm your email to complete your ${destination} booking.`,
+      heroBadge: `<span style="display:inline-block;padding:7px 18px;
+        background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
+        border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
+        font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
+        ✉️ Verify Your Email
+      </span>`,
+      heroTitle: "Confirm your booking",
+      heroSubtitle: "One quick click and our team can start planning your adventure.",
+      body: `
+        ${greet(displayName)}
+        ${para(`Thanks for booking <strong style="color:${T.g700};">${esc(destination)}</strong>
+          with us. Please confirm your email address so we can start planning your journey.`)}
+
+        ${infoTable("Booking Reference", [
+          row("Reference", bookingRef, true),
+          row("Destination", destination !== "Your Trip" ? destination : null),
+        ])}
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0;">
+          <tr><td align="center">
+            <a href="${esc(verifyUrl)}"
+              style="display:inline-block;padding:16px 44px;
+                background:linear-gradient(135deg,#10b981,#047857);
+                color:#ffffff !important;text-decoration:none;border-radius:100px;
+                font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
+                box-shadow:0 8px 24px rgba(5,150,105,.35);">
+              ✅ Confirm My Booking
+            </a>
+          </td></tr>
         </table>
-      </body>
-      </html>
-    `;
 
-    // Send via your Resend client (or whichever provider you use)
-    const result = await sendEmail({
-      to:      booking.email,
-      subject: `Confirm Your Booking — ${destination} | Altuvera`,
-      html,
+        <p style="margin:20px 0 8px;font-family:'Inter',sans-serif;font-size:12px;
+          color:${T.n500};line-height:1.6;">
+          If the button doesn't work, copy and paste this link into your browser:
+        </p>
+        <div style="padding:12px 14px;background:${T.n50};border:1px solid ${T.n200};
+          border-radius:10px;font-family:monospace;font-size:12px;color:${T.n700};
+          word-break:break-all;line-height:1.5;margin-bottom:20px;">
+          ${esc(verifyUrl)}
+        </div>
+
+        ${notice("warning", "Link expires in 24 hours",
+          "For security, this verification link is valid for 24 hours. " +
+          "If it expires, you can request a new one from the confirmation page.")}
+      `,
     });
 
-    return { success: true, messageId: result.messageId };
+    return safeSend(
+      booking.email,
+      `Confirm Your Booking — ${destination} | ${ENV.appName}`,
+      html,
+      "sendBookingVerificationLink",
+    );
   } catch (err) {
-    console.error("[BookingEmails] sendBookingVerificationLink failed:", err.message);
-    throw err;
+    logger.error(`[BookingEmails] sendBookingVerificationLink failed: ${err.message}`);
+    return { success: false, error: err.message };
   }
 };
 
@@ -741,7 +722,6 @@ exports.sendBookingVerificationLink = async (booking, token) => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingReceivedEmail = async (booking) => {
   if (!booking?.email) return { success: false };
-
   const dest = tripName(booking);
 
   const html = shell({
@@ -754,9 +734,7 @@ const sendBookingReceivedEmail = async (booking) => {
       ${para(`We're delighted you chose <strong style="color:${T.g700};">${esc(ENV.appName)}</strong>
         for your <strong>${esc(dest)}</strong> adventure. Our travel experts will contact you
         within <strong style="color:${T.g600};">24 hours</strong> to craft your perfect itinerary.`)}
-
       ${bookingSummary(booking)}
-
       <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
         font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
         What Happens Next
@@ -768,11 +746,9 @@ const sendBookingReceivedEmail = async (booking) => {
         "You receive a custom quote — <strong>no payment required yet</strong>",
         "Once approved, we confirm your booking",
       ])}
-
       ${notice("info", "While You Wait",
         `Feel free to <a href="${WA_URL}" style="color:${T.blue};font-weight:600;">
           chat with us on WhatsApp</a> if you have any questions — our experts are available 7 days a week.`)}
-
       ${ctaBlock("Track My Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
@@ -790,7 +766,6 @@ const sendBookingReceivedEmail = async (booking) => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendAdminBookingNotification = async (booking) => {
   if (!ENV.adminEmail) return { success: false };
-
   const dest = tripName(booking);
   const name = safe(booking.full_name);
   const email = safe(booking.email);
@@ -810,7 +785,6 @@ const sendAdminBookingNotification = async (booking) => {
     heroTitle: "New Verified Booking",
     heroSubtitle: `${name} has submitted a booking for ${dest}. Ready for your review.`,
     body: `
-      <!-- Quick stats -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
         <tr>
           ${[
@@ -860,7 +834,6 @@ const sendAdminBookingNotification = async (booking) => {
       ${booking.special_requests ? notice("warning", "Special Requests",
         `<span style="white-space:pre-wrap;">${esc(booking.special_requests)}</span>`) : ""}
 
-      <!-- Actions -->
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0 8px;">
         <tr><td align="center" style="padding-bottom:12px;">
           <a href="${esc(adminUrl)}" class="btn-primary"
@@ -905,7 +878,6 @@ const sendAdminBookingNotification = async (booking) => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingConfirmation = async (booking) => {
   if (!booking?.email) return { success: false };
-
   const dest = tripName(booking);
   const days = daysUntil(booking.travel_date);
 
@@ -918,11 +890,8 @@ const sendBookingConfirmation = async (booking) => {
       ${greet(booking.full_name)}
       ${para(`Wonderful news — your safari to <strong style="color:${T.g700};">${esc(dest)}</strong>
         has been <strong>officially confirmed</strong>. We're excited to be part of your journey.`)}
-
       ${days !== null && days >= 0 ? countdownBox(days, dest, booking.travel_date) : ""}
-
       ${bookingSummary({ ...booking, status: "confirmed" })}
-
       ${booking.confirmation_code ? `
       <div style="background:${T.g50};border:2px solid ${T.g400};border-radius:14px;
         padding:22px;text-align:center;margin:20px 0;">
@@ -935,7 +904,6 @@ const sendBookingConfirmation = async (booking) => {
           ${esc(booking.confirmation_code)}
         </p>
       </div>` : ""}
-
       <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
         font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
         Before You Travel
@@ -946,7 +914,6 @@ const sendBookingConfirmation = async (booking) => {
         "Arrange comprehensive travel insurance",
         "Your coordinator will send a detailed itinerary shortly",
       ])}
-
       ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Chat on WhatsApp", WA_URL)}
     `,
   });
@@ -964,7 +931,6 @@ const sendBookingConfirmation = async (booking) => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "") => {
   if (!booking?.email) return { success: false };
-
   const dest = tripName(booking);
   const st = STATUS[toStatus] || STATUS.pending;
   const fromLabel = STATUS[fromStatus]?.label || safe(fromStatus);
@@ -986,7 +952,6 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
     body: `
       ${greet(booking.full_name)}
       ${para(messages[toStatus] || "Your booking status has been updated.")}
-
       ${infoTable("Status Change", [
         row("Reference",   booking.booking_number, true),
         row("Destination", dest !== "Your Trip" ? dest : null),
@@ -995,12 +960,9 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
         row("Now",         st.label),
         row("Updated",     fmtDateTime(new Date())),
       ])}
-
       ${reason ? notice("info", "Note from Our Team", esc(reason)) : ""}
-
       ${toStatus === "completed" ? notice("success", "Thank You",
         "We'd love to hear about your experience — leave us a review and let's plan your next adventure!") : ""}
-
       ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
@@ -1018,7 +980,6 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
 ───────────────────────────────────────────────────────────────────────── */
 const sendBookingCancellation = async (booking, reason = "") => {
   if (!booking?.email) return { success: false };
-
   const dest = tripName(booking);
 
   const html = shell({
@@ -1030,20 +991,15 @@ const sendBookingCancellation = async (booking, reason = "") => {
       ${greet(booking.full_name)}
       ${para(`We're sorry to inform you that your booking for <strong>${esc(dest)}</strong>
         has been cancelled. We apologise for any inconvenience this may cause.`)}
-
       ${infoTable("Cancelled Booking", [
         row("Reference",   booking.booking_number, true),
         row("Destination", dest !== "Your Trip" ? dest : null),
         row("Travel Date", fmtDate(booking.travel_date)),
         row("Cancelled",   fmtDateTime(new Date())),
       ])}
-
       ${reason ? notice("error", "Cancellation Reason", esc(reason)) : ""}
-
       ${notice("info", "Refund Information",
         "If a payment was made, a full refund will be processed within 5–10 business days to your original payment method.")}
-
-      <!-- Rebook -->
       <div style="background:linear-gradient(135deg,#022c22,#047857);border-radius:16px;
         padding:28px 24px;text-align:center;margin:24px 0;">
         <h3 style="margin:0 0 8px;font-family:'Playfair Display',Georgia,serif;
@@ -1061,7 +1017,6 @@ const sendBookingCancellation = async (booking, reason = "") => {
           Browse Destinations
         </a>
       </div>
-
       ${ctaBlock("Talk to Our Team", WA_URL, "Email Support", `mailto:${ENV.supportEmail}`)}
     `,
   });
@@ -1079,7 +1034,6 @@ const sendBookingCancellation = async (booking, reason = "") => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendTripCountdownEmail = async (booking) => {
   if (!booking?.email || !booking?.travel_date) return { success: false };
-
   const days = daysUntil(booking.travel_date);
   if (days === null || days < 0) return { success: false, error: "Past date" };
 
@@ -1183,9 +1137,7 @@ const sendTripCountdownEmail = async (booking) => {
     body: `
       ${greet(booking.full_name)}
       ${para(c.sub)}
-
       ${countdownBox(days, dest, booking.travel_date)}
-
       ${infoTable("Your Trip", [
         row("Reference",   booking.booking_number, true),
         row("Destination", dest !== "Your Trip" ? dest : null),
@@ -1194,13 +1146,11 @@ const sendTripCountdownEmail = async (booking) => {
         row("Return",      fmtDate(booking.return_date)),
         row("Travelers",   booking.number_of_travelers),
       ])}
-
       <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
         font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
         ${days <= 3 ? "Final Checklist" : "Preparation Tips"}
       </p>
       ${stepList(c.tips)}
-
       ${ctaBlock("View Full Booking", `${ENV.frontendUrl}/my-bookings`, "Contact Coordinator", `mailto:${ENV.supportEmail}`)}
     `,
   });
@@ -1218,7 +1168,6 @@ const sendTripCountdownEmail = async (booking) => {
 ───────────────────────────────────────────────────────────────────────── */
 const sendCancellationRequestAck = async (booking, requestType = "cancellation") => {
   if (!booking?.email) return { success: false };
-
   const dest = tripName(booking);
   const label = requestType === "refund" ? "Refund" : "Cancellation";
 
@@ -1238,13 +1187,10 @@ const sendCancellationRequestAck = async (booking, requestType = "cancellation")
         for booking <strong style="color:${T.g700};">${esc(safe(booking.booking_number))}</strong>
         (${esc(dest)}). Our team will review it and respond within
         <strong>24–48 hours</strong>.`)}
-
       ${bookingSummary(booking)}
-
       ${notice("info", "Important",
         `Your booking remains <strong>active</strong> until we've reviewed your ${label.toLowerCase()} request.
          We'll notify you by email of our decision.`)}
-
       ${ctaBlock("View My Booking", `${ENV.frontendUrl}/my-bookings`, "Chat on WhatsApp", WA_URL)}
     `,
   });
@@ -1269,4 +1215,5 @@ module.exports = {
   sendBookingCancellation,
   sendTripCountdownEmail,
   sendCancellationRequestAck,
-};
+  buildVerificationLink,   // exported for testing
+};  

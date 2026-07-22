@@ -209,7 +209,9 @@ const fetchJsonOrThrow = async (url, options = {}, label = "request") => {
   }
 };
 
-const upsertSocialUser = async ({ provider, providerId, email, name, avatar, phone, bio }) => {
+const upsertSocialUser = async ({
+  provider, providerId, email, name, avatar, phone, bio,
+}) => {
   const col = { google: "google_id", github: "github_id" }[provider];
   if (!col) throw Object.assign(new Error(`Unsupported provider: ${provider}`), { status: 400 });
 
@@ -273,7 +275,7 @@ const incrementLoginCounter = async (userId) => {
 exports.register = async (req, res) => {
   try {
     const { email, fullName, full_name, phone, bio, avatar } = req.body;
-    const name  = ((fullName || full_name || "").trim()).slice(0, 100);
+    const name   = ((fullName || full_name || "").trim()).slice(0, 100);
     const nEmail = ((email   || "").trim().toLowerCase());
 
     if (!nEmail)
@@ -310,21 +312,39 @@ exports.register = async (req, res) => {
 
       const otp = generateOTP();
       await setOtp(user.id, otp);
-      await sendOtpEmail({ to: nEmail, recipientName: name || user.full_name || "", otp, purpose: "verify", expiryMinutes: OTP_EXPIRY_MINUTES });
+      await sendOtpEmail({
+        to:            nEmail,
+        recipientName: name || user.full_name || "",
+        otp,
+        purpose:       "verify",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
 
-      return res.json({ success: true, message: "Verification code sent. Check your inbox.", data: { email: nEmail } });
+      return res.json({
+        success: true,
+        message: "Verification code sent. Check your inbox.",
+        data: { email: nEmail },
+      });
     }
 
     /* New user */
     const created = await query(
-      `INSERT INTO users (email, full_name, phone, bio, avatar_url, is_verified, auth_provider, login_counter)
-       VALUES ($1,$2,$3,$4,$5,false,'email',0) RETURNING *`,
+      `INSERT INTO users
+         (email, full_name, phone, bio, avatar_url, is_verified, auth_provider, login_counter)
+       VALUES ($1,$2,$3,$4,$5,false,'email',0)
+       RETURNING *`,
       [nEmail, name || null, phone || null, bio || null, avatar || null],
     );
 
     const otp = generateOTP();
     await setOtp(created.rows[0].id, otp);
-    await sendOtpEmail({ to: nEmail, recipientName: name || "", otp, purpose: "verify", expiryMinutes: OTP_EXPIRY_MINUTES });
+    await sendOtpEmail({
+      to:            nEmail,
+      recipientName: name || "",
+      otp,
+      purpose:       "verify",
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
 
     return res.status(201).json({
       success: true,
@@ -365,7 +385,10 @@ exports.login = async (req, res) => {
     const user = result.rows[0];
 
     if (user.is_active === false)
-      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+      return res.status(401).json({
+        success: false,
+        message: "Account deactivated. Contact support.",
+      });
 
     if (isRateLimited(user))
       return res.status(429).json({
@@ -377,12 +400,26 @@ exports.login = async (req, res) => {
     const purpose = isNew ? "verify" : "login";
 
     await setOtp(user.id, otp);
-    await sendOtpEmail({ to: nEmail, recipientName: user.full_name || name || "", otp, purpose, expiryMinutes: OTP_EXPIRY_MINUTES });
+
+    // ✅ Pass the stored full_name (or supplied name) so the email
+    //    can greet the user and remind them of their registered name
+    await sendOtpEmail({
+      to:            nEmail,
+      recipientName: user.full_name || name || "",
+      otp,
+      purpose,
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
 
     return res.json({
       success: true,
       message: "Verification code sent to your inbox.",
-      data: { email: nEmail, isNewUser: isNew },
+      data: {
+        email:    nEmail,
+        // ✅ Return the stored full name so the frontend can show it
+        fullName: user.full_name || name || "",
+        isNewUser: isNew,
+      },
     });
   } catch (err) {
     handleError(res, err, "Login failed");
@@ -409,16 +446,23 @@ exports.verifyCode = async (req, res) => {
     const user = result.rows[0];
 
     if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
-      await query("UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1", [user.id]);
-      return res.status(429).json({ success: false, message: "Too many attempts. Request a new code." });
+      await query(
+        "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
+        [user.id],
+      );
+      return res.status(429).json({
+        success: false,
+        message: "Too many attempts. Request a new code.",
+      });
     }
 
-    const codeOk   = user.verification_code === code;
+    const codeOk     = user.verification_code === code;
     const notExpired = user.code_expiry && new Date(user.code_expiry) > new Date();
 
     if (!codeOk || !notExpired) {
       await query(
-        "UPDATE users SET code_attempts = COALESCE(code_attempts, 0) + 1 WHERE id = $1", [user.id],
+        "UPDATE users SET code_attempts = COALESCE(code_attempts, 0) + 1 WHERE id = $1",
+        [user.id],
       );
       const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
 
@@ -450,7 +494,10 @@ exports.verifyCode = async (req, res) => {
     const freshUser = updated.rows[0];
 
     if (isFirstVerification) {
-      sendWelcomeEmail({ to: user.email, recipientName: user.full_name || "" }).catch(() => {});
+      sendWelcomeEmail({
+        to:            user.email,
+        recipientName: user.full_name || "",
+      }).catch(() => {});
       notifyUserRegistered({
         id:    user.id,
         email: user.email,
@@ -460,7 +507,9 @@ exports.verifyCode = async (req, res) => {
 
     return res.json({
       success: true,
-      message: isFirstVerification ? "Account verified! Welcome to Altuvera!" : "Signed in successfully!",
+      message: isFirstVerification
+        ? "Account verified! Welcome to Altuvera!"
+        : "Signed in successfully!",
       data: {
         token:        generateToken(freshUser, "user"),
         refreshToken: generateRefreshToken(freshUser, "user"),
@@ -476,6 +525,8 @@ exports.verifyCode = async (req, res) => {
 
 /* ════════════════════════════════════════════════════════════════
    RESEND CODE
+   ✅ Now returns fullName in the response so frontend can
+      remind the user of their registered name
 ════════════════════════════════════════════════════════════════ */
 exports.resendCode = async (req, res) => {
   try {
@@ -484,13 +535,17 @@ exports.resendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required." });
 
     const result = await query(
-      "SELECT id, email, full_name, last_code_sent_at, is_active FROM users WHERE email = $1",
+      `SELECT id, email, full_name, last_code_sent_at, is_active
+         FROM users WHERE email = $1`,
       [nEmail],
     );
 
-    /* Anti-enumeration */
+    /* Anti-enumeration — always return success */
     if (!result.rows.length)
-      return res.json({ success: true, message: "If an account exists, a new code has been sent." });
+      return res.json({
+        success: true,
+        message: "If an account exists, a new code has been sent.",
+      });
 
     const user = result.rows[0];
 
@@ -505,9 +560,25 @@ exports.resendCode = async (req, res) => {
 
     const otp = generateOTP();
     await setOtp(user.id, otp, 15);
-    await sendOtpEmail({ to: user.email, recipientName: user.full_name || "", otp, purpose: "resend", expiryMinutes: 15 });
 
-    return res.json({ success: true, message: "New code sent — valid for 15 minutes." });
+    // ✅ Include the user's full name in the resend email
+    await sendOtpEmail({
+      to:            user.email,
+      recipientName: user.full_name || "",
+      otp,
+      purpose:       "resend",
+      expiryMinutes: 15,
+    });
+
+    return res.json({
+      success: true,
+      message: "New code sent — valid for 15 minutes.",
+      // ✅ Return fullName so frontend can display "Resent to <Name>"
+      data: {
+        email:    user.email,
+        fullName: user.full_name || "",
+      },
+    });
   } catch (err) {
     handleError(res, err, "Resend failed");
   }
@@ -523,14 +594,17 @@ exports.checkEmail = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required." });
 
     const result = await query(
-      "SELECT id, is_verified, auth_provider FROM users WHERE email = $1", [nEmail],
+      "SELECT id, full_name, is_verified, auth_provider FROM users WHERE email = $1",
+      [nEmail],
     );
     return res.json({
       success: true,
       data: {
         exists:     result.rows.length > 0,
-        isVerified: result.rows[0]?.is_verified  || false,
-        provider:   result.rows[0]?.auth_provider || null,
+        isVerified: result.rows[0]?.is_verified   || false,
+        provider:   result.rows[0]?.auth_provider  || null,
+        // ✅ Return name so frontend can pre-fill the name field
+        fullName:   result.rows[0]?.full_name      || null,
       },
     });
   } catch (err) {
@@ -551,11 +625,12 @@ exports.forgotUsernameSendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid email address." });
 
     const result = await query(
-      "SELECT id, email, full_name, last_code_sent_at, is_active FROM users WHERE email = $1",
+      `SELECT id, email, full_name, last_code_sent_at, is_active
+         FROM users WHERE email = $1`,
       [nEmail],
     );
 
-    /* Anti-enumeration: always return success even if user doesn't exist */
+    /* Anti-enumeration */
     if (!result.rows.length) {
       return res.json({
         success: true,
@@ -567,7 +642,10 @@ exports.forgotUsernameSendCode = async (req, res) => {
     const user = result.rows[0];
 
     if (user.is_active === false)
-      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+      return res.status(401).json({
+        success: false,
+        message: "Account deactivated. Contact support.",
+      });
 
     if (isRateLimited(user))
       return res.status(429).json({
@@ -599,7 +677,7 @@ exports.forgotUsernameSendCode = async (req, res) => {
 };
 
 /* ════════════════════════════════════════════════════════════════
-   FORGOT USERNAME — Step 2: Verify code & return username + auto-login
+   FORGOT USERNAME — Step 2: Verify code → username + auto-login
 ════════════════════════════════════════════════════════════════ */
 exports.forgotUsernameVerify = async (req, res) => {
   try {
@@ -622,10 +700,13 @@ exports.forgotUsernameVerify = async (req, res) => {
         "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
         [user.id],
       );
-      return res.status(429).json({ success: false, message: "Too many attempts. Request a new code." });
+      return res.status(429).json({
+        success: false,
+        message: "Too many attempts. Request a new code.",
+      });
     }
 
-    const codeOk    = user.verification_code === code;
+    const codeOk     = user.verification_code === code;
     const notExpired = user.code_expiry && new Date(user.code_expiry) > new Date();
 
     if (!codeOk || !notExpired) {
@@ -636,7 +717,10 @@ exports.forgotUsernameVerify = async (req, res) => {
       const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
 
       if (codeOk && !notExpired)
-        return res.status(401).json({ success: false, message: "Code expired. Request a new one." });
+        return res.status(401).json({
+          success: false,
+          message: "Code expired. Request a new one.",
+        });
 
       return res.status(401).json({
         success: false,
@@ -646,7 +730,7 @@ exports.forgotUsernameVerify = async (req, res) => {
       });
     }
 
-    /* Code is valid — clear it, update login, return user data + tokens */
+    /* ── Code is valid ── */
     const updated = await query(
       `UPDATE users SET
          is_verified       = true,
@@ -670,14 +754,16 @@ exports.forgotUsernameVerify = async (req, res) => {
       success: true,
       message: "Username recovered successfully! You are now signed in.",
       data: {
-        /* The recovered username / full name */
+        /* Recovered identity */
         fullName:     freshUser.full_name || "",
         username:     freshUser.username  || freshUser.full_name || "",
         email:        freshUser.email,
-        /* Full auth tokens for auto-login */
+        /* ✅ Full auth tokens — same shape as verifyCode response
+           so UserAuthContext.saveAuth() works without changes       */
         token:        generateToken(freshUser, "user"),
         refreshToken: generateRefreshToken(freshUser, "user"),
         user:         sanitizeUser(freshUser),
+        isNewUser:    false,
         loginCounter: parseInt(freshUser.login_counter, 10),
       },
     });
@@ -707,13 +793,22 @@ exports.googleAuth = async (req, res) => {
       payload = ticket.getPayload();
     } catch (err) {
       logger.error("[Google Auth] Token verify failed:", err.message);
-      return res.status(401).json({ success: false, message: "Invalid Google credential. Please try again." });
+      return res.status(401).json({
+        success: false,
+        message: "Invalid Google credential. Please try again.",
+      });
     }
 
     if (!payload?.sub || !payload?.email)
-      return res.status(401).json({ success: false, message: "Could not retrieve account info from Google." });
+      return res.status(401).json({
+        success: false,
+        message: "Could not retrieve account info from Google.",
+      });
     if (payload.email_verified === false)
-      return res.status(401).json({ success: false, message: "Your Google email is not verified." });
+      return res.status(401).json({
+        success: false,
+        message: "Your Google email is not verified.",
+      });
 
     const { user, isNew } = await upsertSocialUser({
       provider:   "google",
@@ -757,7 +852,10 @@ exports.completeGoogleSignUp = async (req, res) => {
     }
 
     if (!payload?.sub || !payload?.email)
-      return res.status(401).json({ success: false, message: "Could not retrieve account info from Google." });
+      return res.status(401).json({
+        success: false,
+        message: "Could not retrieve account info from Google.",
+      });
 
     const { user, isNew } = await upsertSocialUser({
       provider:   "google",
@@ -803,7 +901,10 @@ exports.githubAuth = async (req, res) => {
     );
 
     if (!tokenData.access_token)
-      return res.status(401).json({ success: false, message: "GitHub did not return an access token." });
+      return res.status(401).json({
+        success: false,
+        message: "GitHub did not return an access token.",
+      });
 
     const ghHeaders = {
       Authorization: `Bearer ${tokenData.access_token}`,
@@ -811,19 +912,26 @@ exports.githubAuth = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
+    const gh = await fetchJsonOrThrow(
+      "https://api.github.com/user", { headers: ghHeaders }, "GitHub profile",
+    );
 
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
-      const list   = Array.isArray(emails) ? emails : [];
+      const emails = await fetchJsonOrThrow(
+        "https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails",
+      );
+      const list = Array.isArray(emails) ? emails : [];
       ghEmail = list.find((e) => e.primary && e.verified)?.email
              || list.find((e) => e.verified)?.email
              || list[0]?.email;
     }
 
     if (!ghEmail)
-      return res.status(400).json({ success: false, message: "Could not retrieve email from GitHub." });
+      return res.status(400).json({
+        success: false,
+        message: "Could not retrieve email from GitHub.",
+      });
 
     const { user, isNew } = await upsertSocialUser({
       provider:   "github",
@@ -847,7 +955,8 @@ exports.githubAuth = async (req, res) => {
    GITHUB OAUTH REDIRECT FLOW
 ════════════════════════════════════════════════════════════════ */
 const GITHUB_CALLBACK_URL =
-  process.env.GITHUB_CALLBACK_URL || "https://altuverasafaris.com/auth/github/callback";
+  process.env.GITHUB_CALLBACK_URL ||
+  "https://altuverasafaris.com/auth/github/callback";
 
 exports.githubSignInInit = async (req, res) => {
   if (!process.env.GITHUB_CLIENT_ID)
@@ -891,12 +1000,16 @@ exports.githubCallback = async (req, res) => {
       "User-Agent":  APP_NAME,
     };
 
-    const gh = await fetchJsonOrThrow("https://api.github.com/user", { headers: ghHeaders }, "GitHub profile");
+    const gh = await fetchJsonOrThrow(
+      "https://api.github.com/user", { headers: ghHeaders }, "GitHub profile",
+    );
 
     let ghEmail = gh.email;
     if (!ghEmail) {
-      const emails = await fetchJsonOrThrow("https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails");
-      const list   = Array.isArray(emails) ? emails : [];
+      const emails = await fetchJsonOrThrow(
+        "https://api.github.com/user/emails", { headers: ghHeaders }, "GitHub emails",
+      );
+      const list = Array.isArray(emails) ? emails : [];
       ghEmail = list.find((e) => e.primary && e.verified)?.email
              || list.find((e) => e.verified)?.email
              || list[0]?.email;
@@ -916,11 +1029,15 @@ exports.githubCallback = async (req, res) => {
     });
 
     const freshUser = await incrementLoginCounter(user.id);
-    const token     = generateToken(freshUser, "user");
+    const tok       = generateToken(freshUser, "user");
 
     return res.redirect(
       `${FRONTEND}/auth/github/callback?` +
-      new URLSearchParams({ code: token, provider: "github", isNew: String(isNew) }),
+      new URLSearchParams({
+        code:     tok,
+        provider: "github",
+        isNew:    String(isNew),
+      }),
     );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
@@ -943,14 +1060,21 @@ exports.updateProfile = async (req, res) => {
     const body     = req.body || {};
     const name     = (body.full_name  || body.fullName  || "").trim().slice(0, 100) || null;
     const avatar   = (body.avatar_url || body.avatar    || "").trim().slice(0, 500) || null;
-    const phone    = body.phone       != null ? String(body.phone).trim().slice(0, 30)  || null : undefined;
-    const bio      = body.bio         != null ? String(body.bio).trim().slice(0, 1000)  || null : undefined;
+    const phone    = body.phone       != null
+      ? String(body.phone).trim().slice(0, 30)  || null : undefined;
+    const bio      = body.bio         != null
+      ? String(body.bio).trim().slice(0, 1000)  || null : undefined;
     const prefs    = body.preferences != null
-      ? (typeof body.preferences === "string" ? body.preferences : JSON.stringify(body.preferences))
+      ? (typeof body.preferences === "string"
+          ? body.preferences
+          : JSON.stringify(body.preferences))
       : undefined;
 
     if (name && validateName && !validateName(name))
-      return res.status(400).json({ success: false, message: "Name must be 2–50 characters." });
+      return res.status(400).json({
+        success: false,
+        message: "Name must be 2–50 characters.",
+      });
 
     const result = await query(
       `UPDATE users SET
@@ -967,9 +1091,17 @@ exports.updateProfile = async (req, res) => {
     if (!result.rows.length)
       return res.status(404).json({ success: false, message: "User not found." });
 
-    sendActivityAlert({ to: result.rows[0].email, recipientName: result.rows[0].full_name || "", activityType: "profile_updated" }).catch(() => {});
+    sendActivityAlert({
+      to:            result.rows[0].email,
+      recipientName: result.rows[0].full_name || "",
+      activityType:  "profile_updated",
+    }).catch(() => {});
 
-    return res.json({ success: true, message: "Profile updated.", data: { user: sanitizeUser(result.rows[0]) } });
+    return res.json({
+      success: true,
+      message: "Profile updated.",
+      data: { user: sanitizeUser(result.rows[0]) },
+    });
   } catch (err) {
     handleError(res, err, "Profile update failed");
   }
@@ -1015,7 +1147,10 @@ exports.refreshToken = async (req, res) => {
       typeof entity.token_version === "number" &&
       decoded.tokenVersion !== entity.token_version
     ) {
-      return res.status(401).json({ success: false, message: "Session invalidated. Please sign in again." });
+      return res.status(401).json({
+        success: false,
+        message: "Session invalidated. Please sign in again.",
+      });
     }
 
     return res.json({
@@ -1039,9 +1174,14 @@ exports.adminLogin = async (req, res) => {
     const password = ((req.body.password || "").trim());
 
     if (!nEmail || !password)
-      return res.status(400).json({ success: false, message: "Email and password are required." });
+      return res.status(400).json({
+        success: false,
+        message: "Email and password are required.",
+      });
 
-    const result = await query("SELECT * FROM admin_users WHERE email = $1", [nEmail]);
+    const result = await query(
+      "SELECT * FROM admin_users WHERE email = $1", [nEmail],
+    );
     if (!result.rows.length)
       return res.status(401).json({ success: false, message: "Invalid credentials." });
 
@@ -1063,7 +1203,9 @@ exports.adminLogin = async (req, res) => {
       );
       freshAdmin = updated.rows[0];
     } catch {
-      await query("UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id]);
+      await query(
+        "UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id],
+      );
       freshAdmin = { ...admin, last_login: new Date(), token_version: 0 };
     }
 
@@ -1089,25 +1231,40 @@ exports.adminRegister = async (req, res) => {
     const role      = req.body.role || "admin";
 
     if (!nEmail || !nUsername || !password)
-      return res.status(400).json({ success: false, message: "Email, username, and password are required." });
+      return res.status(400).json({
+        success: false,
+        message: "Email, username, and password are required.",
+      });
 
     if (password.length < 8)
-      return res.status(400).json({ success: false, message: "Password must be at least 8 characters." });
+      return res.status(400).json({
+        success: false,
+        message: "Password must be at least 8 characters.",
+      });
 
     const exists = await query(
-      "SELECT id FROM admin_users WHERE email = $1 OR username = $2", [nEmail, nUsername],
+      "SELECT id FROM admin_users WHERE email = $1 OR username = $2",
+      [nEmail, nUsername],
     );
     if (exists.rows.length)
-      return res.status(409).json({ success: false, message: "Admin account already exists." });
+      return res.status(409).json({
+        success: false,
+        message: "Admin account already exists.",
+      });
 
     const hash    = await bcrypt.hash(password, 12);
     const created = await query(
-      `INSERT INTO admin_users (email, username, password_hash, full_name, role, is_active)
-       VALUES ($1,$2,$3,$4,$5,true) RETURNING *`,
+      `INSERT INTO admin_users
+         (email, username, password_hash, full_name, role, is_active)
+       VALUES ($1,$2,$3,$4,$5,true)
+       RETURNING *`,
       [nEmail, nUsername, hash, name, role],
     );
 
-    return res.status(201).json({ success: true, data: { user: sanitizeUser(created.rows[0]) } });
+    return res.status(201).json({
+      success: true,
+      data: { user: sanitizeUser(created.rows[0]) },
+    });
   } catch (err) {
     handleError(res, err, "Admin registration failed");
   }
@@ -1117,16 +1274,28 @@ exports.changePassword = async (req, res) => {
   try {
     const { oldPassword, newPassword } = req.body;
     if (!oldPassword || !newPassword)
-      return res.status(400).json({ success: false, message: "Both passwords are required." });
+      return res.status(400).json({
+        success: false,
+        message: "Both passwords are required.",
+      });
     if (newPassword.length < 8)
-      return res.status(400).json({ success: false, message: "New password must be at least 8 characters." });
+      return res.status(400).json({
+        success: false,
+        message: "New password must be at least 8 characters.",
+      });
 
     const ok = await bcrypt.compare(oldPassword, req.user.password_hash);
     if (!ok)
-      return res.status(401).json({ success: false, message: "Current password is incorrect." });
+      return res.status(401).json({
+        success: false,
+        message: "Current password is incorrect.",
+      });
 
     const hash = await bcrypt.hash(newPassword, 12);
-    await query("UPDATE admin_users SET password_hash = $1 WHERE id = $2", [hash, req.user.id]);
+    await query(
+      "UPDATE admin_users SET password_hash = $1 WHERE id = $2",
+      [hash, req.user.id],
+    );
     return res.json({ success: true, message: "Password updated successfully." });
   } catch (err) {
     handleError(res, err, "Password change failed");
@@ -1141,9 +1310,13 @@ exports.logout = async (req, res) => {
     if (req.user?.id) {
       const table = req.userType === "admin" ? "admin_users" : "users";
       await query(
-        `UPDATE ${table} SET token_version = COALESCE(token_version, 0) + 1 WHERE id = $1`,
+        `UPDATE ${table}
+           SET token_version = COALESCE(token_version, 0) + 1
+         WHERE id = $1`,
         [req.user.id],
-      ).catch((e) => logger.warn("[logout] token_version update failed:", e.message));
+      ).catch((e) =>
+        logger.warn("[logout] token_version update failed:", e.message),
+      );
     }
     return res.json({ success: true, message: "Signed out successfully." });
   } catch {
@@ -1160,7 +1333,11 @@ exports.deleteAccount = async (req, res) => {
     const table = req.userType === "admin" ? "admin_users" : "users";
 
     if (email) {
-      sendActivityAlert({ to: email, recipientName: full_name || "", activityType: "account_deleted" }).catch(() => {});
+      sendActivityAlert({
+        to:            email,
+        recipientName: full_name || "",
+        activityType:  "account_deleted",
+      }).catch(() => {});
     }
 
     await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
