@@ -1,14 +1,18 @@
 // backend/src/routes/message.js
 // ═══════════════════════════════════════════════════════════════════════════════
-// MESSAGES ROUTES v3.1 — Fixed & Complete
+// MESSAGES ROUTES v3.2 — Fixed: uses optionalAuth from auth middleware
 // ═══════════════════════════════════════════════════════════════════════════════
 
 "use strict";
 
-const router  = require("express").Router();
-const { protect, adminProtect } = require("../middleware/auth");
-const { query } = require("../config/db");
-const logger  = require("../utils/logger");
+const router = require("express").Router();
+const {
+  protect,
+  adminProtect,
+  optionalAuth,
+} = require("../middleware/auth");
+const { query }  = require("../config/db");
+const logger     = require("../utils/logger");
 const {
   getOrCreateConversation,
   insertMessage,
@@ -19,22 +23,6 @@ const {
   changeConversationStatus,
 } = require("../utils/messaging");
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   OPTIONAL AUTH — populates req.user if token present, never blocks
-   ───────────────────────────────────────────────────────────────────────────── */
-function optionalAuth(req, res, next) {
-  const header = req.headers.authorization;
-  if (!header || !header.startsWith("Bearer ")) return next();
-
-  /* Re-use protect but swallow auth errors */
-  protect(req, res, (err) => {
-    if (err) {
-      req.user = null; // token invalid — treat as guest
-    }
-    next();
-  });
-}
-
 /* ═══════════════════════════════════════════════════════════════════════════
    HEALTH CHECK
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -42,7 +30,7 @@ router.get("/health", (req, res) => {
   return res.json({
     success: true,
     service: "messages",
-    version: "3.1",
+    version: "3.2",
     ts:      new Date().toISOString(),
   });
 });
@@ -54,11 +42,17 @@ router.get("/stats", adminProtect, async (req, res) => {
   try {
     const [openRes, closedRes, pendingRes, unreadRes, todayRes] =
       await Promise.all([
-        query(`SELECT COUNT(*)::INT AS cnt FROM conversations WHERE status = 'open'    AND deleted_at IS NULL`),
-        query(`SELECT COUNT(*)::INT AS cnt FROM conversations WHERE status = 'closed'  AND deleted_at IS NULL`),
-        query(`SELECT COUNT(*)::INT AS cnt FROM conversations WHERE status = 'pending' AND deleted_at IS NULL`),
-        query(`SELECT COALESCE(SUM(unread_admin),0)::INT AS cnt FROM conversations WHERE deleted_at IS NULL AND status != 'closed'`),
-        query(`SELECT COUNT(*)::INT AS cnt FROM conversations WHERE created_at >= CURRENT_DATE AND deleted_at IS NULL`),
+        query(`SELECT COUNT(*)::INT AS cnt FROM conversations
+                WHERE status = 'open' AND deleted_at IS NULL`),
+        query(`SELECT COUNT(*)::INT AS cnt FROM conversations
+                WHERE status = 'closed' AND deleted_at IS NULL`),
+        query(`SELECT COUNT(*)::INT AS cnt FROM conversations
+                WHERE status = 'pending' AND deleted_at IS NULL`),
+        query(`SELECT COALESCE(SUM(unread_admin), 0)::INT AS cnt
+                FROM conversations
+                WHERE deleted_at IS NULL AND status != 'closed'`),
+        query(`SELECT COUNT(*)::INT AS cnt FROM conversations
+                WHERE created_at >= CURRENT_DATE AND deleted_at IS NULL`),
       ]);
 
     return res.json({
@@ -91,8 +85,10 @@ router.get("/users-list", adminProtect, async (req, res) => {
 
     if (trimmedSearch) {
       conditions.push(`(
-        u.full_name ILIKE $${p} OR u.email    ILIKE $${p} OR
-        u.username  ILIKE $${p} OR u.phone    ILIKE $${p}
+        u.full_name ILIKE $${p} OR
+        u.email     ILIKE $${p} OR
+        u.username  ILIKE $${p} OR
+        u.phone     ILIKE $${p}
       )`);
       params.push(`%${trimmedSearch}%`);
       p++;
@@ -102,46 +98,63 @@ router.get("/users-list", adminProtect, async (req, res) => {
 
     const result = await query(
       `SELECT
-         u.id, u.email, u.username, u.full_name, u.avatar_url,
-         u.phone, u.nationality, u.is_verified, u.last_login, u.created_at,
-         COALESCE((SELECT COUNT(*)::INT FROM bookings b WHERE b.user_id = u.id), 0) AS booking_count,
-         (SELECT conv.id FROM conversations conv
-           WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
-           ORDER BY conv.last_message_at DESC NULLS LAST, conv.created_at DESC LIMIT 1
+         u.id,
+         u.email,
+         u.username,
+         u.full_name,
+         u.avatar_url,
+         u.phone,
+         u.nationality,
+         u.is_verified,
+         u.last_login,
+         u.created_at,
+         COALESCE((
+           SELECT COUNT(*)::INT FROM bookings b WHERE b.user_id = u.id
+         ), 0) AS booking_count,
+         (
+           SELECT conv.id FROM conversations conv
+            WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
+            ORDER BY conv.last_message_at DESC NULLS LAST, conv.created_at DESC
+            LIMIT 1
          ) AS last_conversation_id,
-         (SELECT conv.last_message_at FROM conversations conv
-           WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
-           ORDER BY conv.last_message_at DESC NULLS LAST, conv.created_at DESC LIMIT 1
+         (
+           SELECT conv.last_message_at FROM conversations conv
+            WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
+            ORDER BY conv.last_message_at DESC NULLS LAST, conv.created_at DESC
+            LIMIT 1
          ) AS last_message_at,
-         (SELECT COALESCE(SUM(conv.unread_admin),0)::INT FROM conversations conv
-           WHERE conv.user_id = u.id AND conv.deleted_at IS NULL AND conv.status != 'closed'
+         (
+           SELECT COALESCE(SUM(conv.unread_admin), 0)::INT FROM conversations conv
+            WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
+              AND conv.status != 'closed'
          ) AS unread_admin
        FROM users u
        WHERE ${where}
-       ORDER BY COALESCE((
-         SELECT conv.last_message_at FROM conversations conv
-          WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
-          ORDER BY conv.last_message_at DESC NULLS LAST LIMIT 1
-       ), u.last_login, u.created_at) DESC NULLS LAST
+       ORDER BY
+         COALESCE((
+           SELECT conv.last_message_at FROM conversations conv
+            WHERE conv.user_id = u.id AND conv.deleted_at IS NULL
+            ORDER BY conv.last_message_at DESC NULLS LAST LIMIT 1
+         ), u.last_login, u.created_at) DESC NULLS LAST
        LIMIT $${p}`,
       [...params, parseInt(limit)]
     );
 
     const users = result.rows.map((u) => ({
-      id:                 u.id,
-      email:              u.email,
-      username:           u.username,
-      fullName:           u.full_name,
-      avatarUrl:          u.avatar_url,
-      phone:              u.phone,
-      nationality:        u.nationality,
-      isVerified:         u.is_verified,
-      lastLogin:          u.last_login,
-      createdAt:          u.created_at,
-      bookingCount:       u.booking_count       || 0,
-      lastConversationId: u.last_conversation_id || null,
-      lastMessageAt:      u.last_message_at      || null,
-      unreadAdmin:        u.unread_admin         || 0,
+      id:                  u.id,
+      email:               u.email,
+      username:            u.username,
+      fullName:            u.full_name,
+      avatarUrl:           u.avatar_url,
+      phone:               u.phone,
+      nationality:         u.nationality,
+      isVerified:          u.is_verified,
+      lastLogin:           u.last_login,
+      createdAt:           u.created_at,
+      bookingCount:        u.booking_count        || 0,
+      lastConversationId:  u.last_conversation_id || null,
+      lastMessageAt:       u.last_message_at      || null,
+      unreadAdmin:         u.unread_admin         || 0,
     }));
 
     return res.json({ success: true, data: users, count: users.length });
@@ -192,7 +205,9 @@ router.get("/conversations", adminProtect, async (req, res) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   POST /admin/conversations — admin starts chat with a specific user
+   POST /admin/conversations
+   Admin explicitly starts a conversation with a specific user.
+   Uses adminProtect — req.user is guaranteed to be an admin.
 ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/admin/conversations", adminProtect, async (req, res) => {
   try {
@@ -207,30 +222,37 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
       channel  = "live_chat",
     } = req.body;
 
-    const uid = targetUserId || userId;
-    if (!uid) {
+    const uid = parseInt(targetUserId || userId, 10);
+    if (!uid || isNaN(uid)) {
       return res.status(400).json({
         success: false,
-        message: "targetUserId is required",
+        message: "targetUserId is required to start a chat with a user",
       });
     }
 
+    /* Verify target user exists */
     const userCheck = await query(
-      `SELECT id, email, full_name FROM users WHERE id = $1 AND is_active = TRUE`,
+      `SELECT id, email, full_name, avatar_url
+         FROM users
+        WHERE id = $1 AND is_active = TRUE`,
       [uid]
     );
     if (!userCheck.rows[0]) {
-      return res.status(404).json({ success: false, message: "Target user not found or inactive" });
+      return res.status(404).json({
+        success: false,
+        message: "Target user not found or inactive",
+      });
     }
 
     const targetUser = userCheck.rows[0];
 
     const conv = await getOrCreateConversation({
       userId:        uid,
+      sessionId:     null,
       guestName:     targetUser.full_name,
       guestEmail:    targetUser.email,
-      bookingId,
-      bookingNumber,
+      bookingId:     bookingId   || null,
+      bookingNumber: bookingNumber || null,
       subject:       subject || `Conversation with ${targetUser.full_name || targetUser.email}`,
       channel,
       source:        "admin",
@@ -241,10 +263,11 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
       const msg = await insertMessage({
         conversationId: conv.id,
         senderType:     "admin",
-        senderId:       req.user?.id,
-        senderName:     req.user?.full_name || "Admin",
-        senderEmail:    req.user?.email,
-        body:           firstMessage,
+        senderId:       req.user.id,
+        senderName:     req.user.full_name || req.user.username || "Admin",
+        senderEmail:    req.user.email,
+        senderAvatar:   req.user.avatar_url || null,
+        body:           String(firstMessage).trim(),
       });
 
       try {
@@ -256,7 +279,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
             message:        reshapeMessage(msg),
           });
         }
-      } catch (_) { /* silent */ }
+      } catch (_) { /* silent — socket errors never break REST response */ }
     }
 
     return res.json({ success: true, data: reshapeConversation(conv) });
@@ -270,8 +293,16 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
 });
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   POST /conversations — user-facing OR admin fallback
-   Uses optionalAuth so logged-in users get req.user set automatically
+   POST /conversations
+   ─────────────────────────────────────────────────────────────────────────
+   Works for THREE caller types:
+     1. Authenticated admin  → req.user.role is admin, may pass targetUserId
+     2. Authenticated user   → req.user.id is the userId
+     3. Guest / widget       → no token, must pass sessionId in body
+
+   Uses optionalAuth (imported from middleware/auth) so:
+     • Valid token  → req.user populated, never blocked
+     • No/bad token → req.user = null, continues as guest
 ═══════════════════════════════════════════════════════════════════════════ */
 router.post("/conversations", optionalAuth, async (req, res) => {
   try {
@@ -286,21 +317,36 @@ router.post("/conversations", optionalAuth, async (req, res) => {
       source,
       priority,
       firstMessage,
-      targetUserId,        // admin fallback
+      targetUserId,   // admin fallback when using this endpoint
     } = req.body;
 
-    /* ── Resolve effective userId ── */
-    let userId = req.user?.id || null;
+    const ipAddress = req.ip;
+    const userAgent = req.get("user-agent") || null;
 
-    // Admin targeting a specific user
-    if (req.user?.role === "admin" && targetUserId) {
-      userId = targetUserId;
+    /* ── Resolve effective userId ─────────────────────────────────────────── */
+    let userId = null;
+
+    if (req.user) {
+      const ADMIN_ROLES_SET = new Set([
+        "admin", "superadmin", "super_admin", "moderator", "editor",
+      ]);
+
+      const callerIsAdmin =
+        req.userType === "admin" ||
+        ADMIN_ROLES_SET.has(req.user.role || "") ||
+        req.user.type === "admin";
+
+      if (callerIsAdmin && targetUserId) {
+        // Admin is starting a conversation on behalf of a user
+        userId = parseInt(targetUserId, 10) || null;
+      } else {
+        // Normal authenticated user (or admin messaging themselves)
+        userId = req.user.id;
+      }
     }
 
-    const ipAddress = req.ip;
-    const userAgent = req.get("user-agent");
-
-    /* ── Guard: must have userId or sessionId ── */
+    /* ── Guard ────────────────────────────────────────────────────────────── */
+    // Must have at least one identifier
     if (!userId && !sessionId) {
       return res.status(400).json({
         success: false,
@@ -308,29 +354,41 @@ router.post("/conversations", optionalAuth, async (req, res) => {
       });
     }
 
+    /* ── Create / resume conversation ────────────────────────────────────── */
     const conv = await getOrCreateConversation({
-      userId,
-      sessionId: userId ? null : sessionId,   // prefer userId when available
-      guestName,
-      guestEmail,
-      bookingId,
-      bookingNumber,
-      subject,
-      channel,
-      source,
-      priority,
+      userId:        userId   || null,
+      sessionId:     userId   ? null : (sessionId || null), // prefer userId
+      guestName:     guestName  || req.user?.full_name  || null,
+      guestEmail:    guestEmail || req.user?.email      || null,
+      bookingId:     bookingId    || null,
+      bookingNumber: bookingNumber || null,
+      subject:       subject   || null,
+      channel:       channel   || "live_chat",
+      source:        source    || (req.user ? "authenticated" : "guest"),
+      priority:      priority  || "normal",
       ipAddress,
       userAgent,
     });
 
+    /* ── Optional first message ──────────────────────────────────────────── */
     if (firstMessage && String(firstMessage).trim()) {
+      const ADMIN_ROLES_SET = new Set([
+        "admin", "superadmin", "super_admin", "moderator", "editor",
+      ]);
+      const callerIsAdmin =
+        req.user &&
+        (req.userType === "admin" ||
+          ADMIN_ROLES_SET.has(req.user.role || "") ||
+          req.user.type === "admin");
+
       await insertMessage({
         conversationId: conv.id,
-        senderType:     req.user?.role === "admin" ? "admin" : "user",
-        senderId:       req.user?.id   || null,
-        senderName:     guestName      || req.user?.full_name  || null,
-        senderEmail:    guestEmail     || req.user?.email      || null,
-        body:           firstMessage,
+        senderType:     callerIsAdmin ? "admin" : "user",
+        senderId:       req.user?.id    || null,
+        senderName:     guestName       || req.user?.full_name  || null,
+        senderEmail:    guestEmail      || req.user?.email      || null,
+        senderAvatar:   req.user?.avatar_url || null,
+        body:           String(firstMessage).trim(),
       });
     }
 
@@ -374,7 +432,8 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
     }
 
     const convCheck = await query(
-      `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT id, user_id FROM conversations
+        WHERE id = $1 AND deleted_at IS NULL`,
       [id]
     );
     if (!convCheck.rows[0]) {
@@ -384,12 +443,12 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
     const msg = await insertMessage({
       conversationId: id,
       senderType:     "admin",
-      senderId:       req.user?.id,
-      senderName:     req.user?.full_name || req.user?.username || "Admin",
-      senderEmail:    req.user?.email,
-      senderAvatar:   req.user?.avatar_url,
-      body,
-      replyToId,
+      senderId:       req.user.id,
+      senderName:     req.user.full_name || req.user.username || "Admin",
+      senderEmail:    req.user.email,
+      senderAvatar:   req.user.avatar_url || null,
+      body:           String(body).trim(),
+      replyToId:      replyToId || null,
     });
 
     try {
@@ -407,7 +466,7 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
 
     return res.json({ success: true, data: reshapeMessage(msg) });
   } catch (err) {
-    logger.error(`[Messages] POST /messages: ${err.message}`, { stack: err.stack });
+    logger.error(`[Messages] POST /conversations/:id/messages: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
       success: false,
       message: err.message || "Failed to send message",
@@ -420,20 +479,24 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 router.patch("/conversations/:id/read", adminProtect, async (req, res) => {
   try {
-    await markConversationRead({ conversationId: req.params.id, readerType: "admin" });
+    await markConversationRead({
+      conversationId: req.params.id,
+      readerType:     "admin",
+    });
 
     try {
       const io = req.app.get("io");
       if (io) {
         io.to(`conversation-${req.params.id}`).emit("msg:conversation-updated", {
-          id: req.params.id, unread_admin: 0,
+          id:          req.params.id,
+          unreadAdmin: 0,
         });
       }
     } catch (_) { /* silent */ }
 
     return res.json({ success: true, message: "Marked as read" });
   } catch (err) {
-    logger.error(`[Messages] PATCH /read: ${err.message}`, { stack: err.stack });
+    logger.error(`[Messages] PATCH /conversations/:id/read: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to mark as read" });
   }
 });
@@ -464,7 +527,7 @@ router.patch("/conversations/:id/status", adminProtect, async (req, res) => {
 
     return res.json({ success: true, data: reshapeConversation(conv) });
   } catch (err) {
-    logger.error(`[Messages] PATCH /status: ${err.message}`, { stack: err.stack });
+    logger.error(`[Messages] PATCH /conversations/:id/status: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
       success: false,
       message: err.message || "Failed to update status",
@@ -489,7 +552,7 @@ router.patch(
 
       const reactions = await toggleReaction({
         messageId: mid,
-        userId:    req.user?.id,
+        userId:    req.user.id,
         emoji,
         add:       Boolean(add),
       });
@@ -498,7 +561,10 @@ router.patch(
         const io = req.app.get("io");
         if (io) {
           io.to(`conversation-${cid}`).emit("msg:reaction", {
-            messageId: mid, reactions, emoji, reactedBy: req.user?.id,
+            messageId: mid,
+            reactions,
+            emoji,
+            reactedBy: req.user.id,
           });
         }
       } catch (_) { /* silent */ }
@@ -515,7 +581,7 @@ router.patch(
 );
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   DELETE /conversations/:id
+   DELETE /conversations/:id — soft delete
 ═══════════════════════════════════════════════════════════════════════════ */
 router.delete("/conversations/:id", adminProtect, async (req, res) => {
   try {
@@ -562,10 +628,10 @@ function reshapeConversation(row, includeMessages = false) {
     firstMessage:  row.first_message,
     lastMessage:   row.last_message,
     lastMessageAt: row.last_message_at,
-    unreadUser:    row.unread_user  || 0,
-    unreadAdmin:   row.unread_admin || 0,
-    tags:          row.tags         || [],
-    metadata:      row.metadata     || {},
+    unreadUser:    row.unread_user   || 0,
+    unreadAdmin:   row.unread_admin  || 0,
+    tags:          row.tags          || [],
+    metadata:      row.metadata      || {},
     source:        row.source,
     bookingId:     row.booking_id     || null,
     bookingNumber: row.booking_number || row.metadata?.bookingNumber || null,
@@ -574,9 +640,8 @@ function reshapeConversation(row, includeMessages = false) {
     closedAt:      row.closed_at,
     createdAt:     row.created_at,
     updatedAt:     row.updated_at,
-    messageCount:  row.message_count  || 0,
-    /* Nested user object when available (from listConversations JOIN) */
-    user:          row.user || null,
+    messageCount:  row.message_count || 0,
+    user:          row.user          || null,
   };
 
   if (includeMessages && Array.isArray(row.messages)) {
