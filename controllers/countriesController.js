@@ -1,28 +1,29 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES CONTROLLER v5.3
+ * COUNTRIES CONTROLLER v5.4
  * ═══════════════════════════════════════════════════════════════════════════════
- * Root-cause fixes for the two reported errors:
  *
- *  • POST 500  — VERIFIED_COLUMNS cache was built from WRITABLE_COLUMNS (a superset
- *                of columns that may not exist in the DB).  Now we always introspect
- *                the live schema first, cache it, and only write to columns that
- *                actually exist.  Also fixed: arrays/objects that are NOT in a JSONB
- *                column were being passed raw to pg and throwing a type error.
+ * Fixes in this version:
  *
- *  • DELETE 409 loop — remove() now returns  { code: 'HAS_DESTINATIONS' }  so the
- *                frontend can distinguish it from any other 409 (e.g. slug conflict)
- *                and present the two-stage force-confirm UI exactly once.
+ *  1. ensureCountriesSchema() — exported so server.js can call it at boot.
+ *     Creates the table if it does not exist; safe to call multiple times.
  *
- *  Other improvements
- *  • toJsonb()  — fixed: strings that are already valid JSON were passed through
- *                 as-is; strings that are NOT valid JSON are now stringified so pg
- *                 never receives a bare JS string for a jsonb column.
- *  • safeQuery  — logs the full pg error object (code, detail, hint) in dev.
- *  • getWritableColumns — reset-able via  VERIFIED_COLUMNS = null  for hot-reload.
- *  • create / update — scalar arrays (languages, highlights …) are serialised with
- *                      toJsonb() only when the column is a real jsonb column; plain
- *                      TEXT[] columns receive a native JS array and pg handles them.
+ *  2. Array serialisation — the root cause of "malformed array literal":
+ *       • TEXT[] columns  (languages, official_languages, highlights, experiences,
+ *                          travel_tips, neighboring_countries, images)
+ *         → always sent as a native JS array; pg driver converts to TEXT[]
+ *       • JSONB columns   (hero_images, activities, faqs, extra_info, seasons,
+ *                          geography, wildlife, cuisine)
+ *         → always JSON.stringify'd
+ *       • The old code received '["df"]' (a JSON string from the client) and
+ *         passed it straight to pg for a TEXT[] column — pg rejected it.
+ *         Now we always parse first, then decide how to send.
+ *
+ *  3. VERIFIED_COLUMNS cache is reset when ensureCountriesSchema() runs so
+ *     newly added columns are picked up.
+ *
+ *  4. getWritableColumns() now also reads pg column types so we can decide
+ *     TEXT[] vs JSONB automatically instead of relying on a hard-coded set.
  */
 
 'use strict'
@@ -44,7 +45,7 @@ const safeInt = (v, def = 0, min = 0, max = 99_999) => {
   return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
 }
 
-/** Run a query; on error log fully and return [] (or rethrow if throwOnError). */
+/** Run a query; on error log fully and return [] (or rethrow). */
 const safeQuery = async (sql, params = [], { throwOnError = false } = {}) => {
   try {
     const { rows } = await query(sql, params)
@@ -57,7 +58,6 @@ const safeQuery = async (sql, params = [], { throwOnError = false } = {}) => {
       hint:    err.hint,
       where:   err.where,
       sql:     sql.slice(0, 200),
-      params,
     })
     if (throwOnError) throw err
     return []
@@ -74,25 +74,41 @@ const toSlug = (str = '') =>
     .replace(/--+/g, '-')
 
 /**
- * Serialise a value for a PostgreSQL JSONB column.
- *
- * pg's driver sends JS objects/arrays as JSON automatically for jsonb columns,
- * but sending a raw string that is valid JSON also works.  The safest approach
- * is to always JSON.stringify so we control the wire format.
+ * Parse a value that might be:
+ *   • Already a JS array / object  → return as-is
+ *   • A JSON string like '["a","b"]' → parse and return the array
+ *   • A plain string like "hello"    → return as-is (scalar)
+ *   • null / undefined               → return null
  */
-const toJsonb = (val) => {
+const parseIfJsonString = (val) => {
   if (val === null || val === undefined) return null
-  if (typeof val === 'string') {
-    // If it's already a JSON string, use it; otherwise wrap in quotes.
-    try { JSON.parse(val); return val } catch { return JSON.stringify(val) }
+  if (typeof val !== 'string')          return val   // already a JS value
+  const trimmed = val.trim()
+  if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
+    try { return JSON.parse(trimmed) } catch { /* fall through */ }
   }
-  try { return JSON.stringify(val) } catch { return null }
+  return val
 }
 
-/* ─── Which columns must be sent as JSONB ───────────────────────────────── */
+/* ─── Column-type registry — populated by getWritableColumns() ─────────── */
+
+/**
+ * JSONB columns: value must be JSON.stringify'd before passing to pg.
+ * Everything else that is an array is TEXT[] and must be a native JS array.
+ */
 const JSONB_FIELDS = new Set([
   'hero_images', 'activities', 'faqs', 'extra_info',
   'seasons', 'geography', 'wildlife', 'cuisine',
+])
+
+/**
+ * TEXT[] columns: pg expects a native JS array (or null).
+ * Do NOT JSON.stringify these — that produces the malformed literal error.
+ */
+const ARRAY_FIELDS = new Set([
+  'highlights', 'experiences', 'travel_tips',
+  'neighboring_countries', 'images',
+  'languages', 'official_languages',
 ])
 
 /* ─── Every column the controller might write ───────────────────────────── */
@@ -120,7 +136,7 @@ const WRITABLE_COLUMNS = [
   // scalar info fields
   'safety_info', 'transport_info', 'food_info',
   'culture_info', 'wildlife_info', 'geography_info',
-  // jsonb lists
+  // array / jsonb lists
   'highlights', 'experiences', 'travel_tips',
   'neighboring_countries', 'seasons',
   'wildlife', 'cuisine', 'official_languages', 'languages', 'images',
@@ -131,10 +147,15 @@ const WRITABLE_COLUMNS = [
 ]
 
 /* ─── Lazy-loaded, process-lifetime column cache ────────────────────────── */
-let VERIFIED_COLUMNS = null   // null = not loaded yet
+
+/** null = not loaded yet */
+let VERIFIED_COLUMNS  = null
+/** Map<columnName, pgDataType> — e.g. 'text[]', 'jsonb', 'text', 'integer' */
+let COLUMN_TYPE_MAP   = null
 
 /**
  * Returns only the WRITABLE_COLUMNS that actually exist in the DB.
+ * Also populates COLUMN_TYPE_MAP for type-aware serialisation.
  * Result is cached after the first call.
  */
 const getWritableColumns = async () => {
@@ -142,41 +163,80 @@ const getWritableColumns = async () => {
 
   try {
     const { rows } = await query(
-      `SELECT column_name
+      `SELECT column_name, data_type, udt_name
        FROM information_schema.columns
        WHERE table_name   = 'countries'
          AND table_schema = 'public'`,
     )
-    const existing = new Set(rows.map(r => r.column_name))
+
+    const existing    = new Set(rows.map(r => r.column_name))
+    COLUMN_TYPE_MAP   = {}
+    for (const r of rows) {
+      // data_type is e.g. 'ARRAY', 'jsonb', 'text', 'integer'
+      // udt_name  is e.g. '_text' (TEXT[]), 'jsonb', 'text', 'int4'
+      COLUMN_TYPE_MAP[r.column_name] = {
+        data_type: r.data_type.toLowerCase(),
+        udt_name:  r.udt_name.toLowerCase(),
+      }
+    }
+
     VERIFIED_COLUMNS = WRITABLE_COLUMNS.filter(c => existing.has(c))
 
     logger.info(
-      `[Countries] Column verification: ${VERIFIED_COLUMNS.length} writable` +
-      ` (${WRITABLE_COLUMNS.length - VERIFIED_COLUMNS.length} not found in DB)`,
+      `[Countries] Column verification: ${VERIFIED_COLUMNS.length} writable ` +
+      `(${WRITABLE_COLUMNS.length - VERIFIED_COLUMNS.length} not in DB)`,
     )
-
-    // Warn about any JSONB_FIELDS that are missing — those would silently drop data
-    for (const jf of JSONB_FIELDS) {
-      if (!existing.has(jf)) {
-        logger.warn(`[Countries] JSONB field "${jf}" is not in the DB schema — it will be ignored`)
-      }
-    }
   } catch (err) {
-    logger.error('[Countries] Could not introspect schema, falling back to full list:', err.message)
+    logger.error('[Countries] Could not introspect schema, using full list:', err.message)
     VERIFIED_COLUMNS = [...WRITABLE_COLUMNS]
+    COLUMN_TYPE_MAP  = {}
   }
 
   return VERIFIED_COLUMNS
 }
 
 /**
- * Prepare a single value for a pg parameter.
- * • JSONB columns  → JSON string
- * • Arrays for non-jsonb cols → native JS array (pg sends as TEXT[])
- * • Everything else → pass through
+ * Prepare a value for a pg parameter based on the column's actual DB type.
+ *
+ *  JSONB column         → JSON.stringify (never pass a raw JS object)
+ *  ARRAY column (TEXT[])→ ensure it's a native JS array (parse JSON string if needed)
+ *  Everything else      → pass through as-is
+ *
+ * This is the single place where the "malformed array literal" was produced:
+ * a string '["df"]' was passed directly as a pg parameter for a TEXT[] column.
  */
 const prepareValue = (col, val) => {
-  if (JSONB_FIELDS.has(col)) return toJsonb(val)
+  if (val === null || val === undefined) return null
+
+  // ── JSONB ──────────────────────────────────────────────────────────────
+  if (JSONB_FIELDS.has(col)) {
+    // Also check live type map in case a field was added to the DB as jsonb
+    const typeInfo = COLUMN_TYPE_MAP?.[col]
+    const isJsonb  = typeInfo?.data_type === 'jsonb' || typeInfo?.udt_name === 'jsonb'
+
+    if (JSONB_FIELDS.has(col) || isJsonb) {
+      const parsed = parseIfJsonString(val)
+      try { return JSON.stringify(parsed) } catch { return null }
+    }
+  }
+
+  // ── TEXT[] / ARRAY ─────────────────────────────────────────────────────
+  const typeInfo = COLUMN_TYPE_MAP?.[col]
+  const isArray  =
+    ARRAY_FIELDS.has(col) ||
+    typeInfo?.data_type === 'array' ||
+    (typeInfo?.udt_name || '').startsWith('_')   // pg udt_name for arrays starts with _
+
+  if (isArray) {
+    const parsed = parseIfJsonString(val)
+    // Must be a native JS array for pg TEXT[] binding
+    if (Array.isArray(parsed)) return parsed
+    // Scalar string → wrap in array so the schema doesn't reject it
+    if (typeof parsed === 'string' && parsed.trim() !== '') return [parsed]
+    return null
+  }
+
+  // ── Scalar ─────────────────────────────────────────────────────────────
   return val
 }
 
@@ -207,6 +267,166 @@ const DEST_CARD_SELECT = `
     d.booking_count DESC NULLS LAST,
     d.name          ASC
 `
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCHEMA BOOTSTRAP  — exported so server.js can call it at boot time
+   Fixes: "ReferenceError: ensureCountriesSchema is not defined"
+═══════════════════════════════════════════════════════════════════════════ */
+
+exports.ensureCountriesSchema = async () => {
+  try {
+    await query(`
+      CREATE TABLE IF NOT EXISTS countries (
+        id                SERIAL PRIMARY KEY,
+        name              TEXT NOT NULL,
+        slug              TEXT NOT NULL UNIQUE,
+        official_name     TEXT,
+        demonym           TEXT,
+        motto             TEXT,
+        tagline           TEXT,
+        continent         TEXT,
+        region            TEXT,
+        sub_region        TEXT,
+
+        description       TEXT,
+        full_description  TEXT,
+        short_description TEXT,
+        short_notes       TEXT,
+
+        image_url         TEXT,
+        hero_image        TEXT,
+        flag_url          TEXT,
+        flag              TEXT,
+        cover_image_url   TEXT,
+        hero_images       JSONB,
+
+        capital           TEXT,
+        latitude          NUMERIC(10, 7),
+        longitude         NUMERIC(10, 7),
+
+        currency          TEXT,
+        currency_symbol   TEXT,
+        language          TEXT,
+        timezone          TEXT,
+        climate           TEXT,
+        best_time_to_visit TEXT,
+        visa_info         TEXT,
+        health_info       TEXT,
+        water_safety      TEXT,
+        electrical_plug   TEXT,
+        voltage           TEXT,
+        internet_tld      TEXT,
+        calling_code      TEXT,
+        driving_side      TEXT,
+        electricity       TEXT,
+        government_type   TEXT,
+
+        population        BIGINT,
+        area              NUMERIC(15, 2),
+        area_sq_km        NUMERIC(15, 2),
+        urban_population  BIGINT,
+        literacy_rate     NUMERIC(5, 2),
+        life_expectancy   NUMERIC(5, 2),
+        median_age        NUMERIC(5, 2),
+
+        safety_info       TEXT,
+        transport_info    TEXT,
+        food_info         TEXT,
+        culture_info      TEXT,
+        wildlife_info     TEXT,
+        geography_info    TEXT,
+
+        highlights        TEXT[],
+        experiences       TEXT[],
+        travel_tips       TEXT[],
+        neighboring_countries TEXT[],
+        images            TEXT[],
+        official_languages TEXT[],
+        languages         TEXT[],
+
+        activities        JSONB,
+        faqs              JSONB,
+        extra_info        JSONB,
+        seasons           JSONB,
+        geography         JSONB,
+        wildlife          JSONB,
+        cuisine           JSONB,
+
+        is_active         BOOLEAN NOT NULL DEFAULT true,
+        is_featured       BOOLEAN NOT NULL DEFAULT false,
+
+        meta_title        TEXT,
+        meta_description  TEXT,
+
+        view_count        INTEGER NOT NULL DEFAULT 0,
+
+        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `)
+
+    // Add any columns that might be missing from older installs
+    const alterations = [
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS full_description TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_description TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_notes TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_image TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS sub_region TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_images JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS activities JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS faqs JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS extra_info JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS seasons JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cuisine JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS water_safety TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electrical_plug TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS voltage TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS internet_tld TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS driving_side TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electricity TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government_type TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS area_sq_km NUMERIC(15,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS urban_population BIGINT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS literacy_rate NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS life_expectancy NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS median_age NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS safety_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS transport_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS food_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS culture_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography_info TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS images TEXT[]`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS official_languages TEXT[]`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS neighboring_countries TEXT[]`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_title TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_description TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0`,
+    ]
+
+    for (const sql of alterations) {
+      await query(sql).catch(err =>
+        logger.warn('[Countries] ALTER skipped:', err.message),
+      )
+    }
+
+    // Reset column cache so getWritableColumns() re-reads after schema changes
+    VERIFIED_COLUMNS = null
+    COLUMN_TYPE_MAP  = null
+
+    // Pre-warm the cache
+    await getWritableColumns()
+
+    logger.info('[Countries] Schema ready ✅')
+  } catch (err) {
+    logger.error('[Countries] ensureCountriesSchema failed:', err.message)
+    throw err
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET ALL   GET /api/countries
@@ -554,10 +774,10 @@ exports.getStats = async (req, res, next) => {
 /* ═══════════════════════════════════════════════════════════════════════════
    CREATE   POST /api/countries
    ─────────────────────────────────────────────────────────────────────────
-   Root-cause of the 500:
-     The original code tried to INSERT columns that don't exist in the DB
-     (e.g. 'sub_region', 'area_sq_km' …).  We now query pg's information_schema
-     first and only write verified columns.
+   Fixes:
+   • Only writes columns that exist in DB (via getWritableColumns)
+   • Correctly serialises TEXT[] vs JSONB via prepareValue()
+   • Parses JSON strings from client before deciding how to bind
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.create = async (req, res, next) => {
@@ -594,16 +814,14 @@ exports.create = async (req, res, next) => {
       if (col === 'name' || col === 'slug') continue   // already added
       if (body[col] === undefined)          continue   // not sent by client
 
-      const raw = body[col]
-
-      // Skip null/empty arrays to avoid type errors on non-array columns
-      if (Array.isArray(raw) && raw.length === 0 && !JSONB_FIELDS.has(col)) continue
+      const prepared = prepareValue(col, body[col])
+      if (prepared === null || prepared === undefined) continue
 
       colNames.push(col)
-      values.push(prepareValue(col, raw))
+      values.push(prepared)
     }
 
-    // timestamps — use NOW() literals, NOT parameters, so pg doesn't mis-type them
+    // timestamps — NOW() literals, not parameters
     colNames.push('created_at', 'updated_at')
     const placeholders = values.map((_, i) => `$${i + 1}`)
     placeholders.push('NOW()', 'NOW()')
@@ -628,11 +846,11 @@ exports.create = async (req, res, next) => {
     })
   } catch (err) {
     logger.error('[Countries] create FAILED:', {
-      message: err.message,
-      code:    err.code,
-      detail:  err.detail,
-      hint:    err.hint,
-      where:   err.where,
+      message:  err.message,
+      code:     err.code,
+      detail:   err.detail,
+      hint:     err.hint,
+      where:    err.where,
       position: err.position,
     })
     next(err)
@@ -678,7 +896,9 @@ exports.update = async (req, res, next) => {
 
     for (const col of columns) {
       if (body[col] === undefined) continue
-      values.push(prepareValue(col, body[col]))
+
+      const prepared = prepareValue(col, body[col])
+      values.push(prepared)
       setClauses.push(`${col} = $${values.length}`)
     }
 
@@ -781,13 +1001,6 @@ exports.toggleFeatured = async (req, res, next) => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DELETE   DELETE /api/countries/:id
-   ─────────────────────────────────────────────────────────────────────────
-   Flow:
-     1. Verify country exists                  → 404 if not
-     2. Count linked destinations
-     3a. destCount > 0 && !force               → 409  { code: 'HAS_DESTINATIONS' }
-     3b. destCount > 0 &&  force               → cascade: bookings → destinations → country
-     4. Delete country                         → 200
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.remove = async (req, res, next) => {
@@ -816,8 +1029,8 @@ exports.remove = async (req, res, next) => {
 
     /* ── 3. Resolve force flag ───────────────────────────────────────── */
     const force =
-      req.query.force === 'true'                            ||
-      req.body?.force === true                              ||
+      req.query.force === 'true'                             ||
+      req.body?.force === true                               ||
       String(req.body?.force || '').toLowerCase() === 'true'
 
     /* ── 3a. Guard: linked destinations, no force ────────────────────── */
@@ -838,7 +1051,6 @@ exports.remove = async (req, res, next) => {
     let removedDestinations = 0
 
     if (destCount > 0 && force) {
-      // Collect destination IDs
       const destRows = await safeQuery(
         'SELECT id FROM destinations WHERE country_id = $1',
         [id],
@@ -846,7 +1058,6 @@ exports.remove = async (req, res, next) => {
       const destIds = destRows.map(r => r.id)
 
       if (destIds.length > 0) {
-        // Remove bookings first (FK dependency)
         try {
           const delB = await query(
             'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[]) RETURNING id',
@@ -854,14 +1065,12 @@ exports.remove = async (req, res, next) => {
           )
           removedBookings = delB.rows.length
         } catch (err) {
-          // bookings may reference destination differently — log and continue
           logger.warn('[Countries] cascade bookings delete skipped:', {
             message: err.message,
             code:    err.code,
           })
         }
 
-        // Remove destinations
         const delD = await query(
           'DELETE FROM destinations WHERE country_id = $1 RETURNING id',
           [id],
@@ -877,7 +1086,6 @@ exports.remove = async (req, res, next) => {
     )
 
     if (!rows[0]) {
-      // Race condition — already deleted between our check and delete
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
 

@@ -1282,4 +1282,5 @@ module.exports = {
   ensureBookingsSchema,
   ensurePackagesSchema,
   ensureTestimonialsSchema,
+  ensureCountriesSchema,
 };
