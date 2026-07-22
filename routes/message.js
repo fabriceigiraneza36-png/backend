@@ -316,6 +316,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
 
     const text = String(req.body.body || "").trim();
     if (!text) return res.status(400).json({ success: false, message: "Message body required" });
+    const replyToId = req.body.replyToId ? parseInt(req.body.replyToId, 10) : null;
 
     const conv = await msg.findConversationById(id);
     if (!conv) return res.status(404).json({ success: false, message: "Conversation not found" });
@@ -323,7 +324,6 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     if (!isAdmin) {
       const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email;
       if (!own) return res.status(403).json({ success: false, message: "Forbidden" });
-      // Re-open a closed conversation when the user replies
       if (conv.status === "closed") {
         await query(`UPDATE conversations SET status='open', updated_at=NOW() WHERE id=$1`, [id])
           .catch(() => {});
@@ -342,6 +342,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       senderAvatar:   a.avatar,
       body:           text,
       metadata:       req.body.metadata || {},
+      replyToId,
     });
 
     const serialized = msg.serializeMessage(message);
@@ -460,6 +461,47 @@ router.patch("/conversations/:id/status", protect, restrictTo("admin", "manager"
 });
 
 /* ══════════════════════════════════════════════════════════════════════════
+   REACT  (toggle reaction on a message)
+   body: { emoji }
+   ══════════════════════════════════════════════════════════════════════════*/
+router.patch("/conversations/:id/messages/:msgId/react", protect, async (req, res) => {
+  try {
+    const convId = parseInt(req.params.id, 10);
+    const msgId  = parseInt(req.params.msgId, 10);
+    const isAdmin = ["admin", "manager"].includes(req.user?.role || req.user?.type);
+    const emoji  = String(req.body.emoji || "").trim();
+    if (!emoji) return res.status(400).json({ success: false, message: "emoji required" });
+
+    const conv = await msg.findConversationById(convId);
+    if (!conv) return res.status(404).json({ success: false, message: "Conversation not found" });
+    if (!isAdmin) {
+      const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email;
+      if (!own) return res.status(403).json({ success: false, message: "Forbidden" });
+    }
+
+    const message = await msg.addReaction(convId, msgId, emoji, req.user?.id || 0);
+    if (!message) return res.status(404).json({ success: false, message: "Message not found" });
+
+    const serialized = msg.serializeMessage(message);
+    const io = msg.getIO();
+    if (io) {
+      io.to(`conv:${convId}`).emit("msg:reaction", {
+        conversationId: convId,
+        messageId:      msgId,
+        reactions:      serialized.reactions,
+        reactedBy:      isAdmin ? "admin" : "user",
+        emoji,
+      });
+    }
+
+    return res.json({ success: true, data: serialized });
+  } catch (err) {
+    logger.error("[Messages] PATCH react:", err.message);
+    return res.status(500).json({ success: false, message: "Server error" });
+  }
+});
+
+/* ══════════════════════════════════════════════════════════════════════════
    DELETE (soft)  — admin only
    ══════════════════════════════════════════════════════════════════════════*/
 router.delete("/conversations/:id", protect, restrictTo("admin", "manager"), async (req, res) => {
@@ -467,7 +509,7 @@ router.delete("/conversations/:id", protect, restrictTo("admin", "manager"), asy
     const id = parseInt(req.params.id, 10);
     await query(
       `UPDATE conversations SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW()
-        WHERE id = $2`,
+         WHERE id = $2`,
       [req.user?.id, id],
     );
     return res.json({ success: true, message: "Conversation removed" });

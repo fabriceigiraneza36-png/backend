@@ -363,6 +363,7 @@ const ensureMessagingSchema = async () => {
       edited           BOOLEAN     DEFAULT false,
       deleted          BOOLEAN     DEFAULT false,
       reply_to_id      INTEGER,
+      reactions        JSONB       DEFAULT '{}'::JSONB,
       metadata         JSONB       DEFAULT '{}'::JSONB,
       created_at       TIMESTAMP   DEFAULT NOW()
     )`,
@@ -393,6 +394,12 @@ const ensureMessagingSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`,
   ]
   for (const idx of indexes) await query(idx).catch(() => {})
+
+  // Migrations — add missing columns to existing tables (idempotent)
+  await query(
+    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions JSONB DEFAULT '{}'::JSONB`,
+  ).catch(() => {})
+
   logger.info('✅ Messaging schema ready')
 }
 
@@ -777,15 +784,15 @@ const getOrCreateConversation = async ({
 
 const saveConversationMessage = async ({
   conversationId, senderType, senderId, senderName,
-  senderEmail, senderAvatar, body, metadata,
+  senderEmail, senderAvatar, body, metadata, replyToId,
 }) => {
   if (!String(body || '').trim()) throw new Error('Message body is required')
 
   const { rows } = await query(
     `INSERT INTO messages
        (conversation_id, sender_type, sender_id, sender_name,
-        sender_email, sender_avatar, body, metadata, is_read)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,false)
+        sender_email, sender_avatar, body, reply_to_id, metadata, is_read)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
      RETURNING *`,
     [
       conversationId,
@@ -795,6 +802,7 @@ const saveConversationMessage = async ({
       senderEmail  || null,
       senderAvatar || null,
       String(body).trim(),
+      replyToId    || null,
       JSON.stringify(metadata || {}),
     ],
   )
@@ -847,7 +855,9 @@ const serializeConvMessage = (row) => ({
   body:           row.body,
   msgType:        row.msg_type || 'text',
   isRead:         row.is_read,
+  readAt:         row.read_at,
   replyToId:      row.reply_to_id,
+  reactions:      row.reactions || {},
   metadata:       row.metadata || {},
   createdAt:      row.created_at,
 })
@@ -1198,6 +1208,7 @@ io.on('connection', (socket) => {
         senderAvatar:   socket.data.user?.avatar_url || null,
         body,
         metadata: payload.metadata || { source: 'socket' },
+        replyToId:      payload.replyToId ? parseInt(payload.replyToId, 10) : undefined,
       })
 
       const serialized  = serializeConvMessage(msg)
@@ -1278,6 +1289,7 @@ io.on('connection', (socket) => {
       if (!conv) throw new Error('Conversation not found')
 
       const convId = conv.id
+      const replyToId = payload.replyToId ? parseInt(payload.replyToId, 10) : null
 
       const msg = await saveConversationMessage({
         conversationId: convId,
@@ -1288,6 +1300,7 @@ io.on('connection', (socket) => {
         senderAvatar:   null,
         body,
         metadata: { source: 'admin-socket' },
+        replyToId:      replyToId || undefined,
       })
 
       const serialized = serializeConvMessage(msg)
@@ -1415,6 +1428,39 @@ io.on('connection', (socket) => {
       if (typeof cb === 'function') cb({ success: true })
     } catch (err) {
       logger.error('[Socket] msg:admin-status error:', err.message)
+      if (typeof cb === 'function') cb({ success: false, error: err.message })
+    }
+  })
+
+  socket.on('msg:react', async (payload = {}, cb) => {
+    try {
+      const { conversationId, messageId, emoji, add = true } = payload
+      if (!conversationId || !messageId || !emoji) throw new Error('conversationId, messageId, emoji required')
+
+      const uid = socket.data.user?.id || 0
+      const isAdmin = !!socket.data.isAdmin
+
+      let row
+      if (add) {
+        row = await addReaction(conversationId, messageId, emoji, uid)
+      } else {
+        row = await removeReaction(conversationId, messageId, emoji, uid)
+      }
+
+      if (!row) throw new Error('Message not found')
+
+      const serialized = serializeConvMessage(row)
+      io.to(`conv:${conversationId}`).emit('msg:reaction', {
+        conversationId,
+        messageId,
+        reactions: serialized.reactions || {},
+        reactedBy: isAdmin ? 'admin' : 'user',
+        emoji,
+      })
+
+      if (typeof cb === 'function') cb({ success: true, reactions: serialized.reactions })
+    } catch (err) {
+      logger.error('[Socket] msg:react error:', err.message)
       if (typeof cb === 'function') cb({ success: false, error: err.message })
     }
   })

@@ -1,26 +1,3 @@
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES ROUTES v2.1
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * Fix: Verified every ctrl.* reference matches an actual export.
- * Named routes declared BEFORE wildcard /:slug to prevent shadowing.
- *
- * Route order:
- *   GET  /                        → getAll
- *   GET  /featured                → getFeatured
- *   GET  /stats                   → getStats
- *   GET  /continent/:continent    → getByContinent
- *   POST /                        → create (admin)
- *   PATCH /bulk-delete            → bulkDelete (admin)
- *   PATCH /:id/toggle-active      → toggleActive (admin)
- *   PATCH /:id/toggle-featured    → toggleFeatured (admin)
- *   PUT   /:id                    → update (admin)
- *   PATCH /:id                    → update (admin)
- *   DELETE /:id                   → remove (admin)
- *   GET  /:slug                   → getOne  ← WILDCARD LAST
- * ═══════════════════════════════════════════════════════════════════════════════
- */
 
 'use strict'
 

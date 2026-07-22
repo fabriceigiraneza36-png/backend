@@ -159,6 +159,7 @@ const saveMessage = async ({
   senderAvatar = null,
   body,
   msgType      = "text",
+  replyToId    = null,
   metadata     = {},
 }) => {
   const text = String(body || "").trim();
@@ -167,8 +168,8 @@ const saveMessage = async ({
   const { rows } = await query(
     `INSERT INTO messages
        (conversation_id, sender_type, sender_id, sender_name,
-        sender_email, sender_avatar, body, msg_type, metadata, is_read)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,false)
+        sender_email, sender_avatar, body, msg_type, reply_to_id, metadata, is_read)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
      RETURNING *`,
     [
       conversationId,
@@ -179,6 +180,7 @@ const saveMessage = async ({
       senderAvatar || null,
       text,
       msgType,
+      replyToId    || null,
       JSON.stringify(metadata || {}),
     ],
   );
@@ -262,7 +264,9 @@ const serializeMessage = (row) => ({
   msgType:        row.msg_type || "text",
   attachmentUrl:  row.attachment_url,
   isRead:         row.is_read,
+  readAt:         row.read_at,
   replyToId:      row.reply_to_id,
+  reactions:      row.reactions || {},
   metadata:       row.metadata || {},
   createdAt:      row.created_at,
 });
@@ -292,6 +296,45 @@ const serializeConversation = (row) => ({
   createdAt:      row.created_at,
   updatedAt:      row.updated_at,
 });
+
+/* ════════════════════════════════════════════════════════════════════════════
+   REACTIONS
+   ══════════════════════════════════════════════════════════════════════════ */
+const addReaction = async (conversationId, messageId, emoji, userId) => {
+  const uid = String(userId || 0);
+  const { rows } = await query(
+    `SELECT reactions FROM messages WHERE id = $1 AND conversation_id = $2`,
+    [messageId, conversationId],
+  );
+  const current = (rows[0]?.reactions) || {};
+  const arr = Array.from(new Set([...(Array.isArray(current[emoji]) ? current[emoji] : []), uid]));
+  const { rows: updated } = await query(
+    `UPDATE messages SET reactions = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+    [{ ...current, [emoji]: arr }, messageId],
+  );
+  return updated[0] || null;
+};
+
+const removeReaction = async (conversationId, messageId, emoji, userId) => {
+  const uid = String(userId || 0);
+  const { rows } = await query(
+    `SELECT reactions FROM messages WHERE id = $1 AND conversation_id = $2`,
+    [messageId, conversationId],
+  );
+  const current = (rows[0]?.reactions) || {};
+  const arr = (Array.isArray(current[emoji]) ? current[emoji] : []).filter((id) => id !== uid);
+  const updated = { ...current };
+  if (arr.length > 0) {
+    updated[emoji] = arr;
+  } else {
+    delete updated[emoji];
+  }
+  const { rows: up } = await query(
+    `UPDATE messages SET reactions = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
+    [updated, messageId],
+  );
+  return up[0] || null;
+};
 
 /* ════════════════════════════════════════════════════════════════════════════
    REAL-TIME BROADCAST
@@ -404,4 +447,6 @@ module.exports = {
   broadcastMessage,
   broadcastConversationUpdate,
   startBookingConversation,
+  addReaction,
+  removeReaction,
 };

@@ -615,6 +615,23 @@ router.post(
         return res.status(400).json({ success: false, message: "title required" });
       if (!message?.trim())
         return res.status(400).json({ success: false, message: "message required" });
+
+      /* Guard against an already-past expiry silently hiding the notification.
+         `datetime-local` inputs have minute precision, so a value of "now"
+         can resolve to a moment before the row is actually inserted, which
+         made broadcasts vanish immediately. Treat any past/invalid expiry as
+         "no expiry" so notifications persist. */
+      let safeExpiresAt = null;
+      if (expires_at) {
+        const t = new Date(expires_at).getTime();
+        if (Number.isFinite(t) && t > Date.now() + 30_000) {
+          safeExpiresAt = new Date(t).toISOString();
+        } else {
+          logger.warn(
+            `[Notifications] Ignoring past/invalid expires_at "${expires_at}" for broadcast "${title}"`,
+          );
+        }
+      }
       if (
         target_scope === "individual" &&
         !user_id &&
@@ -648,7 +665,7 @@ router.post(
         targetRole:    target_role    || null,
         targetSegment: target_segment || null,
         metadata,
-        expiresAt:     expires_at     || null,
+        expiresAt:     safeExpiresAt,
       });
 
       emitNotification(req, notif);

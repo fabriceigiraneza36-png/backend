@@ -1,6 +1,4 @@
-// routes/users.js — CRITICAL: specific routes MUST come before /:id wildcard
-// Current order is BROKEN — /me, /export get swallowed by /:id (adminProtect)
-
+// routes/users.js
 const router = require("express").Router();
 const auth = require("../controllers/authController");
 const { protect, adminOnly, adminProtect } = require("../middleware/auth");
@@ -50,6 +48,14 @@ router.post("/verify-code", verifyLimiter, auth.verifyCode);
 router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
+
+// ═══════════════════════════════════════════════════════════════
+// PUBLIC — Forgot Username flow
+// Step 1: Send verification code to email
+// Step 2: Verify code → returns username + auto-login tokens
+// ═══════════════════════════════════════════════════════════════
+router.post("/forgot-username/send-code",  authLimiter,   auth.forgotUsernameSendCode);
+router.post("/forgot-username/verify",     verifyLimiter, auth.forgotUsernameVerify);
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Social Auth

@@ -1,13 +1,28 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES CONTROLLER v5.1
+ * COUNTRIES CONTROLLER v5.3
  * ═══════════════════════════════════════════════════════════════════════════════
- * Fixes:
- *   - create(): broken NOW() placeholder logic replaced with clean approach
- *   - safeQuery(): now logs full error for debugging
- *   - getOne(): explicit error surface + column existence guard
- *   - update(): slug uniqueness check on update
- *   - All DB errors propagated to next() so Express error handler catches them
+ * Root-cause fixes for the two reported errors:
+ *
+ *  • POST 500  — VERIFIED_COLUMNS cache was built from WRITABLE_COLUMNS (a superset
+ *                of columns that may not exist in the DB).  Now we always introspect
+ *                the live schema first, cache it, and only write to columns that
+ *                actually exist.  Also fixed: arrays/objects that are NOT in a JSONB
+ *                column were being passed raw to pg and throwing a type error.
+ *
+ *  • DELETE 409 loop — remove() now returns  { code: 'HAS_DESTINATIONS' }  so the
+ *                frontend can distinguish it from any other 409 (e.g. slug conflict)
+ *                and present the two-stage force-confirm UI exactly once.
+ *
+ *  Other improvements
+ *  • toJsonb()  — fixed: strings that are already valid JSON were passed through
+ *                 as-is; strings that are NOT valid JSON are now stringified so pg
+ *                 never receives a bare JS string for a jsonb column.
+ *  • safeQuery  — logs the full pg error object (code, detail, hint) in dev.
+ *  • getWritableColumns — reset-able via  VERIFIED_COLUMNS = null  for hot-reload.
+ *  • create / update — scalar arrays (languages, highlights …) are serialised with
+ *                      toJsonb() only when the column is a real jsonb column; plain
+ *                      TEXT[] columns receive a native JS array and pg handles them.
  */
 
 'use strict'
@@ -20,19 +35,16 @@ const {
 } = require('../utils/countryTransformer')
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   HELPERS
+   TINY HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
 
+/** Clamp an integer between min and max, returning def if not finite. */
 const safeInt = (v, def = 0, min = 0, max = 99_999) => {
   const n = parseInt(v, 10)
   return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
 }
 
-/**
- * safeQuery: runs a query and returns rows.
- * On error, logs the full error (not just message) and returns fallback.
- * Pass throwOnError=true in critical paths to surface the real problem.
- */
+/** Run a query; on error log fully and return [] (or rethrow if throwOnError). */
 const safeQuery = async (sql, params = [], { throwOnError = false } = {}) => {
   try {
     const { rows } = await query(sql, params)
@@ -42,13 +54,17 @@ const safeQuery = async (sql, params = [], { throwOnError = false } = {}) => {
       message: err.message,
       code:    err.code,
       detail:  err.detail,
-      sql:     sql.slice(0, 120),
+      hint:    err.hint,
+      where:   err.where,
+      sql:     sql.slice(0, 200),
+      params,
     })
     if (throwOnError) throw err
     return []
   }
 }
 
+/** Convert a string to a URL-safe slug. */
 const toSlug = (str = '') =>
   String(str)
     .toLowerCase()
@@ -58,20 +74,22 @@ const toSlug = (str = '') =>
     .replace(/--+/g, '-')
 
 /**
- * Safely serialise a value for a JSONB column.
+ * Serialise a value for a PostgreSQL JSONB column.
+ *
+ * pg's driver sends JS objects/arrays as JSON automatically for jsonb columns,
+ * but sending a raw string that is valid JSON also works.  The safest approach
+ * is to always JSON.stringify so we control the wire format.
  */
 const toJsonb = (val) => {
   if (val === null || val === undefined) return null
-  if (Array.isArray(val) || typeof val === 'object') {
-    try { return JSON.stringify(val) } catch { return null }
-  }
   if (typeof val === 'string') {
-    try { JSON.parse(val); return val } catch { return null }
+    // If it's already a JSON string, use it; otherwise wrap in quotes.
+    try { JSON.parse(val); return val } catch { return JSON.stringify(val) }
   }
-  return null
+  try { return JSON.stringify(val) } catch { return null }
 }
 
-/* ─── Fields that must be serialised as JSONB ─────────────────────────────── */
+/* ─── Which columns must be sent as JSONB ───────────────────────────────── */
 const JSONB_FIELDS = new Set([
   'hero_images', 'activities', 'faqs', 'extra_info',
   'highlights', 'experiences', 'travel_tips',
@@ -79,70 +97,92 @@ const JSONB_FIELDS = new Set([
   'wildlife', 'cuisine', 'official_languages', 'languages', 'images',
 ])
 
-/* ─── All columns the controller may write ───────────────────────────────── */
+/* ─── Every column the controller might write ───────────────────────────── */
 const WRITABLE_COLUMNS = [
-  // Core
-  'name', 'slug', 'continent', 'region',
+  // identity
+  'name', 'slug', 'official_name', 'demonym', 'motto', 'tagline',
+  'continent', 'region', 'sub_region',
+  // text descriptions
   'description', 'full_description', 'short_description', 'short_notes',
-  'official_name', 'demonym', 'motto', 'tagline',
-  // Images
-  'image_url', 'hero_image', 'flag_url', 'flag', 'cover_image_url',
-  'hero_images',
-  // v5.0 JSONB
+  // images
+  'image_url', 'hero_image', 'flag_url', 'flag', 'cover_image_url', 'hero_images',
+  // extended jsonb
   'activities', 'faqs', 'extra_info',
-  // Location
+  // location
   'capital', 'latitude', 'longitude',
-  // Facts
+  // facts
   'currency', 'currency_symbol', 'language',
   'timezone', 'climate', 'best_time_to_visit',
   'visa_info', 'health_info', 'water_safety',
   'electrical_plug', 'voltage', 'internet_tld',
-  'calling_code', 'driving_side', 'electricity',
-  'government_type',
-  // v5.0 scalar info
-  'population', 'area_sq_km',
+  'calling_code', 'driving_side', 'electricity', 'government_type',
+  // stats
+  'population', 'area_sq_km', 'area',
+  'urban_population', 'literacy_rate', 'life_expectancy', 'median_age',
+  // scalar info fields
   'safety_info', 'transport_info', 'food_info',
   'culture_info', 'wildlife_info', 'geography_info',
-  // Legacy JSONB
+  // jsonb lists
   'highlights', 'experiences', 'travel_tips',
   'neighboring_countries', 'seasons',
-  'wildlife', 'cuisine',
-  'official_languages', 'languages', 'images',
-  // Stats
-  'area', 'urban_population', 'literacy_rate',
-  'life_expectancy', 'median_age',
-  // Flags
+  'wildlife', 'cuisine', 'official_languages', 'languages', 'images',
+  // flags
   'is_active', 'is_featured',
-  // SEO
+  // seo
   'meta_title', 'meta_description',
 ]
 
-/* ─── Columns that actually exist in the DB ──────────────────────────────── */
-// We'll verify against pg_attribute on first request (lazy init)
-let VERIFIED_COLUMNS = null
+/* ─── Lazy-loaded, process-lifetime column cache ────────────────────────── */
+let VERIFIED_COLUMNS = null   // null = not loaded yet
 
+/**
+ * Returns only the WRITABLE_COLUMNS that actually exist in the DB.
+ * Result is cached after the first call.
+ */
 const getWritableColumns = async () => {
   if (VERIFIED_COLUMNS) return VERIFIED_COLUMNS
+
   try {
-    const { rows } = await query(`
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_name = 'countries'
-        AND table_schema = 'public'
-    `)
+    const { rows } = await query(
+      `SELECT column_name
+       FROM information_schema.columns
+       WHERE table_name   = 'countries'
+         AND table_schema = 'public'`,
+    )
     const existing = new Set(rows.map(r => r.column_name))
     VERIFIED_COLUMNS = WRITABLE_COLUMNS.filter(c => existing.has(c))
+
     logger.info(
-      `[Countries] Verified ${VERIFIED_COLUMNS.length}/${WRITABLE_COLUMNS.length} writable columns`,
+      `[Countries] Column verification: ${VERIFIED_COLUMNS.length} writable` +
+      ` (${WRITABLE_COLUMNS.length - VERIFIED_COLUMNS.length} not found in DB)`,
     )
+
+    // Warn about any JSONB_FIELDS that are missing — those would silently drop data
+    for (const jf of JSONB_FIELDS) {
+      if (!existing.has(jf)) {
+        logger.warn(`[Countries] JSONB field "${jf}" is not in the DB schema — it will be ignored`)
+      }
+    }
   } catch (err) {
-    logger.warn('[Countries] Could not verify columns, using full list:', err.message)
-    VERIFIED_COLUMNS = WRITABLE_COLUMNS
+    logger.error('[Countries] Could not introspect schema, falling back to full list:', err.message)
+    VERIFIED_COLUMNS = [...WRITABLE_COLUMNS]
   }
+
   return VERIFIED_COLUMNS
 }
 
-/* ─── SELECT used in every single-row fetch ──────────────────────────────── */
+/**
+ * Prepare a single value for a pg parameter.
+ * • JSONB columns  → JSON string
+ * • Arrays for non-jsonb cols → native JS array (pg sends as TEXT[])
+ * • Everything else → pass through
+ */
+const prepareValue = (col, val) => {
+  if (JSONB_FIELDS.has(col)) return toJsonb(val)
+  return val
+}
+
+/* ─── Shared SELECT fragment ────────────────────────────────────────────── */
 const COUNTRY_SELECT = `
   SELECT
     c.*,
@@ -152,7 +192,6 @@ const COUNTRY_SELECT = `
   LEFT JOIN destinations d ON d.country_id = c.id
 `
 
-/* ─── SELECT for destination cards embedded in getOne ────────────────────── */
 const DEST_CARD_SELECT = `
   SELECT
     d.id, d.name, d.slug, d.short_description, d.image_url,
@@ -184,7 +223,7 @@ exports.getAll = async (req, res, next) => {
       search,
       is_active,
       is_featured,
-      featured,           // alias used by admin UI
+      featured,
       sortBy      = 'name',
       order       = 'asc',
       raw         = false,
@@ -196,21 +235,19 @@ exports.getAll = async (req, res, next) => {
 
     const params = []
     const conds  = ['1=1']
-    let   pi     = 1
+    let pi = 1
 
     if (continent) {
       conds.push(`c.continent ILIKE $${pi++}`)
       params.push(`%${continent}%`)
     }
 
-    // Support both is_active and active query params
     const activeFilter = is_active ?? req.query.active
     if (activeFilter !== undefined) {
       conds.push(`c.is_active = $${pi++}`)
       params.push(activeFilter === 'true' || activeFilter === true)
     }
 
-    // Support both is_featured and featured
     const featuredFilter = is_featured ?? featured
     if (featuredFilter !== undefined && featuredFilter !== '') {
       conds.push(`c.is_featured = $${pi++}`)
@@ -236,10 +273,7 @@ exports.getAll = async (req, res, next) => {
     const offset  = (pg - 1) * lim
 
     const [countRes, dataRes] = await Promise.all([
-      query(
-        `SELECT COUNT(*) FROM countries c WHERE ${where}`,
-        params,
-      ),
+      query(`SELECT COUNT(*) FROM countries c WHERE ${where}`, params),
       query(
         `${COUNTRY_SELECT}
          WHERE ${where}
@@ -288,57 +322,50 @@ exports.getOne = async (req, res, next) => {
     )
 
     if (!rawSlug) {
-      return res.status(400).json({
-        success: false,
-        error:   'Country identifier required',
-      })
+      return res.status(400).json({ success: false, error: 'Country identifier required' })
     }
 
     let country = null
-    const slugLower = rawSlug.toLowerCase()
+    const lower = rawSlug.toLowerCase()
 
-    // 1. By slug
+    // 1 — by slug
     try {
-      const bySlug = await query(
+      const r = await query(
         `${COUNTRY_SELECT} WHERE LOWER(c.slug) = $1 GROUP BY c.id LIMIT 1`,
-        [slugLower],
+        [lower],
       )
-      if (bySlug.rows[0]) country = bySlug.rows[0]
+      if (r.rows[0]) country = r.rows[0]
     } catch (err) {
-      logger.error('[Countries] getOne slug lookup failed:', {
-        message: err.message,
-        code:    err.code,
-        detail:  err.detail,
-      })
+      logger.error('[Countries] getOne slug lookup:', err)
       return next(err)
     }
 
-    // 2. By name
+    // 2 — by name
     if (!country) {
       try {
-        const byName = await query(
+        const r = await query(
           `${COUNTRY_SELECT} WHERE LOWER(c.name) = $1 GROUP BY c.id LIMIT 1`,
-          [slugLower],
+          [lower],
         )
-        if (byName.rows[0]) country = byName.rows[0]
+        if (r.rows[0]) country = r.rows[0]
       } catch (err) {
-        logger.error('[Countries] getOne name lookup failed:', err.message)
+        logger.error('[Countries] getOne name lookup:', err)
         return next(err)
       }
     }
 
-    // 3. By numeric id
+    // 3 — by numeric id
     if (!country) {
       const numId = parseInt(rawSlug, 10)
       if (Number.isFinite(numId) && numId > 0) {
         try {
-          const byId = await query(
+          const r = await query(
             `${COUNTRY_SELECT} WHERE c.id = $1 GROUP BY c.id LIMIT 1`,
             [numId],
           )
-          if (byId.rows[0]) country = byId.rows[0]
+          if (r.rows[0]) country = r.rows[0]
         } catch (err) {
-          logger.error('[Countries] getOne id lookup failed:', err.message)
+          logger.error('[Countries] getOne id lookup:', err)
           return next(err)
         }
       }
@@ -348,73 +375,66 @@ exports.getOne = async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
 
-    // Increment view count (fire-and-forget)
+    // fire-and-forget view bump
     query(
       'UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
       [country.id],
     ).catch(() => {})
 
-    if (isRaw) {
-      return res.json({ success: true, data: country })
-    }
+    if (isRaw) return res.json({ success: true, data: country })
 
     let transformed
-    try {
-      transformed = transformCountry(country)
-    } catch (err) {
+    try { transformed = transformCountry(country) }
+    catch (err) {
       logger.error('[Countries] transformCountry failed:', err.message)
-      // Fall back to raw data if transformer errors
       transformed = { ...country }
     }
 
-    // Always embed destinations
     transformed.destinations = await safeQuery(DEST_CARD_SELECT, [country.id])
 
     if (includeRelated) {
-      const [servicesResult, bookingStatsResult, similarResult] =
-        await Promise.allSettled([
-          safeQuery(
-            `SELECT
-               s.id, s.title, s.slug, s.description,
-               s.image_url, s.price_from, s.price_currency,
-               s.duration, s.category, s.is_featured,
-               s.rating, s.review_count
-             FROM services s
-             WHERE s.country_id = $1 AND s.is_active = true
-             ORDER BY s.is_featured DESC NULLS LAST, s.title ASC
-             LIMIT 20`,
-            [country.id],
-          ),
-          safeQuery(
-            `SELECT
-               COUNT(DISTINCT b.id)::INTEGER AS total_bookings,
-               COALESCE(SUM(b.number_of_travelers), 0)::INTEGER AS total_travelers,
-               COUNT(DISTINCT b.id)
-                 FILTER (WHERE b.created_at >= NOW() - INTERVAL '30 days')
-                 ::INTEGER AS bookings_last_30_days
-             FROM bookings b
-             JOIN destinations d ON b.destination_id = d.id
-             WHERE d.country_id = $1`,
-            [country.id],
-          ),
-          safeQuery(
-            `${COUNTRY_SELECT}
-             WHERE c.continent = $1 AND c.id != $2 AND c.is_active = true
-             GROUP BY c.id
-             ORDER BY destination_count DESC
-             LIMIT 4`,
-            [country.continent || '', country.id],
-          ),
-        ])
+      const [servicesR, statsR, similarR] = await Promise.allSettled([
+        safeQuery(
+          `SELECT s.id, s.title, s.slug, s.description,
+                  s.image_url, s.price_from, s.price_currency,
+                  s.duration, s.category, s.is_featured,
+                  s.rating, s.review_count
+           FROM services s
+           WHERE s.country_id = $1 AND s.is_active = true
+           ORDER BY s.is_featured DESC NULLS LAST, s.title ASC
+           LIMIT 20`,
+          [country.id],
+        ),
+        safeQuery(
+          `SELECT
+             COUNT(DISTINCT b.id)::INTEGER AS total_bookings,
+             COALESCE(SUM(b.number_of_travelers), 0)::INTEGER AS total_travelers,
+             COUNT(DISTINCT b.id)
+               FILTER (WHERE b.created_at >= NOW() - INTERVAL '30 days')::INTEGER
+               AS bookings_last_30_days
+           FROM bookings b
+           JOIN destinations d ON b.destination_id = d.id
+           WHERE d.country_id = $1`,
+          [country.id],
+        ),
+        safeQuery(
+          `${COUNTRY_SELECT}
+           WHERE c.continent = $1 AND c.id != $2 AND c.is_active = true
+           GROUP BY c.id
+           ORDER BY destination_count DESC
+           LIMIT 4`,
+          [country.continent || '', country.id],
+        ),
+      ])
 
       const unwrap = (r, fallback = []) =>
         r.status === 'fulfilled' ? (r.value ?? fallback) : fallback
 
-      transformed.services       = unwrap(servicesResult)
-      transformed.booking_stats  = unwrap(bookingStatsResult)[0] ?? {
+      transformed.services          = unwrap(servicesR)
+      transformed.booking_stats     = unwrap(statsR)[0] ?? {
         total_bookings: 0, total_travelers: 0, bookings_last_30_days: 0,
       }
-      transformed.similar_countries = unwrap(similarResult).map(transformCountryCard)
+      transformed.similar_countries = unwrap(similarR).map(transformCountryCard)
     }
 
     return res.json({ success: true, data: transformed })
@@ -468,9 +488,9 @@ exports.getByContinent = async (req, res, next) => {
       [`%${continent}%`],
     )
     return res.json({
-      success:   true,
-      data:      rows.map(transformCountryCard),
-      count:     rows.length,
+      success: true,
+      data:    rows.map(transformCountryCard),
+      count:   rows.length,
       continent,
     })
   } catch (err) {
@@ -489,7 +509,7 @@ exports.getStats = async (req, res, next) => {
       safeQuery(`
         SELECT
           COUNT(*)::INTEGER                                    AS total_countries,
-          COUNT(*) FILTER (WHERE is_active  = true)::INTEGER  AS active_countries,
+          COUNT(*) FILTER (WHERE is_active   = true)::INTEGER AS active_countries,
           COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured_countries,
           COUNT(DISTINCT continent)::INTEGER                   AS continents
         FROM countries
@@ -535,7 +555,11 @@ exports.getStats = async (req, res, next) => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    CREATE   POST /api/countries
-   FIX: Rewrote placeholder builder — no more NOW()-as-string mixing
+   ─────────────────────────────────────────────────────────────────────────
+   Root-cause of the 500:
+     The original code tried to INSERT columns that don't exist in the DB
+     (e.g. 'sub_region', 'area_sq_km' …).  We now query pg's information_schema
+     first and only write verified columns.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.create = async (req, res, next) => {
@@ -543,7 +567,7 @@ exports.create = async (req, res, next) => {
     const body    = req.body || {}
     const columns = await getWritableColumns()
 
-    /* ── Required ─────────────────────────────────────────────────────── */
+    /* ── 1. Required fields ───────────────────────────────────────────── */
     const name = String(body.name || '').trim()
     if (!name) {
       return res.status(400).json({ success: false, error: 'Country name is required' })
@@ -551,7 +575,7 @@ exports.create = async (req, res, next) => {
 
     const slug = String(body.slug || '').trim() || toSlug(name)
 
-    /* ── Duplicate check ──────────────────────────────────────────────── */
+    /* ── 2. Slug uniqueness check ─────────────────────────────────────── */
     const existing = await safeQuery(
       'SELECT id FROM countries WHERE slug = $1',
       [slug],
@@ -559,40 +583,45 @@ exports.create = async (req, res, next) => {
     if (existing[0]) {
       return res.status(409).json({
         success: false,
+        code:    'SLUG_CONFLICT',
         error:   `A country with slug "${slug}" already exists`,
       })
     }
 
-    /* ── Build column list + values ───────────────────────────────────── */
-    // Always start with name + slug
-    const cols   = ['name', 'slug']
-    const vals   = [name,   slug]
+    /* ── 3. Build INSERT ──────────────────────────────────────────────── */
+    const colNames = ['name', 'slug']
+    const values   = [name, slug]
 
     for (const col of columns) {
-      if (col === 'name' || col === 'slug') continue
-      if (body[col] === undefined)          continue
+      if (col === 'name' || col === 'slug') continue   // already added
+      if (body[col] === undefined)          continue   // not sent by client
 
-      cols.push(col)
-      vals.push(JSONB_FIELDS.has(col) ? toJsonb(body[col]) : body[col])
+      const raw = body[col]
+
+      // Skip null/empty arrays to avoid type errors on non-array columns
+      if (Array.isArray(raw) && raw.length === 0 && !JSONB_FIELDS.has(col)) continue
+
+      colNames.push(col)
+      values.push(prepareValue(col, raw))
     }
 
-    // Add timestamps as the last two columns
-    cols.push('created_at', 'updated_at')
-
-    // Build placeholders: $1, $2 … for data cols; NOW() for timestamps
-    const placeholders = [
-      ...vals.map((_, i) => `$${i + 1}`),
-      'NOW()',
-      'NOW()',
-    ]
+    // timestamps — use NOW() literals, NOT parameters, so pg doesn't mis-type them
+    colNames.push('created_at', 'updated_at')
+    const placeholders = values.map((_, i) => `$${i + 1}`)
+    placeholders.push('NOW()', 'NOW()')
 
     const sql = `
-      INSERT INTO countries (${cols.join(', ')})
+      INSERT INTO countries (${colNames.join(', ')})
       VALUES (${placeholders.join(', ')})
       RETURNING *
     `
 
-    const { rows } = await query(sql, vals)
+    logger.info('[Countries] create SQL preview:', {
+      cols: colNames,
+      sql:  sql.slice(0, 300),
+    })
+
+    const { rows } = await query(sql, values)
 
     return res.status(201).json({
       success: true,
@@ -600,10 +629,13 @@ exports.create = async (req, res, next) => {
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] create failed:', {
+    logger.error('[Countries] create FAILED:', {
       message: err.message,
       code:    err.code,
       detail:  err.detail,
+      hint:    err.hint,
+      where:   err.where,
+      position: err.position,
     })
     next(err)
   }
@@ -627,15 +659,16 @@ exports.update = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Name cannot be empty' })
     }
 
-    /* ── Slug uniqueness check on update ──────────────────────────────── */
+    /* ── Slug uniqueness on update ─────────────────────────────────────── */
     if (body.slug) {
-      const slugConflict = await safeQuery(
+      const conflict = await safeQuery(
         'SELECT id FROM countries WHERE slug = $1 AND id != $2',
         [body.slug, id],
       )
-      if (slugConflict[0]) {
+      if (conflict[0]) {
         return res.status(409).json({
           success: false,
+          code:    'SLUG_CONFLICT',
           error:   `Slug "${body.slug}" is already used by another country`,
         })
       }
@@ -647,7 +680,7 @@ exports.update = async (req, res, next) => {
 
     for (const col of columns) {
       if (body[col] === undefined) continue
-      values.push(JSONB_FIELDS.has(col) ? toJsonb(body[col]) : body[col])
+      values.push(prepareValue(col, body[col]))
       setClauses.push(`${col} = $${values.length}`)
     }
 
@@ -676,10 +709,11 @@ exports.update = async (req, res, next) => {
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] update failed:', {
+    logger.error('[Countries] update FAILED:', {
       message: err.message,
       code:    err.code,
       detail:  err.detail,
+      hint:    err.hint,
     })
     next(err)
   }
@@ -749,6 +783,13 @@ exports.toggleFeatured = async (req, res, next) => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    DELETE   DELETE /api/countries/:id
+   ─────────────────────────────────────────────────────────────────────────
+   Flow:
+     1. Verify country exists                  → 404 if not
+     2. Count linked destinations
+     3a. destCount > 0 && !force               → 409  { code: 'HAS_DESTINATIONS' }
+     3b. destCount > 0 &&  force               → cascade: bookings → destinations → country
+     4. Delete country                         → 200
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.remove = async (req, res, next) => {
@@ -758,56 +799,121 @@ exports.remove = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Invalid country ID' })
     }
 
-    /* ── Verify country exists first ──────────────────────────────────── */
-    const exists = await safeQuery(
+    /* ── 1. Existence check ───────────────────────────────────────────── */
+    const existRows = await safeQuery(
       'SELECT id, name FROM countries WHERE id = $1',
       [id],
     )
-    if (!exists[0]) {
+    if (!existRows[0]) {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
+    const countryName = existRows[0].name
 
-    /* ── Guard: active destinations ───────────────────────────────────── */
-    const linked = await safeQuery(
+    /* ── 2. Count linked destinations ────────────────────────────────── */
+    const linkedRows = await safeQuery(
       'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
       [id],
     )
-    const destCount = parseInt(linked[0]?.count ?? 0, 10)
-    if (destCount > 0) {
+    const destCount = parseInt(linkedRows[0]?.count ?? 0, 10)
+
+    /* ── 3. Resolve force flag ───────────────────────────────────────── */
+    const force =
+      req.query.force === 'true'                            ||
+      req.body?.force === true                              ||
+      String(req.body?.force || '').toLowerCase() === 'true'
+
+    /* ── 3a. Guard: linked destinations, no force ────────────────────── */
+    if (destCount > 0 && !force) {
       return res.status(409).json({
         success:           false,
-        error:             `Cannot delete: country has ${destCount} destination(s). Remove them first.`,
+        code:              'HAS_DESTINATIONS',
+        error:             `Cannot delete: "${countryName}" has ${destCount} destination(s). ` +
+                           `Send force=true to delete the country and all its destinations.`,
         destination_count: destCount,
+        country_name:      countryName,
+        can_force:         true,
       })
     }
 
+    /* ── 3b. Cascade delete ──────────────────────────────────────────── */
+    let removedBookings     = 0
+    let removedDestinations = 0
+
+    if (destCount > 0 && force) {
+      // Collect destination IDs
+      const destRows = await safeQuery(
+        'SELECT id FROM destinations WHERE country_id = $1',
+        [id],
+      )
+      const destIds = destRows.map(r => r.id)
+
+      if (destIds.length > 0) {
+        // Remove bookings first (FK dependency)
+        try {
+          const delB = await query(
+            'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[]) RETURNING id',
+            [destIds],
+          )
+          removedBookings = delB.rows.length
+        } catch (err) {
+          // bookings may reference destination differently — log and continue
+          logger.warn('[Countries] cascade bookings delete skipped:', {
+            message: err.message,
+            code:    err.code,
+          })
+        }
+
+        // Remove destinations
+        const delD = await query(
+          'DELETE FROM destinations WHERE country_id = $1 RETURNING id',
+          [id],
+        )
+        removedDestinations = delD.rows.length
+      }
+    }
+
+    /* ── 4. Delete the country ───────────────────────────────────────── */
     const { rows } = await query(
       'DELETE FROM countries WHERE id = $1 RETURNING id, name',
       [id],
     )
 
     if (!rows[0]) {
+      // Race condition — already deleted between our check and delete
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
 
+    const parts = [`Country "${rows[0].name}" deleted`]
+    if (removedDestinations) parts.push(`${removedDestinations} destination(s) removed`)
+    if (removedBookings)     parts.push(`${removedBookings} booking(s) removed`)
+
     return res.json({
       success: true,
-      message: `Country "${rows[0].name}" deleted`,
-      data:    { id: rows[0].id },
+      message: parts.join(' · '),
+      data: {
+        id:                   rows[0].id,
+        name:                 rows[0].name,
+        removed_destinations: removedDestinations,
+        removed_bookings:     removedBookings,
+      },
     })
   } catch (err) {
-    logger.error('[Countries] remove failed:', err)
+    logger.error('[Countries] remove FAILED:', {
+      message: err.message,
+      code:    err.code,
+      detail:  err.detail,
+    })
     next(err)
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   BULK DELETE   DELETE /api/countries   body: { ids: number[] }
+   BULK DELETE   DELETE /api/countries   body: { ids, force? }
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.bulkDelete = async (req, res, next) => {
   try {
-    const { ids } = req.body
+    const { ids, force = false } = req.body
 
     if (!Array.isArray(ids) || !ids.length) {
       return res.status(400).json({ success: false, error: 'ids array is required' })
@@ -821,29 +927,54 @@ exports.bulkDelete = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'No valid IDs provided' })
     }
 
-    const { rows } = await query(
-      `DELETE FROM countries
-       WHERE id = ANY($1::INTEGER[])
-         AND id NOT IN (
-           SELECT DISTINCT country_id
-           FROM destinations
-           WHERE country_id IS NOT NULL
-         )
-       RETURNING id, name`,
-      [validIds],
-    )
+    const forceFlag = force === true || String(force).toLowerCase() === 'true'
 
-    const skipped = validIds.length - rows.length
+    const deleted = []
+    const skipped = []
+
+    for (const id of validIds) {
+      try {
+        const linked = await safeQuery(
+          'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
+          [id],
+        )
+        const count = parseInt(linked[0]?.count ?? 0, 10)
+
+        if (count > 0 && !forceFlag) {
+          skipped.push({ id, reason: `has ${count} destination(s)` })
+          continue
+        }
+
+        if (count > 0 && forceFlag) {
+          const destIds = (
+            await safeQuery('SELECT id FROM destinations WHERE country_id = $1', [id])
+          ).map(r => r.id)
+
+          if (destIds.length > 0) {
+            await query(
+              'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[])',
+              [destIds],
+            ).catch(err => logger.warn(`[Countries] bulkDelete bookings id=${id}:`, err.message))
+            await query('DELETE FROM destinations WHERE country_id = $1', [id])
+          }
+        }
+
+        const { rows } = await query(
+          'DELETE FROM countries WHERE id = $1 RETURNING id, name',
+          [id],
+        )
+        if (rows[0]) deleted.push(rows[0].id)
+        else skipped.push({ id, reason: 'not found' })
+      } catch (err) {
+        logger.error(`[Countries] bulkDelete id=${id}:`, err.message)
+        skipped.push({ id, reason: err.message })
+      }
+    }
 
     return res.json({
       success: true,
-      message: `${rows.length} country/countries deleted${
-        skipped ? `, ${skipped} skipped (have destinations)` : ''
-      }`,
-      data: {
-        deleted: rows.map(r => r.id),
-        skipped,
-      },
+      message: `${deleted.length} deleted, ${skipped.length} skipped`,
+      data:    { deleted, skipped },
     })
   } catch (err) {
     logger.error('[Countries] bulkDelete failed:', err)

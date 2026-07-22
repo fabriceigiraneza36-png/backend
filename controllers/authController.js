@@ -539,6 +539,154 @@ exports.checkEmail = async (req, res) => {
 };
 
 /* ════════════════════════════════════════════════════════════════
+   FORGOT USERNAME — Step 1: Send code to email
+════════════════════════════════════════════════════════════════ */
+exports.forgotUsernameSendCode = async (req, res) => {
+  try {
+    const nEmail = ((req.body.email || "").trim().toLowerCase());
+
+    if (!nEmail)
+      return res.status(400).json({ success: false, message: "Email is required." });
+    if (validateEmail && !validateEmail(nEmail))
+      return res.status(400).json({ success: false, message: "Invalid email address." });
+
+    const result = await query(
+      "SELECT id, email, full_name, last_code_sent_at, is_active FROM users WHERE email = $1",
+      [nEmail],
+    );
+
+    /* Anti-enumeration: always return success even if user doesn't exist */
+    if (!result.rows.length) {
+      return res.json({
+        success: true,
+        message: "If an account with that email exists, a verification code has been sent.",
+        data: { email: nEmail },
+      });
+    }
+
+    const user = result.rows[0];
+
+    if (user.is_active === false)
+      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+
+    if (isRateLimited(user))
+      return res.status(429).json({
+        success: false,
+        message: `Please wait ${getRemainingCooldown(user)} second(s) before requesting again.`,
+      });
+
+    const otp = generateOTP();
+    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+
+    await sendOtpEmail({
+      to:            user.email,
+      recipientName: user.full_name || "",
+      otp,
+      purpose:       "forgot_username",
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
+
+    logger.info("[Forgot Username] Code sent:", { email: nEmail });
+
+    return res.json({
+      success: true,
+      message: "If an account with that email exists, a verification code has been sent.",
+      data: { email: nEmail },
+    });
+  } catch (err) {
+    handleError(res, err, "Forgot username send code failed");
+  }
+};
+
+/* ════════════════════════════════════════════════════════════════
+   FORGOT USERNAME — Step 2: Verify code & return username + auto-login
+════════════════════════════════════════════════════════════════ */
+exports.forgotUsernameVerify = async (req, res) => {
+  try {
+    const code   = String(req.body.code || "").replace(/\D/g, "").slice(0, 6);
+    const nEmail = ((req.body.email || "").trim().toLowerCase());
+
+    if (!nEmail || !code)
+      return res.status(400).json({ success: false, message: "Email and code are required." });
+    if (code.length !== 6)
+      return res.status(400).json({ success: false, message: "Enter a valid 6-digit code." });
+
+    const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
+    if (!result.rows.length)
+      return res.status(404).json({ success: false, message: "Account not found." });
+
+    const user = result.rows[0];
+
+    if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
+      await query(
+        "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
+        [user.id],
+      );
+      return res.status(429).json({ success: false, message: "Too many attempts. Request a new code." });
+    }
+
+    const codeOk    = user.verification_code === code;
+    const notExpired = user.code_expiry && new Date(user.code_expiry) > new Date();
+
+    if (!codeOk || !notExpired) {
+      await query(
+        "UPDATE users SET code_attempts = COALESCE(code_attempts, 0) + 1 WHERE id = $1",
+        [user.id],
+      );
+      const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
+
+      if (codeOk && !notExpired)
+        return res.status(401).json({ success: false, message: "Code expired. Request a new one." });
+
+      return res.status(401).json({
+        success: false,
+        message: remaining > 0
+          ? `Incorrect code — ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
+          : "Too many attempts. Request a new code.",
+      });
+    }
+
+    /* Code is valid — clear it, update login, return user data + tokens */
+    const updated = await query(
+      `UPDATE users SET
+         is_verified       = true,
+         verification_code = NULL,
+         code_expiry       = NULL,
+         code_attempts     = 0,
+         last_login        = NOW(),
+         login_counter     = COALESCE(login_counter, 0) + 1
+       WHERE id = $1 RETURNING *`,
+      [user.id],
+    );
+
+    const freshUser = updated.rows[0];
+
+    logger.info("[Forgot Username] Verified & auto-login:", {
+      email:    freshUser.email,
+      fullName: freshUser.full_name,
+    });
+
+    return res.json({
+      success: true,
+      message: "Username recovered successfully! You are now signed in.",
+      data: {
+        /* The recovered username / full name */
+        fullName:     freshUser.full_name || "",
+        username:     freshUser.username  || freshUser.full_name || "",
+        email:        freshUser.email,
+        /* Full auth tokens for auto-login */
+        token:        generateToken(freshUser, "user"),
+        refreshToken: generateRefreshToken(freshUser, "user"),
+        user:         sanitizeUser(freshUser),
+        loginCounter: parseInt(freshUser.login_counter, 10),
+      },
+    });
+  } catch (err) {
+    handleError(res, err, "Forgot username verification failed");
+  }
+};
+
+/* ════════════════════════════════════════════════════════════════
    GOOGLE AUTH
 ════════════════════════════════════════════════════════════════ */
 exports.googleAuth = async (req, res) => {
