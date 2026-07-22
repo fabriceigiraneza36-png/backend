@@ -1,638 +1,476 @@
-// routes/message.js
-'use strict'
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGES ROUTES v2.0 — Admin Conversations & Messaging
+// ═══════════════════════════════════════════════════════════════════════════════
+// Uses your exact schema — verified column names, no missing references.
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const express = require('express')
-const { query } = require('../config/db')
-const logger    = require('../utils/logger')
-const msg       = require('../utils/messaging')
+const router = require("express").Router();
+const { query } = require("../config/db");
+const { adminProtect, protect } = require("../middleware/auth");
 
-/* ── Auth middleware ────────────────────────────────────────────────────────── */
-let protect
-try {
-  const candidates = [
-    '../middleware/authMiddleware',
-    '../middleware/auth',
-    '../middleware/userAuth',
-  ]
-  for (const p of candidates) {
-    try {
-      const m = require(p)
-      protect = protect || m.protect || m.authenticate || m.verifyToken || m.auth
-      if (protect) break
-    } catch { /* try next */ }
-  }
-} catch { /* fall through */ }
-
-if (!protect) {
-  const jwt = require('jsonwebtoken')
-  protect = (req, res, next) => {
-    const raw =
-      (req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() ||
-      req.cookies?.token
-    if (!raw) return res.status(401).json({ success: false, message: 'Unauthorized' })
-    try { req.user = jwt.verify(raw, process.env.JWT_SECRET); next() }
-    catch { return res.status(401).json({ success: false, message: 'Invalid token' }) }
-  }
-}
-
-const isAdmin = (req) =>
-  ['admin', 'manager'].includes(req.user?.role || req.user?.type || '')
-
-const restrictToAdmin = (req, res, next) =>
-  isAdmin(req)
-    ? next()
-    : res.status(403).json({ success: false, message: 'Admin only' })
-
-/** Extract actor identity from JWT user */
-const actor = (req) => ({
-  userId:  req.user?.id          || null,
-  name:    req.user?.full_name   || req.user?.name  || req.user?.email || 'You',
-  email:   req.user?.email       || null,
-  avatar:  req.user?.avatar_url  || req.user?.avatar || null,
-})
-
-const router = express.Router()
-
-/* ══════════════════════════════════════════════════════════════════════════
-   GET /conversations
-   Admin → all conversations (filterable by status)
-   User  → only their own
-══════════════════════════════════════════════════════════════════════════ */
-router.get('/conversations', protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET /api/messages/conversations
+   List all conversations (admin view)
+═══════════════════════════════════════════════════════════════════════════ */
+router.get("/conversations", adminProtect, async (req, res) => {
   try {
-    const admin     = isAdmin(req)
-    const userId    = req.user?.id
-    const userEmail = req.user?.email || ''
-    const status    = req.query.status || null
-    const search    = req.query.search || null
-    const limit     = Math.min(parseInt(req.query.limit, 10)  || 50,  200)
-    const page      = Math.max(parseInt(req.query.page,  10)  || 1,   1)
-    const offset    = (page - 1) * limit
+    const {
+      status = "open",     // "open" | "closed" | "pending" | "all"
+      limit  = 100,
+      page   = 1,
+      search,
+    } = req.query;
 
-    const params = []
-    const conds  = ['c.deleted_at IS NULL']
-    let   pi     = 1
+    const offset     = (parseInt(page) - 1) * parseInt(limit);
+    const conditions = ["conv.deleted_at IS NULL"];
+    const params     = [];
+    let   p          = 1;
 
-    if (admin) {
-      if (status && status !== 'all') {
-        conds.push(`c.status = $${pi++}`)
-        params.push(status)
-      }
-      if (search) {
-        conds.push(
-          `(c.subject ILIKE $${pi} OR c.guest_name ILIKE $${pi}` +
-          ` OR c.guest_email ILIKE $${pi} OR c.booking_number ILIKE $${pi})`,
-        )
-        params.push(`%${search}%`)
-        pi++
-      }
-    } else {
-      // Users only see their own
-      conds.push(`(c.user_id = $${pi} OR c.guest_email = $${pi + 1})`)
-      params.push(userId, userEmail)
-      pi += 2
+    if (status && status !== "all") {
+      conditions.push(`conv.status = $${p}`);
+      params.push(status);
+      p++;
     }
 
-    const where = conds.join(' AND ')
+    if (search) {
+      conditions.push(`(
+        conv.guest_name    ILIKE $${p} OR
+        conv.guest_email   ILIKE $${p} OR
+        conv.subject       ILIKE $${p} OR
+        conv.first_message ILIKE $${p} OR
+        conv.last_message  ILIKE $${p}
+      )`);
+      params.push(`%${search}%`);
+      p++;
+    }
+
+    const where = conditions.join(" AND ");
 
     const [dataRes, countRes] = await Promise.all([
       query(
-        `SELECT c.*,
-                u.full_name  AS user_full_name,
-                u.email      AS user_email,
-                u.avatar_url AS user_avatar
-           FROM conversations c
-           LEFT JOIN users u ON u.id = c.user_id
-          WHERE ${where}
-          ORDER BY c.last_message_at DESC NULLS LAST, c.updated_at DESC
-          LIMIT $${pi} OFFSET $${pi + 1}`,
-        [...params, limit, offset],
+        `SELECT
+           conv.id,
+           conv.session_id,
+           conv.user_id,
+           conv.guest_name,
+           conv.guest_email,
+           conv.channel,
+           conv.subject,
+           conv.status,
+           conv.priority,
+           conv.assigned_admin,
+           conv.first_message,
+           conv.last_message,
+           conv.last_message_at,
+           conv.unread_user,
+           conv.unread_admin,
+           conv.tags,
+           conv.metadata,
+           conv.source,
+           conv.closed_at,
+           conv.created_at,
+           conv.updated_at,
+           /* Extract useful bits from metadata */
+           conv.metadata->>'bookingNumber' AS "bookingNumber"
+         FROM conversations conv
+         WHERE ${where}
+         ORDER BY
+           (conv.unread_admin > 0) DESC,
+           conv.last_message_at   DESC NULLS LAST,
+           conv.created_at        DESC
+         LIMIT  $${p}
+         OFFSET $${p + 1}`,
+        [...params, parseInt(limit), offset]
       ),
       query(
-        `SELECT COUNT(*)::INT AS total FROM conversations c WHERE ${where}`,
-        params,
+        `SELECT COUNT(*) AS total
+         FROM conversations conv
+         WHERE ${where}`,
+        params
       ),
-    ])
+    ]);
 
-    const total = countRes.rows[0]?.total ?? 0
+    const total = parseInt(countRes.rows[0]?.total || 0);
 
-    return res.json({
-      success:     true,
-      data:        dataRes.rows.map(msg.serializeConversation),
-      total,
-      page,
-      limit,
-      total_pages: Math.ceil(total / limit),
-    })
-  } catch (err) {
-    logger.error('[Messages] GET /conversations:', {
-      message: err.message,
-      code:    err.code,
-      detail:  err.detail,
-      stack:   err.stack?.slice(0, 400),
-    })
-    return res.status(500).json({ success: false, message: err.message || 'Server error' })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   GET /conversations/unread-count
-══════════════════════════════════════════════════════════════════════════ */
-router.get('/conversations/unread-count', protect, async (req, res) => {
-  try {
-    const admin     = isAdmin(req)
-    const userId    = req.user?.id
-    const userEmail = req.user?.email || ''
-
-    if (admin) {
-      const { rows } = await query(
-        `SELECT COALESCE(SUM(unread_admin),0)::INT AS n
-           FROM conversations
-          WHERE deleted_at IS NULL AND status != 'closed'`,
-      )
-      return res.json({ success: true, admin: rows[0]?.n ?? 0, user: 0 })
-    }
-
-    const { rows } = await query(
-      `SELECT COALESCE(SUM(unread_user),0)::INT AS n
-         FROM conversations
-        WHERE deleted_at IS NULL
-          AND (user_id = $1 OR guest_email = $2)`,
-      [userId, userEmail],
-    )
-    return res.json({ success: true, admin: 0, user: rows[0]?.n ?? 0 })
-  } catch (err) {
-    logger.error('[Messages] GET unread-count:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   GET /users-list   (admin only — list of users to start a chat with)
-══════════════════════════════════════════════════════════════════════════ */
-router.get('/users-list', protect, restrictToAdmin, async (req, res) => {
-  try {
-    const search = req.query.search || ''
-    const limit  = Math.min(parseInt(req.query.limit, 10) || 30, 100)
-
-    const params = []
-    const conds  = ['is_active = true']
-    let pi = 1
-
-    if (search) {
-      conds.push(`(full_name ILIKE $${pi} OR email ILIKE $${pi})`)
-      params.push(`%${search}%`)
-      pi++
-    }
-
-    const { rows } = await query(
-      `SELECT id, full_name, email, avatar_url, phone, role, created_at
-         FROM users
-        WHERE ${conds.join(' AND ')}
-        ORDER BY full_name ASC
-        LIMIT $${pi}`,
-      [...params, limit],
-    )
+    /* Reshape rows for frontend */
+    const conversations = dataRes.rows.map((row) => ({
+      id:              row.id,
+      sessionId:       row.session_id,
+      userId:          row.user_id,
+      guestName:       row.guest_name,
+      guestEmail:      row.guest_email,
+      channel:         row.channel,
+      subject:         row.subject,
+      status:          row.status,
+      priority:        row.priority,
+      assignedAdmin:   row.assigned_admin,
+      firstMessage:    row.first_message,
+      lastMessage:     row.last_message,
+      lastMessageAt:   row.last_message_at,
+      unreadUser:      row.unread_user      || 0,
+      unreadAdmin:     row.unread_admin     || 0,
+      tags:            row.tags             || [],
+      metadata:        row.metadata         || {},
+      source:          row.source,
+      bookingNumber:   row.bookingNumber    || null,
+      closedAt:        row.closed_at,
+      createdAt:       row.created_at,
+      updatedAt:       row.updated_at,
+    }));
 
     return res.json({
       success: true,
-      data:    rows.map(r => ({
-        id:        r.id,
-        fullName:  r.full_name,
-        email:     r.email,
-        avatar:    r.avatar_url,
-        phone:     r.phone,
-        role:      r.role,
-        createdAt: r.created_at,
-      })),
-      total: rows.length,
-    })
-  } catch (err) {
-    logger.error('[Messages] GET users-list:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   GET /conversations/by-booking/:bookingNumber
-══════════════════════════════════════════════════════════════════════════ */
-router.get('/conversations/by-booking/:bookingNumber', protect, async (req, res) => {
-  try {
-    const bn = String(req.params.bookingNumber || '').trim().toUpperCase()
-    if (!bn) return res.status(400).json({ success: false, message: 'bookingNumber required' })
-
-    const admin = isAdmin(req)
-    const { rows } = await query(
-      `SELECT c.*,
-              u.full_name  AS user_full_name,
-              u.email      AS user_email,
-              u.avatar_url AS user_avatar
-         FROM conversations c
-         LEFT JOIN users u ON u.id = c.user_id
-        WHERE c.booking_number = $1 AND c.deleted_at IS NULL
-        LIMIT 1`,
-      [bn],
-    )
-
-    if (!rows[0]) return res.json({ success: true, data: null })
-
-    if (!admin) {
-      const own = rows[0].user_id === req.user?.id || rows[0].guest_email === req.user?.email
-      if (!own) return res.status(403).json({ success: false, message: 'Forbidden' })
-    }
-
-    const messages = await msg.getMessages(rows[0].id)
-    const conv = msg.serializeConversation(rows[0])
-    return res.json({
-      success: true,
-      data:    { ...conv, messages: messages.map(msg.serializeMessage) },
-    })
-  } catch (err) {
-    logger.error('[Messages] GET by-booking:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   GET /conversations/:id
-══════════════════════════════════════════════════════════════════════════ */
-router.get('/conversations/:id', protect, async (req, res) => {
-  try {
-    const id    = parseInt(req.params.id, 10)
-    const admin = isAdmin(req)
-
-    if (isNaN(id)) return res.status(400).json({ success: false, message: 'Invalid id' })
-
-    const conv = await msg.findConversationById(id)
-    if (!conv) return res.status(404).json({ success: false, message: 'Conversation not found' })
-
-    if (!admin) {
-      const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email
-      if (!own) return res.status(403).json({ success: false, message: 'Forbidden' })
-    }
-
-    const messages = await msg.getMessages(id)
-    const result   = msg.serializeConversation(conv)
-    result.messages = messages.map(msg.serializeMessage)
-
-    return res.json({ success: true, data: result })
-  } catch (err) {
-    logger.error('[Messages] GET /conversations/:id:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   POST /conversations
-   Create a new conversation.
-
-   Admin-initiated: body must include { targetUserId } or { guestEmail, guestName }
-   User-initiated:  creates own conversation
-
-   body: {
-     targetUserId?,   // admin picks a specific user
-     guestName?,
-     guestEmail?,
-     subject?,
-     body?,           // optional first message
-     bookingNumber?,
-     priority?,
-     kind?,
-   }
-══════════════════════════════════════════════════════════════════════════ */
-router.post('/conversations', protect, async (req, res) => {
-  try {
-    const admin = isAdmin(req)
-    const a     = actor(req)
-
-    /* ── Resolve target user when admin initiates ── */
-    let targetUserId   = null
-    let targetUserName = null
-    let targetEmail    = null
-
-    if (admin && req.body.targetUserId) {
-      const uid = parseInt(req.body.targetUserId, 10)
-      if (!isNaN(uid)) {
-        const { rows } = await query(
-          'SELECT id, full_name, email FROM users WHERE id=$1 LIMIT 1',
-          [uid],
-        )
-        if (rows[0]) {
-          targetUserId   = rows[0].id
-          targetUserName = rows[0].full_name
-          targetEmail    = rows[0].email
-        }
-      }
-    }
-
-    /* ── Resolve booking ── */
-    let bookingId = null, bookingNumber = null
-    if (req.body.bookingNumber) {
-      const bn = String(req.body.bookingNumber).trim().toUpperCase()
-      const { rows } = await query(
-        `SELECT id, booking_number, full_name, email, user_id
-           FROM bookings WHERE booking_number=$1 LIMIT 1`,
-        [bn],
-      )
-      if (rows[0]) {
-        bookingId     = rows[0].id
-        bookingNumber = rows[0].booking_number
-        if (!targetUserId && rows[0].user_id) targetUserId = rows[0].user_id
-        if (!targetUserName && rows[0].full_name) targetUserName = rows[0].full_name
-        if (!targetEmail && rows[0].email) targetEmail = rows[0].email
-      }
-    }
-
-    /* ── Determine conversation owner ── */
-    const userId     = admin ? (targetUserId || null) : (a.userId || null)
-    const guestName  = req.body.guestName  || targetUserName || (admin ? null : a.name)
-    const guestEmail = req.body.guestEmail || targetEmail    || (admin ? null : a.email)
-
-    const subject = req.body.subject ||
-      (bookingNumber ? `Booking ${bookingNumber}` : 'New conversation')
-
-    /* ── Unique session key ── */
-    const sessionParts = [
-      admin ? `admin-${a.userId}` : `user-${userId}`,
-      userId || guestEmail || Date.now(),
-    ]
-    const sessionId = req.body.sessionId || sessionParts.join('-')
-
-    const conv = await msg.getOrCreateConversation({
-      sessionId,
-      userId,
-      guestName,
-      guestEmail,
-      subject,
-      status:        'open',
-      priority:      req.body.priority || 'normal',
-      source:        admin ? 'admin-panel' : 'frontend-auth',
-      bookingId,
-      bookingNumber,
-      adminId:       admin ? a.userId : null,
-      metadata:      { kind: req.body.kind || (bookingNumber ? 'booking_request' : 'general') },
-    })
-
-    /* ── Optional first message ── */
-    let message = null
-    const text  = String(req.body.body || '').trim()
-    if (text) {
-      message = await msg.saveMessage({
-        conversationId: conv.id,
-        senderType:     admin ? 'admin' : 'user',
-        senderId:       a.userId,
-        senderName:     a.name,
-        senderEmail:    a.email,
-        senderAvatar:   a.avatar,
-        body:           text,
-        metadata:       { kind: req.body.kind || 'general' },
-      })
-
-      // Broadcast the first message
-      if (message) {
-        msg.broadcastMessage({
-          conversationId: conv.id,
-          sessionId:      conv.session_id,
-          userId:         conv.user_id,
-          payload:        { ...msg.serializeMessage(message), conversationId: conv.id },
-          adminPayload: {
-            conversationId: conv.id,
-            message:        msg.serializeMessage(message),
-            senderName:     a.name,
-            senderEmail:    a.email,
-          },
-        })
-      }
-    }
-
-    const result = msg.serializeConversation(conv)
-    result.messages = message ? [msg.serializeMessage(message)] : []
-
-    return res.status(201).json({ success: true, data: result })
-  } catch (err) {
-    logger.error('[Messages] POST /conversations:', {
-      message: err.message,
-      code:    err.code,
-      detail:  err.detail,
-      stack:   err.stack?.slice(0, 400),
-    })
-    return res.status(500).json({ success: false, message: err.message || 'Server error' })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   POST /conversations/:id/messages
-══════════════════════════════════════════════════════════════════════════ */
-router.post('/conversations/:id/messages', protect, async (req, res) => {
-  try {
-    const id    = parseInt(req.params.id, 10)
-    const admin = isAdmin(req)
-    const a     = actor(req)
-
-    const text = String(req.body.body || '').trim()
-    if (!text) return res.status(400).json({ success: false, message: 'Message body required' })
-
-    const conv = await msg.findConversationById(id)
-    if (!conv) return res.status(404).json({ success: false, message: 'Conversation not found' })
-
-    if (!admin) {
-      const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email
-      if (!own) return res.status(403).json({ success: false, message: 'Forbidden' })
-      if (conv.status === 'closed') {
-        await query(
-          `UPDATE conversations SET status='open', updated_at=NOW() WHERE id=$1`,
-          [id],
-        ).catch(() => {})
-      }
-    } else if (!conv.assigned_admin) {
-      await query(
-        `UPDATE conversations SET assigned_admin=$1 WHERE id=$2`,
-        [a.userId, id],
-      ).catch(() => {})
-    }
-
-    const message    = await msg.saveMessage({
-      conversationId: conv.id,
-      senderType:     admin ? 'admin' : 'user',
-      senderId:       a.userId,
-      senderName:     a.name,
-      senderEmail:    a.email,
-      senderAvatar:   a.avatar,
-      body:           text,
-      metadata:       req.body.metadata || {},
-      replyToId:      req.body.replyToId ? parseInt(req.body.replyToId, 10) : null,
-    })
-
-    const serialized  = msg.serializeMessage(message)
-    const unreadAdmin = await msg.countUnreadAdmin(conv.id)
-
-    msg.broadcastMessage({
-      conversationId: conv.id,
-      sessionId:      conv.session_id,
-      userId:         conv.user_id,
-      payload:        { ...serialized, conversationId: conv.id },
-      adminPayload: {
-        conversationId: conv.id,
-        sessionId:      conv.session_id,
-        message:        serialized,
-        senderName:     a.name,
-        senderEmail:    a.email,
-        unreadCount:    unreadAdmin,
+      data:    conversations,
+      pagination: {
+        page:    parseInt(page),
+        limit:   parseInt(limit),
+        total,
+        pages:   Math.ceil(total / parseInt(limit)),
+        hasMore: parseInt(page) * parseInt(limit) < total,
       },
-    })
-
-    // In-app notification for admin when user sends
-    if (!admin) {
-      try {
-        const notifCtrl = require('../controllers/notificationsController')
-        notifCtrl.createNotificationInternal?.({
-          targetScope: 'admin',
-          type:        'message',
-          category:    'message',
-          title:       '💬 New message from a traveller',
-          message:     `${a.name || 'A traveller'}: ${text.slice(0, 120)}`,
-          actionUrl:   `/messages?conversation=${conv.id}`,
-          actionLabel: 'Open Chat',
-          priority:    'normal',
-          metadata:    { conversationId: conv.id, bookingNumber: conv.booking_number },
-        }).catch(() => {})
-      } catch { /* optional */ }
-    }
-
-    return res.status(201).json({ success: true, data: serialized })
+    });
   } catch (err) {
-    logger.error('[Messages] POST message:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
+    console.error("[messages/conversations] Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch conversations",
+      error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
   }
-})
+});
 
-/* ══════════════════════════════════════════════════════════════════════════
-   PATCH /conversations/:id/read
-══════════════════════════════════════════════════════════════════════════ */
-router.patch('/conversations/:id/read', protect, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET /api/messages/conversations/:id
+   Get single conversation with all messages
+═══════════════════════════════════════════════════════════════════════════ */
+router.get("/conversations/:id", adminProtect, async (req, res) => {
   try {
-    const id    = parseInt(req.params.id, 10)
-    const admin = isAdmin(req)
+    const { id } = req.params;
 
-    const conv = await msg.findConversationById(id)
-    if (!conv) return res.status(404).json({ success: false, message: 'Conversation not found' })
+    const [convRes, msgsRes] = await Promise.all([
+      query(
+        `SELECT
+           conv.*,
+           conv.metadata->>'bookingNumber' AS "bookingNumber"
+         FROM conversations conv
+         WHERE conv.id = $1 AND conv.deleted_at IS NULL`,
+        [id]
+      ),
+      query(
+        `SELECT
+           m.id,
+           m.conversation_id,
+           m.sender_type,
+           m.sender_id,
+           m.sender_name,
+           m.sender_email,
+           m.sender_avatar,
+           m.body,
+           m.msg_type,
+           m.attachment_url,
+           m.attachment_name,
+           m.attachment_type,
+           m.is_read,
+           m.read_at,
+           m.edited,
+           m.edited_at,
+           m.reply_to_id,
+           m.metadata,
+           m.reactions,
+           m.created_at
+         FROM messages m
+         WHERE m.conversation_id = $1
+           AND (m.deleted IS NULL OR m.deleted = FALSE)
+           AND m.deleted_at IS NULL
+         ORDER BY m.created_at ASC`,
+        [id]
+      ),
+    ]);
 
-    if (!admin) {
-      const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email
-      if (!own) return res.status(403).json({ success: false, message: 'Forbidden' })
+    if (!convRes.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found",
+      });
     }
 
-    await msg.markReadForRecipient(id, admin ? 'admin' : 'user')
+    const conv = convRes.rows[0];
 
-    const io = msg.getIO()
-    if (io) {
-      io.to(`conv:${id}`).emit('msg:read', {
-        conversationId: id,
-        readBy:         admin ? 'admin' : 'user',
-      })
-    }
-
-    return res.json({ success: true, message: 'Marked as read' })
+    return res.json({
+      success:  true,
+      data: {
+        id:              conv.id,
+        sessionId:       conv.session_id,
+        userId:          conv.user_id,
+        guestName:       conv.guest_name,
+        guestEmail:      conv.guest_email,
+        channel:         conv.channel,
+        subject:         conv.subject,
+        status:          conv.status,
+        priority:        conv.priority,
+        assignedAdmin:   conv.assigned_admin,
+        firstMessage:    conv.first_message,
+        lastMessage:     conv.last_message,
+        lastMessageAt:   conv.last_message_at,
+        unreadUser:      conv.unread_user  || 0,
+        unreadAdmin:     conv.unread_admin || 0,
+        tags:            conv.tags         || [],
+        metadata:        conv.metadata     || {},
+        source:          conv.source,
+        bookingNumber:   conv.bookingNumber || null,
+        closedAt:        conv.closed_at,
+        createdAt:       conv.created_at,
+        updatedAt:       conv.updated_at,
+        messages: msgsRes.rows.map((m) => ({
+          id:               m.id,
+          conversationId:   m.conversation_id,
+          senderType:       m.sender_type,
+          senderId:         m.sender_id,
+          senderName:       m.sender_name,
+          senderEmail:      m.sender_email,
+          senderAvatar:     m.sender_avatar,
+          body:             m.body,
+          msgType:          m.msg_type,
+          attachmentUrl:    m.attachment_url,
+          attachmentName:   m.attachment_name,
+          attachmentType:   m.attachment_type,
+          isRead:           m.is_read,
+          readAt:           m.read_at,
+          edited:           m.edited,
+          editedAt:         m.edited_at,
+          replyToId:        m.reply_to_id,
+          metadata:         m.metadata   || {},
+          reactions:        m.reactions  || {},
+          createdAt:        m.created_at,
+        })),
+      },
+    });
   } catch (err) {
-    logger.error('[Messages] PATCH read:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
+    console.error("[messages/conversations/:id] Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to fetch conversation",
+      error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
   }
-})
+});
 
-/* ══════════════════════════════════════════════════════════════════════════
-   PATCH /conversations/:id/status   (admin only)
-══════════════════════════════════════════════════════════════════════════ */
-router.patch('/conversations/:id/status', protect, restrictToAdmin, async (req, res) => {
+/* ═══════════════════════════════════════════════════════════════════════════
+   PATCH /api/messages/conversations/:id/read
+   Mark all admin-unread messages as read
+═══════════════════════════════════════════════════════════════════════════ */
+router.patch("/conversations/:id/read", adminProtect, async (req, res) => {
   try {
-    const id = parseInt(req.params.id, 10)
-    const { status, priority, assignedAdmin } = req.body
+    const { id } = req.params;
 
-    const fields = []
-    const params = []
-    let p = 1
+    await query(
+      `UPDATE messages
+         SET is_read = TRUE,
+             read_at = NOW()
+       WHERE conversation_id = $1
+         AND sender_type = 'user'
+         AND (is_read IS NULL OR is_read = FALSE)`,
+      [id]
+    );
 
-    if (status)        { fields.push(`status = $${p++}`);   params.push(status) }
-    if (priority)      { fields.push(`priority = $${p++}`); params.push(priority) }
-    if (assignedAdmin !== undefined) {
-      fields.push(`assigned_admin = $${p++}`)
-      params.push(assignedAdmin === null ? null : parseInt(assignedAdmin, 10))
-    }
-    if (status === 'closed') fields.push('closed_at = NOW()')
-    fields.push('updated_at = NOW()')
-    params.push(id)
-
-    const { rows } = await query(
-      `UPDATE conversations SET ${fields.join(', ')} WHERE id = $${p} RETURNING *`,
-      params,
-    )
-    if (!rows[0]) return res.status(404).json({ success: false, message: 'Conversation not found' })
-
-    msg.broadcastConversationUpdate(rows[0])
-
-    return res.json({ success: true, data: msg.serializeConversation(rows[0]) })
-  } catch (err) {
-    logger.error('[Messages] PATCH status:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   PATCH /conversations/:id/messages/:msgId/react
-══════════════════════════════════════════════════════════════════════════ */
-router.patch('/conversations/:id/messages/:msgId/react', protect, async (req, res) => {
-  try {
-    const convId  = parseInt(req.params.id, 10)
-    const msgId   = parseInt(req.params.msgId, 10)
-    const admin   = isAdmin(req)
-    const emoji   = String(req.body.emoji || '').trim()
-    if (!emoji) return res.status(400).json({ success: false, message: 'emoji required' })
-
-    const conv = await msg.findConversationById(convId)
-    if (!conv) return res.status(404).json({ success: false, message: 'Conversation not found' })
-    if (!admin) {
-      const own = conv.user_id === req.user?.id || conv.guest_email === req.user?.email
-      if (!own) return res.status(403).json({ success: false, message: 'Forbidden' })
-    }
-
-    const message = await msg.addReaction(convId, msgId, emoji, req.user?.id || 0)
-    if (!message) return res.status(404).json({ success: false, message: 'Message not found' })
-
-    const serialized = msg.serializeMessage(message)
-    const io = msg.getIO()
-    if (io) {
-      io.to(`conv:${convId}`).emit('msg:reaction', {
-        conversationId: convId,
-        messageId:      msgId,
-        reactions:      serialized.reactions,
-        reactedBy:      admin ? 'admin' : 'user',
-        emoji,
-      })
-    }
-
-    return res.json({ success: true, data: serialized })
-  } catch (err) {
-    logger.error('[Messages] PATCH react:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
-
-/* ══════════════════════════════════════════════════════════════════════════
-   DELETE /conversations/:id   (soft delete, admin only)
-══════════════════════════════════════════════════════════════════════════ */
-router.delete('/conversations/:id', protect, restrictToAdmin, async (req, res) => {
-  try {
-    const id = parseInt(req.params.id, 10)
     await query(
       `UPDATE conversations
-         SET deleted_at = NOW(), deleted_by = $1, updated_at = NOW()
-       WHERE id = $2`,
-      [req.user?.id, id],
-    )
-    return res.json({ success: true, message: 'Conversation removed' })
-  } catch (err) {
-    logger.error('[Messages] DELETE:', err.message)
-    return res.status(500).json({ success: false, message: err.message })
-  }
-})
+         SET unread_admin = 0,
+             updated_at   = NOW()
+       WHERE id = $1`,
+      [id]
+    );
 
-module.exports = router
+    return res.json({ success: true, message: "Messages marked as read" });
+  } catch (err) {
+    console.error("[messages/read] Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to mark as read",
+      error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   POST /api/messages/conversations/:id/messages
+   Send admin message (fallback if socket unavailable)
+═══════════════════════════════════════════════════════════════════════════ */
+router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
+  try {
+    const { id }              = req.params;
+    const { body, replyToId } = req.body;
+
+    if (!body || !body.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: "Message body is required",
+      });
+    }
+
+    const adminId   = req.user?.id;
+    const adminName = req.user?.full_name || req.user?.username || "Admin";
+
+    const result = await query(
+      `INSERT INTO messages (
+         conversation_id, sender_type, sender_id, sender_name,
+         body, msg_type, reply_to_id, is_read, reactions, created_at
+       ) VALUES ($1, 'admin', $2, $3, $4, 'text', $5, FALSE, '{}'::jsonb, NOW())
+       RETURNING *`,
+      [id, adminId, adminName, body.trim(), replyToId || null]
+    );
+
+    const msg = result.rows[0];
+
+    /* Update conversation last-message + bump unread_user */
+    await query(
+      `UPDATE conversations
+         SET last_message    = $1,
+             last_message_at = NOW(),
+             unread_user     = COALESCE(unread_user, 0) + 1,
+             updated_at      = NOW()
+       WHERE id = $2`,
+      [body.trim().slice(0, 500), id]
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        id:              msg.id,
+        conversationId:  msg.conversation_id,
+        senderType:      msg.sender_type,
+        senderId:        msg.sender_id,
+        senderName:      msg.sender_name,
+        body:            msg.body,
+        msgType:         msg.msg_type,
+        replyToId:       msg.reply_to_id,
+        isRead:          msg.is_read,
+        reactions:       msg.reactions || {},
+        createdAt:       msg.created_at,
+      },
+    });
+  } catch (err) {
+    console.error("[messages/send] Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send message",
+      error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PATCH /api/messages/conversations/:id/status
+   Change conversation status (open/closed/pending)
+═══════════════════════════════════════════════════════════════════════════ */
+router.patch("/conversations/:id/status", adminProtect, async (req, res) => {
+  try {
+    const { id }     = req.params;
+    const { status } = req.body;
+
+    const allowed = ["open", "closed", "pending"];
+    if (!allowed.includes(status)) {
+      return res.status(400).json({
+        success: false,
+        message: `Status must be one of: ${allowed.join(", ")}`,
+      });
+    }
+
+    const closedAtClause = status === "closed"
+      ? ", closed_at = NOW()"
+      : status === "open"
+        ? ", closed_at = NULL"
+        : "";
+
+    const result = await query(
+      `UPDATE conversations
+         SET status = $1,
+             updated_at = NOW()
+             ${closedAtClause}
+       WHERE id = $2
+       RETURNING id, status, closed_at, updated_at`,
+      [status, id]
+    );
+
+    if (!result.rows[0]) {
+      return res.status(404).json({
+        success: false,
+        message: "Conversation not found",
+      });
+    }
+
+    return res.json({ success: true, data: result.rows[0] });
+  } catch (err) {
+    console.error("[messages/status] Error:", err);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update status",
+      error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+    });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   PATCH /api/messages/conversations/:cid/messages/:mid/react
+   Toggle reaction on a message
+═══════════════════════════════════════════════════════════════════════════ */
+router.patch(
+  "/conversations/:cid/messages/:mid/react",
+  adminProtect,
+  async (req, res) => {
+    try {
+      const { cid, mid }      = req.params;
+      const { emoji, add }    = req.body;
+      const userId            = String(req.user?.id || "0");
+
+      if (!emoji) {
+        return res.status(400).json({
+          success: false,
+          message: "Emoji is required",
+        });
+      }
+
+      /* Load current reactions */
+      const cur = await query(
+        `SELECT reactions FROM messages WHERE id = $1 AND conversation_id = $2`,
+        [mid, cid]
+      );
+
+      if (!cur.rows[0]) {
+        return res.status(404).json({
+          success: false,
+          message: "Message not found",
+        });
+      }
+
+      const reactions = cur.rows[0].reactions || {};
+      const list      = reactions[emoji] || [];
+
+      const updated = add
+        ? [...new Set([...list, userId])]
+        : list.filter((uid) => uid !== userId);
+
+      if (updated.length === 0) delete reactions[emoji];
+      else                      reactions[emoji] = updated;
+
+      await query(
+        `UPDATE messages SET reactions = $1::jsonb WHERE id = $2`,
+        [JSON.stringify(reactions), mid]
+      );
+
+      return res.json({
+        success: true,
+        data: { messageId: mid, reactions },
+      });
+    } catch (err) {
+      console.error("[messages/react] Error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to update reaction",
+        error:   process.env.NODE_ENV === "development" ? err.message : undefined,
+      });
+    }
+  }
+);
+
+module.exports = router;
