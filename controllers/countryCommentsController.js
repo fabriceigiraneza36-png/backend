@@ -39,14 +39,14 @@ exports.getComments = async (req, res, next) => {
             {
               model: require("../models").User,
               as: "user",
-              attributes: ["id", "name", "email", "avatar"],
+              attributes: ["id", "fullName", "email", "avatarUrl"],
             },
           ],
         },
         {
           model: require("../models").User,
           as: "user",
-          attributes: ["id", "name", "email", "avatar"],
+          attributes: ["id", "fullName", "email", "avatarUrl"],
         },
       ],
       order: [
@@ -93,14 +93,14 @@ exports.getComment = async (req, res, next) => {
             {
               model: require("../models").User,
               as: "user",
-              attributes: ["id", "name", "email", "avatar"],
+              attributes: ["id", "fullName", "email", "avatarUrl"],
             },
           ],
         },
         {
           model: require("../models").User,
           as: "user",
-          attributes: ["id", "name", "email", "avatar"],
+          attributes: ["id", "fullName", "email", "avatarUrl"],
         },
       ],
       order: [
@@ -177,7 +177,7 @@ exports.createComment = async (req, res, next) => {
         {
           model: require("../models").User,
           as: "user",
-          attributes: ["id", "name", "email", "avatar"],
+          attributes: ["id", "fullName", "email", "avatarUrl"],
         },
       ],
     });

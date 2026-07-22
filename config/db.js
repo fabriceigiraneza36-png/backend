@@ -131,20 +131,26 @@ const query = async (text, params = []) => {
 
 // ── Sequelize Instance ───────────────────────────────────────────────────────
 
-const sequelize = new Sequelize(
-  dbConfig.database,
-  dbConfig.user,
-  dbConfig.password,
-  {
-    host:    dbConfig.host,
-    port:    dbConfig.port,
-    dialect: "postgres",
-    logging: false,
-    pool:    { max: 20, min: 3, acquire: 30_000, idle: 10_000 },
-    define:  { timestamps: true, underscored: true, freezeTableName: true },
-    retry:   { max: 3 },
-  },
-);
+const sequelizeOptions = {
+  dialect:  "postgres",
+  logging:  false,
+  pool:     { max: 20, min: 3, acquire: 30_000, idle: 10_000 },
+  define:   { timestamps: true, underscored: true, freezeTableName: true },
+  retry:    { max: 3 },
+};
+
+const sequelize = connectionString
+  ? new Sequelize(connectionString, sequelizeOptions)
+  : new Sequelize(
+      dbConfig.database,
+      dbConfig.user,
+      dbConfig.password,
+      {
+        ...sequelizeOptions,
+        host: dbConfig.host,
+        port: dbConfig.port,
+      }
+    );
 
 // ── Connection Test & Warm-Up ────────────────────────────────────────────────
 
