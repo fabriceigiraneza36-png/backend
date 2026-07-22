@@ -1695,6 +1695,7 @@ async function initializeServer () {
       { fn: ensureBookingsSchema,      name: 'Bookings'      },
       { fn: ensureMessagingSchema,     name: 'Messaging'     },
       { fn: ensureNotificationsSchema, name: 'Notifications' },
+      { fn: ensureCountriesSchema,     name: 'Countries'     },
     ]
 
     for (const { fn, name } of schemas) {

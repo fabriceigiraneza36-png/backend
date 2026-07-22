@@ -92,9 +92,7 @@ const toJsonb = (val) => {
 /* ─── Which columns must be sent as JSONB ───────────────────────────────── */
 const JSONB_FIELDS = new Set([
   'hero_images', 'activities', 'faqs', 'extra_info',
-  'highlights', 'experiences', 'travel_tips',
-  'neighboring_countries', 'seasons', 'geography',
-  'wildlife', 'cuisine', 'official_languages', 'languages', 'images',
+  'seasons', 'geography', 'wildlife', 'cuisine',
 ])
 
 /* ─── Every column the controller might write ───────────────────────────── */

@@ -1,452 +1,471 @@
-// utils/messaging.js
-"use strict";
+// backend/src/utils/messaging.js
+// ═══════════════════════════════════════════════════════════════════════════════
+// MESSAGING UTILITIES v3.1 — Complete
+// ═══════════════════════════════════════════════════════════════════════════════
 
-/**
- * Shared messaging / conversation service.
- *
- * Provides the persistence + serialization helpers used by BOTH:
- *   • backend/routes/message.js     (REST HTTP API for admin panel & user app)
- *   • backend/server.js             (Socket.io live-chat handlers)
- *
- * Tables (created by server.js ensureMessagingSchema):
- *   conversations(id, session_id UNIQUE, user_id, guest_name, guest_email,
- *     subject, status, priority, assigned_admin, first_message, last_message,
- *     last_message_at, unread_user, unread_admin, tags, metadata, ip_address,
- *     source, closed_at, deleted_at, deleted_by, created_at, updated_at)
- *   messages(id, conversation_id, sender_type, sender_id, sender_name,
- *     sender_email, sender_avatar, body, msg_type, attachment_url, is_read,
- *     read_at, edited, deleted, reply_to_id, metadata, created_at)
- */
+"use strict";
 
 const { query } = require("../config/db");
 const logger    = require("./logger");
-const crypto    = require("crypto");
 
-/* ── Socket.io (optional — only available after server boot) ────────────────── */
-const getIO = () => {
-  try {
-    const socketBus = require("./socketBus");
-    return socketBus?.getIO?.() || null;
-  } catch {
-    return null;
-  }
-};
-
-/* ── Safe email sender (optional) ───────────────────────────────────────────── */
-let _sendEmail = null;
-for (const p of ["../utils/email", "../services/emailService", "../utils/emailService"]) {
-  try {
-    const m = require(p);
-    if (typeof m.sendEmail === "function") { _sendEmail = m.sendEmail; break; }
-  } catch { /* try next */ }
-}
-
-/* ════════════════════════════════════════════════════════════════════════════
-   SESSION HELPERS
-   ══════════════════════════════════════════════════════════════════════════ */
-const makeSessionId = (prefix = "conv") =>
-  `${prefix}-${Date.now().toString(36)}-${crypto.randomBytes(6).toString("hex")}`;
-
-/* ════════════════════════════════════════════════════════════════════════════
-   CONVERSATION HELPERS
-   ══════════════════════════════════════════════════════════════════════════ */
-const getOrCreateConversation = async ({
-  sessionId,
-  userId       = null,
-  guestName    = null,
-  guestEmail   = null,
-  subject      = null,
-  status       = "open",
-  priority     = "normal",
-  source       = "website",
-  ipAddress    = null,
-  bookingId    = null,
+/* ─────────────────────────────────────────────────────────────────────────────
+   getOrCreateConversation
+   ───────────────────────────────────────────────────────────────────────────── */
+async function getOrCreateConversation({
+  userId      = null,
+  sessionId   = null,
+  guestName   = null,
+  guestEmail  = null,
+  bookingId   = null,
   bookingNumber = null,
-  metadata     = {},
-} = {}) => {
-  let sid = String(sessionId || "").trim();
-  if (!sid) sid = makeSessionId("booking");
+  subject     = null,
+  channel     = "live_chat",
+  source      = "direct",
+  priority    = "normal",
+  ipAddress   = null,
+  userAgent   = null,
+  metadata    = {},
+} = {}) {
 
-  const existing = await query(
-    `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
-            u.avatar_url AS user_avatar
-       FROM conversations c
-       LEFT JOIN users u ON u.id = c.user_id
-      WHERE c.session_id = $1 AND c.deleted_at IS NULL
-      LIMIT 1`,
-    [sid],
-  );
+  /* ── 1. Try to find an existing open/pending conversation ── */
+  let existing = null;
 
-  if (existing.rows[0]) {
-    const conv = existing.rows[0];
-    // Enrich with any newly provided identity / booking linkage
-    if (userId || guestName || guestEmail || bookingId) {
-      await query(
-        `UPDATE conversations SET
-           user_id          = COALESCE($1, user_id),
-           guest_name       = COALESCE(NULLIF($2,''), guest_name),
-           guest_email      = COALESCE(NULLIF($3,''), guest_email),
-           booking_id       = COALESCE($4, booking_id),
-           updated_at       = NOW()
-         WHERE session_id = $5`,
-        [userId || null, guestName || null, guestEmail || null, bookingId || null, sid],
-      ).catch(() => {});
-    }
-    return conv;
+  if (userId) {
+    const res = await query(
+      `SELECT * FROM conversations
+        WHERE user_id = $1
+          AND deleted_at IS NULL
+          AND status IN ('open','pending')
+        ORDER BY last_message_at DESC NULLS LAST, created_at DESC
+        LIMIT 1`,
+      [userId]
+    );
+    existing = res.rows[0] || null;
+  } else if (sessionId) {
+    const res = await query(
+      `SELECT * FROM conversations
+        WHERE session_id = $1
+          AND deleted_at IS NULL
+          AND status IN ('open','pending')
+        ORDER BY last_message_at DESC NULLS LAST, created_at DESC
+        LIMIT 1`,
+      [sessionId]
+    );
+    existing = res.rows[0] || null;
   }
 
-  const inserted = await query(
-    `INSERT INTO conversations
-       (session_id, user_id, guest_name, guest_email, subject,
-        status, priority, source, ip_address, booking_id, booking_number, metadata)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+  if (existing) return existing;
+
+  /* ── 2. Validate bookingId if provided ── */
+  let resolvedBookingId     = null;
+  let resolvedBookingNumber = bookingNumber || null;
+
+  if (bookingId) {
+    const bRes = await query(
+      `SELECT id, booking_number FROM bookings WHERE id = $1 LIMIT 1`,
+      [bookingId]
+    );
+    if (bRes.rows[0]) {
+      resolvedBookingId     = bRes.rows[0].id;
+      resolvedBookingNumber = bRes.rows[0].booking_number || resolvedBookingNumber;
+    }
+  }
+
+  /* ── 3. Build metadata ── */
+  const finalMeta = {
+    ...metadata,
+    ...(resolvedBookingNumber ? { bookingNumber: resolvedBookingNumber } : {}),
+  };
+
+  /* ── 4. Insert new conversation ── */
+  const ins = await query(
+    `INSERT INTO conversations (
+       user_id, session_id, guest_name, guest_email,
+       booking_id, subject, channel, source, priority,
+       ip_address, user_agent, metadata,
+       status, unread_user, unread_admin,
+       created_at, updated_at
+     ) VALUES (
+       $1,$2,$3,$4,
+       $5,$6,$7,$8,$9,
+       $10,$11,$12,
+       'open', 0, 0,
+       NOW(), NOW()
+     )
      RETURNING *`,
     [
-      sid,
-      userId          || null,
-      guestName       || null,
-      guestEmail      || null,
-      subject         || null,
-      status,
-      priority,
-      source          || "website",
-      ipAddress       || null,
-      bookingId       || null,
-      bookingNumber   || null,
-      JSON.stringify(metadata || {}),
-    ],
+      userId,
+      sessionId,
+      guestName,
+      guestEmail,
+      resolvedBookingId,
+      subject   || "New Conversation",
+      channel   || "live_chat",
+      source    || "direct",
+      priority  || "normal",
+      ipAddress,
+      userAgent,
+      JSON.stringify(finalMeta),
+    ]
   );
-  return inserted.rows[0];
-};
 
-const findConversationById = async (id) => {
-  const { rows } = await query(
-    `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
-            u.avatar_url AS user_avatar
-       FROM conversations c
-       LEFT JOIN users u ON u.id = c.user_id
-      WHERE c.id = $1 AND c.deleted_at IS NULL
-      LIMIT 1`,
-    [id],
-  );
-  return rows[0] || null;
-};
+  return ins.rows[0];
+}
 
-const findConversationBySession = async (sessionId) => {
-  const sid = String(sessionId || "").trim();
-  if (!sid) return null;
-  const { rows } = await query(
-    `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
-            u.avatar_url AS user_avatar
-       FROM conversations c
-       LEFT JOIN users u ON u.id = c.user_id
-      WHERE c.session_id = $1 AND c.deleted_at IS NULL
-      LIMIT 1`,
-    [sid],
-  );
-  return rows[0] || null;
-};
-
-/* ════════════════════════════════════════════════════════════════════════════
-   MESSAGE HELPERS
-   ══════════════════════════════════════════════════════════════════════════ */
-const saveMessage = async ({
+/* ─────────────────────────────────────────────────────────────────────────────
+   insertMessage
+   ───────────────────────────────────────────────────────────────────────────── */
+async function insertMessage({
   conversationId,
-  senderType,
+  senderType,          // 'user' | 'admin' | 'bot'
   senderId     = null,
   senderName   = null,
   senderEmail  = null,
   senderAvatar = null,
   body,
   msgType      = "text",
+  attachmentUrl  = null,
+  attachmentName = null,
+  attachmentType = null,
   replyToId    = null,
   metadata     = {},
-}) => {
-  const text = String(body || "").trim();
-  if (!text) throw new Error("Message body is required");
+} = {}) {
 
-  const { rows } = await query(
-    `INSERT INTO messages
-       (conversation_id, sender_type, sender_id, sender_name,
-        sender_email, sender_avatar, body, msg_type, reply_to_id, metadata, is_read)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,false)
+  if (!conversationId) throw Object.assign(new Error("conversationId is required"), { status: 400 });
+  if (!body || !String(body).trim()) throw Object.assign(new Error("Message body is required"), { status: 400 });
+  if (!senderType) throw Object.assign(new Error("senderType is required"), { status: 400 });
+
+  /* ── Insert the message ── */
+  const msgRes = await query(
+    `INSERT INTO messages (
+       conversation_id, sender_type, sender_id,
+       sender_name, sender_email, sender_avatar,
+       body, msg_type,
+       attachment_url, attachment_name, attachment_type,
+       reply_to_id, metadata, reactions,
+       is_read, edited,
+       created_at, updated_at
+     ) VALUES (
+       $1,$2,$3,
+       $4,$5,$6,
+       $7,$8,
+       $9,$10,$11,
+       $12,$13,'{}',
+       FALSE, FALSE,
+       NOW(), NOW()
+     )
      RETURNING *`,
     [
       conversationId,
       senderType,
-      senderId     || null,
-      senderName   || null,
-      senderEmail  || null,
-      senderAvatar || null,
-      text,
+      senderId,
+      senderName,
+      senderEmail,
+      senderAvatar,
+      String(body).trim(),
       msgType,
-      replyToId    || null,
-      JSON.stringify(metadata || {}),
-    ],
+      attachmentUrl,
+      attachmentName,
+      attachmentType,
+      replyToId,
+      JSON.stringify(metadata),
+    ]
   );
 
-  const msg    = rows[0];
-  const isUser = senderType !== "admin";
+  const msg = msgRes.rows[0];
 
-  await query(
-    `UPDATE conversations SET
-       last_message    = $1,
-       last_message_at = NOW(),
-       first_message   = COALESCE(first_message, $1),
-       unread_admin    = CASE WHEN $2 THEN unread_admin + 1 ELSE unread_admin END,
-       unread_user     = CASE WHEN $3 THEN unread_user  + 1 ELSE unread_user  END,
-       updated_at      = NOW()
-     WHERE id = $4`,
-    [text, isUser, !isUser, conversationId],
-  ).catch(() => {});
+  /* ── Update conversation snapshot ── */
+  const snippet = String(body).trim().substring(0, 255);
+
+  if (senderType === "admin") {
+    /* Admin sent → increment user's unread counter */
+    await query(
+      `UPDATE conversations
+          SET last_message    = $1,
+              last_message_at = NOW(),
+              unread_user     = unread_user + 1,
+              first_message   = COALESCE(first_message, $1),
+              updated_at      = NOW()
+        WHERE id = $2`,
+      [snippet, conversationId]
+    );
+  } else {
+    /* User/bot sent → increment admin's unread counter */
+    await query(
+      `UPDATE conversations
+          SET last_message    = $1,
+              last_message_at = NOW(),
+              unread_admin    = unread_admin + 1,
+              first_message   = COALESCE(first_message, $1),
+              status          = CASE WHEN status = 'closed' THEN 'open' ELSE status END,
+              updated_at      = NOW()
+        WHERE id = $2`,
+      [snippet, conversationId]
+    );
+  }
 
   return msg;
-};
+}
 
-const getMessages = async (conversationId, limit = 200) => {
-  const { rows } = await query(
-    `SELECT * FROM messages
-      WHERE conversation_id = $1 AND deleted = false
-      ORDER BY created_at ASC
-      LIMIT $2`,
-    [conversationId, limit],
+/* ─────────────────────────────────────────────────────────────────────────────
+   markConversationRead
+   ───────────────────────────────────────────────────────────────────────────── */
+async function markConversationRead({ conversationId, readerType }) {
+  if (!conversationId) throw new Error("conversationId is required");
+  if (!readerType)     throw new Error("readerType is required");
+
+  const col = readerType === "admin" ? "unread_admin" : "unread_user";
+
+  await query(
+    `UPDATE conversations
+        SET ${col} = 0, updated_at = NOW()
+      WHERE id = $1 AND deleted_at IS NULL`,
+    [conversationId]
   );
-  return rows;
-};
 
-const countUnreadAdmin = async (conversationId) => {
-  const { rows } = await query(
-    `SELECT COUNT(*) AS n FROM messages
-      WHERE conversation_id = $1 AND sender_type != 'admin' AND is_read = false`,
-    [conversationId],
-  );
-  return parseInt(rows[0]?.n || 0, 10);
-};
-
-const countUnreadUser = async (conversationId) => {
-  const { rows } = await query(
-    `SELECT COUNT(*) AS n FROM messages
-      WHERE conversation_id = $1 AND sender_type = 'admin' AND is_read = false`,
-    [conversationId],
-  );
-  return parseInt(rows[0]?.n || 0, 10);
-};
-
-const markReadForRecipient = async (conversationId, recipientType) => {
-  // recipientType: 'admin' reads user messages, 'user' reads admin messages
-  const senderToRead = recipientType === "admin" ? "user" : "admin";
+  /* Mark individual messages as read */
+  const senderType = readerType === "admin" ? "user" : "admin";
   await query(
     `UPDATE messages
-        SET is_read = true, read_at = NOW()
-      WHERE conversation_id = $1 AND sender_type = $2 AND is_read = false`,
-    [conversationId, senderToRead],
-  ).catch(() => {});
-
-  const col = recipientType === "admin" ? "unread_admin" : "unread_user";
-  await query(
-    `UPDATE conversations SET ${col} = 0, updated_at = NOW() WHERE id = $1`,
-    [conversationId],
-  ).catch(() => {});
-};
-
-/* ════════════════════════════════════════════════════════════════════════════
-   SERIALISERS
-   ══════════════════════════════════════════════════════════════════════════ */
-const serializeMessage = (row) => ({
-  id:             row.id,
-  conversationId: row.conversation_id,
-  senderType:     row.sender_type,
-  senderId:       row.sender_id,
-  senderName:     row.sender_name,
-  senderEmail:    row.sender_email,
-  senderAvatar:   row.sender_avatar,
-  body:           row.body,
-  msgType:        row.msg_type || "text",
-  attachmentUrl:  row.attachment_url,
-  isRead:         row.is_read,
-  readAt:         row.read_at,
-  replyToId:      row.reply_to_id,
-  reactions:      row.reactions || {},
-  metadata:       row.metadata || {},
-  createdAt:      row.created_at,
-});
-
-const serializeConversation = (row) => ({
-  id:             row.id,
-  sessionId:      row.session_id,
-  userId:         row.user_id,
-  guestName:      row.guest_name,
-  guestEmail:     row.guest_email,
-  userFullName:   row.user_full_name || row.guest_name || null,
-  userEmail:      row.user_email,
-  userAvatar:     row.user_avatar,
-  subject:        row.subject,
-  status:         row.status,
-  priority:       row.priority,
-  assignedAdmin:  row.assigned_admin,
-  bookingId:      row.booking_id,
-  bookingNumber:  row.booking_number,
-  firstMessage:   row.first_message,
-  lastMessage:    row.last_message,
-  lastMessageAt:  row.last_message_at,
-  unreadUser:     row.unread_user || 0,
-  unreadAdmin:    row.unread_admin || 0,
-  tags:           row.tags || [],
-  metadata:       row.metadata || {},
-  createdAt:      row.created_at,
-  updatedAt:      row.updated_at,
-});
-
-/* ════════════════════════════════════════════════════════════════════════════
-   REACTIONS
-   ══════════════════════════════════════════════════════════════════════════ */
-const addReaction = async (conversationId, messageId, emoji, userId) => {
-  const uid = String(userId || 0);
-  const { rows } = await query(
-    `SELECT reactions FROM messages WHERE id = $1 AND conversation_id = $2`,
-    [messageId, conversationId],
+        SET is_read  = TRUE,
+            read_at  = NOW(),
+            updated_at = NOW()
+      WHERE conversation_id = $1
+        AND sender_type     = $2
+        AND is_read         = FALSE`,
+    [conversationId, senderType]
   );
-  const current = (rows[0]?.reactions) || {};
-  const arr = Array.from(new Set([...(Array.isArray(current[emoji]) ? current[emoji] : []), uid]));
-  const { rows: updated } = await query(
-    `UPDATE messages SET reactions = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-    [{ ...current, [emoji]: arr }, messageId],
-  );
-  return updated[0] || null;
-};
+}
 
-const removeReaction = async (conversationId, messageId, emoji, userId) => {
-  const uid = String(userId || 0);
-  const { rows } = await query(
-    `SELECT reactions FROM messages WHERE id = $1 AND conversation_id = $2`,
-    [messageId, conversationId],
+/* ─────────────────────────────────────────────────────────────────────────────
+   listConversations  ← THIS WAS MISSING / NOT EXPORTED
+   ───────────────────────────────────────────────────────────────────────────── */
+async function listConversations({
+  status = "open",
+  limit  = 100,
+  page   = 1,
+  search = null,
+} = {}) {
+
+  const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
+  const conditions = ["c.deleted_at IS NULL"];
+  const params     = [];
+  let   p          = 1;
+
+  /* Status filter — allow 'all' to skip */
+  if (status && status !== "all") {
+    conditions.push(`c.status = $${p++}`);
+    params.push(status);
+  }
+
+  /* Search filter */
+  if (search && String(search).trim()) {
+    conditions.push(`(
+      c.subject    ILIKE $${p}   OR
+      c.guest_name  ILIKE $${p}  OR
+      c.guest_email ILIKE $${p}  OR
+      u.full_name   ILIKE $${p}  OR
+      u.email       ILIKE $${p}  OR
+      c.last_message ILIKE $${p}
+    )`);
+    params.push(`%${String(search).trim()}%`);
+    p++;
+  }
+
+  const where = conditions.join(" AND ");
+
+  /* Total count */
+  const countRes = await query(
+    `SELECT COUNT(*)::INT AS total
+       FROM conversations c
+       LEFT JOIN users u ON u.id = c.user_id
+      WHERE ${where}`,
+    params
   );
-  const current = (rows[0]?.reactions) || {};
-  const arr = (Array.isArray(current[emoji]) ? current[emoji] : []).filter((id) => id !== uid);
-  const updated = { ...current };
-  if (arr.length > 0) {
-    updated[emoji] = arr;
+  const total = countRes.rows[0]?.total || 0;
+
+  /* Paginated rows */
+  const rowsRes = await query(
+    `SELECT
+       c.*,
+       u.full_name   AS user_full_name,
+       u.email       AS user_email,
+       u.avatar_url  AS user_avatar,
+       u.phone       AS user_phone,
+       u.nationality AS user_nationality,
+       u.username    AS user_username,
+       (
+         SELECT COUNT(*)::INT FROM messages m
+          WHERE m.conversation_id = c.id
+       ) AS message_count
+     FROM conversations c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE ${where}
+     ORDER BY
+       CASE c.priority
+         WHEN 'urgent' THEN 1
+         WHEN 'high'   THEN 2
+         WHEN 'normal' THEN 3
+         WHEN 'low'    THEN 4
+         ELSE 5
+       END,
+       c.last_message_at DESC NULLS LAST,
+       c.created_at DESC
+     LIMIT $${p} OFFSET $${p + 1}`,
+    [...params, limit, offset]
+  );
+
+  /* Merge user info into each row for convenience */
+  const rows = rowsRes.rows.map((row) => ({
+    ...row,
+    guest_name:  row.guest_name  || row.user_full_name || null,
+    guest_email: row.guest_email || row.user_email     || null,
+    user: row.user_id
+      ? {
+          id:          row.user_id,
+          fullName:    row.user_full_name,
+          email:       row.user_email,
+          avatarUrl:   row.user_avatar,
+          phone:       row.user_phone,
+          nationality: row.user_nationality,
+          username:    row.user_username,
+        }
+      : null,
+  }));
+
+  return { rows, total };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   getConversationWithMessages
+   ───────────────────────────────────────────────────────────────────────────── */
+async function getConversationWithMessages(conversationId) {
+  if (!conversationId) throw new Error("conversationId is required");
+
+  /* Conversation + user info */
+  const convRes = await query(
+    `SELECT
+       c.*,
+       u.full_name   AS user_full_name,
+       u.email       AS user_email,
+       u.avatar_url  AS user_avatar,
+       u.phone       AS user_phone,
+       u.nationality AS user_nationality,
+       u.username    AS user_username
+     FROM conversations c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.id = $1 AND c.deleted_at IS NULL`,
+    [conversationId]
+  );
+
+  const conv = convRes.rows[0];
+  if (!conv) return null;
+
+  /* Messages */
+  const msgRes = await query(
+    `SELECT * FROM messages
+      WHERE conversation_id = $1
+      ORDER BY created_at ASC`,
+    [conversationId]
+  );
+
+  return {
+    ...conv,
+    guest_name:  conv.guest_name  || conv.user_full_name || null,
+    guest_email: conv.guest_email || conv.user_email     || null,
+    user: conv.user_id
+      ? {
+          id:          conv.user_id,
+          fullName:    conv.user_full_name,
+          email:       conv.user_email,
+          avatarUrl:   conv.user_avatar,
+          phone:       conv.user_phone,
+          nationality: conv.user_nationality,
+          username:    conv.user_username,
+        }
+      : null,
+    messages: msgRes.rows,
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   toggleReaction
+   ───────────────────────────────────────────────────────────────────────────── */
+async function toggleReaction({ messageId, userId, emoji, add = true }) {
+  if (!messageId) throw Object.assign(new Error("messageId is required"), { status: 400 });
+  if (!userId)    throw Object.assign(new Error("userId is required"),    { status: 400 });
+  if (!emoji)     throw Object.assign(new Error("emoji is required"),     { status: 400 });
+
+  /* Fetch current reactions */
+  const res = await query(
+    `SELECT reactions FROM messages WHERE id = $1`,
+    [messageId]
+  );
+
+  if (!res.rows[0]) {
+    throw Object.assign(new Error("Message not found"), { status: 404 });
+  }
+
+  const reactions = res.rows[0].reactions || {};
+
+  if (add) {
+    if (!reactions[emoji]) reactions[emoji] = [];
+    if (!reactions[emoji].includes(userId)) {
+      reactions[emoji].push(userId);
+    }
   } else {
-    delete updated[emoji];
+    if (reactions[emoji]) {
+      reactions[emoji] = reactions[emoji].filter((id) => id !== userId);
+      if (reactions[emoji].length === 0) delete reactions[emoji];
+    }
   }
-  const { rows: up } = await query(
-    `UPDATE messages SET reactions = $1, updated_at = NOW() WHERE id = $2 RETURNING *`,
-    [updated, messageId],
-  );
-  return up[0] || null;
-};
 
-/* ════════════════════════════════════════════════════════════════════════════
-   REAL-TIME BROADCAST
-   ══════════════════════════════════════════════════════════════════════════ */
-const broadcastMessage = ({
-  conversationId,
-  sessionId,
-  userId,
-  payload,
-  adminPayload = null,
-}) => {
-  const io = getIO();
-  if (!io) return;
-  if (conversationId) io.to(`conv:${conversationId}`).emit("msg:message", payload);
-  if (sessionId)       io.to(`session:${sessionId}`).emit("msg:message", payload);
-  if (userId)          io.to(`user-${userId}`).emit("msg:message", payload);
-  if (adminPayload)    io.to("admins").emit("msg:new-from-user", adminPayload);
-};
-
-const broadcastConversationUpdate = (conversation) => {
-  const io = getIO();
-  if (!io) return;
-  const payload = serializeConversation(conversation);
-  io.to(`conv:${conversation.id}`).emit("msg:conversation-updated", payload);
-  io.to("admins").emit("msg:conversation-updated", payload);
-};
-
-/**
- * High-level helper used by the booking flow:
- *   create (or reuse) a conversation for a booking and post the first message
- *   from the customer, notifying the admin in real time.
- */
-const startBookingConversation = async (booking, { ipAddress = null } = {}) => {
-  const dest = booking.destination_name || booking.service_name ||
-    booking.package_name || booking.country_name || "your trip";
-
-  const subject = `New booking request — ${booking.booking_number || ""}`.trim();
-  const firstBody =
-    `Hi Altuvera team! I've just submitted a new booking request ` +
-    `(${booking.booking_number || "n/a"}) for ${dest}. ` +
-    (booking.special_requests
-      ? `Special requests: ${booking.special_requests}`
-      : "I'd love to discuss the details with you.");
-
-  const conv = await getOrCreateConversation({
-    sessionId:     `booking-${booking.booking_number || booking.id}`,
-    userId:        booking.user_id || null,
-    guestName:     booking.full_name || null,
-    guestEmail:    booking.email || null,
-    subject,
-    status:        "open",
-    priority:      "normal",
-    source:        booking.source || "website",
-    ipAddress,
-    bookingId:      booking.id || null,
-    bookingNumber: booking.booking_number || null,
-    metadata:      { kind: "booking_request", bookingNumber: booking.booking_number || null },
-  });
-
-  // Only seed the first message if the conversation is brand new
-  const { rows: existingMsgs } = await query(
-    `SELECT id FROM messages WHERE conversation_id = $1 LIMIT 1`,
-    [conv.id],
+  await query(
+    `UPDATE messages
+        SET reactions  = $1, updated_at = NOW()
+      WHERE id = $2`,
+    [JSON.stringify(reactions), messageId]
   );
 
-  let message = null;
-  if (existingMsgs.length === 0) {
-    message = await saveMessage({
-      conversationId: conv.id,
-      senderType:     "user",
-      senderId:       booking.user_id || null,
-      senderName:     booking.full_name || (booking.email || "Guest"),
-      senderEmail:    booking.email || null,
-      body:           firstBody,
-      metadata:       { kind: "booking_request", bookingNumber: booking.booking_number || null },
-    });
+  return reactions;
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   changeConversationStatus
+   ───────────────────────────────────────────────────────────────────────────── */
+async function changeConversationStatus({ conversationId, status }) {
+  if (!conversationId) throw Object.assign(new Error("conversationId is required"), { status: 400 });
+
+  const allowed = ["open", "pending", "closed", "resolved"];
+  if (!allowed.includes(status)) {
+    throw Object.assign(
+      new Error(`Invalid status. Allowed: ${allowed.join(", ")}`),
+      { status: 400 }
+    );
   }
 
-  // Real-time ping to admins
-  const io = getIO();
-  if (io) {
-    io.to("admins").emit("msg:user-registered", {
-      conversationId: conv.id,
-      sessionId:      conv.session_id,
-      guestName:      conv.guest_name || booking.full_name || "Guest",
-      guestEmail:     conv.guest_email || booking.email || null,
-      status:         conv.status,
-      lastMessage:    conv.last_message,
-      subject,
-      bookingNumber:  booking.booking_number || null,
-    });
-  }
+  const res = await query(
+    `UPDATE conversations
+        SET status     = $1,
+            closed_at  = CASE WHEN $1 IN ('closed','resolved') THEN NOW() ELSE NULL END,
+            updated_at = NOW()
+      WHERE id = $2 AND deleted_at IS NULL
+      RETURNING *`,
+    [status, conversationId]
+  );
 
-  return { conversation: conv, message };
-};
+  return res.rows[0] || null;
+}
 
+/* ─────────────────────────────────────────────────────────────────────────────
+   EXPORTS
+   ───────────────────────────────────────────────────────────────────────────── */
 module.exports = {
-  getIO,
-  makeSessionId,
   getOrCreateConversation,
-  findConversationById,
-  findConversationBySession,
-  saveMessage,
-  getMessages,
-  countUnreadAdmin,
-  countUnreadUser,
-  markReadForRecipient,
-  serializeMessage,
-  serializeConversation,
-  broadcastMessage,
-  broadcastConversationUpdate,
-  startBookingConversation,
-  addReaction,
-  removeReaction,
+  insertMessage,
+  markConversationRead,
+  listConversations,           // ← was missing
+  getConversationWithMessages,
+  toggleReaction,
+  changeConversationStatus,
 };
