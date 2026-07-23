@@ -1,11 +1,12 @@
-
+// routes/countries.js
 'use strict'
 
 const express = require('express')
 const router  = express.Router()
 const ctrl    = require('../controllers/countriesController')
 
-// ── Import middleware with safe fallbacks ─────────────────────────────────────
+/* ─── Auth middleware with safe fallbacks ────────────────────────────────── */
+
 let protect, adminOnly
 
 try {
@@ -21,8 +22,8 @@ try {
 if (typeof protect   !== 'function') protect   = (_req, _res, next) => next()
 if (typeof adminOnly !== 'function') adminOnly = (_req, _res, next) => next()
 
-// ── Verify all exports exist at load time ─────────────────────────────────────
-// This surfaces any missing exports immediately rather than at request time.
+/* ─── Verify all exports exist at load time ──────────────────────────────── */
+
 const REQUIRED_EXPORTS = [
   'getAll', 'getOne', 'getFeatured', 'getByContinent', 'getStats',
   'create', 'update', 'remove', 'bulkDelete',
@@ -38,9 +39,9 @@ for (const fn of REQUIRED_EXPORTS) {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ① NAMED GET ROUTES  (before /:slug wildcard)
-// ═══════════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
+   ① NAMED GET ROUTES  (must come before /:slug wildcard)
+═══════════════════════════════════════════════════════════════════════════ */
 
 /** GET /api/countries */
 router.get('/', ctrl.getAll)
@@ -54,9 +55,9 @@ router.get('/stats', ctrl.getStats)
 /** GET /api/countries/continent/:continent */
 router.get('/continent/:continent', ctrl.getByContinent)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ② ADMIN MUTATION ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
+   ② ADMIN MUTATION ROUTES
+═══════════════════════════════════════════════════════════════════════════ */
 
 /** POST /api/countries */
 router.post('/', protect, adminOnly, ctrl.create)
@@ -79,9 +80,9 @@ router.patch('/:id', protect, adminOnly, ctrl.update)
 /** DELETE /api/countries/:id */
 router.delete('/:id', protect, adminOnly, ctrl.remove)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ③ WILDCARD — MUST be last
-// ═══════════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════
+   ③ WILDCARD — MUST be last
+═══════════════════════════════════════════════════════════════════════════ */
 
 /** GET /api/countries/:slug */
 router.get('/:slug', ctrl.getOne)

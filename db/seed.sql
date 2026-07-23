@@ -782,18 +782,9 @@ INSERT INTO gallery (title, description, image_url, thumbnail_url, category, loc
 ('Kidepo Valley Plains', 'Remote savannah framed by rugged ridges', '/uploads/gallery/kidepo.jpg', '/uploads/gallery/thumb-kidepo.jpg', 'Landscape', 'Kidepo Valley', 4, 20, 'Sofia Mendes', 10, true, true);
 
 -- ═══════════════════════════════════════════════════════════════
--- 11. VIRTUAL TOURS
--- ═══════════════════════════════════════════════════════════════
-INSERT INTO virtual_tours (title, slug, description, destination_id, video_url, thumbnail_url, duration, is_featured, sort_order, is_active) VALUES
-('Lalibela Churches Virtual Walk', 'lalibela-virtual-walk', 'Explore Ethiopia''s sacred rock-hewn complexes with contextual narration.', 1, 'https://youtube.com/watch?v=example1', '/uploads/vt-lalibela.jpg', '12 min', true, 1, true),
-('Serengeti Safari Experience', 'serengeti-safari-experience', 'Join a digital game drive across East Africa''s most iconic plains.', 11, 'https://youtube.com/watch?v=example2', '/uploads/vt-serengeti.jpg', '15 min', true, 2, true),
-('Maasai Mara Migration', 'mara-migration-tour', 'Follow migration strategy and predator interactions in real time.', 6, 'https://youtube.com/watch?v=example3', '/uploads/vt-mara.jpg', '10 min', true, 3, true),
-('Zanzibar Stone Town Walk', 'zanzibar-stone-town', 'Navigate historic alleys, markets, and seafront culture in Stone Town.', 13, 'https://youtube.com/watch?v=example4', '/uploads/vt-zanzibar.jpg', '8 min', false, 4, true),
-('Nyungwe Canopy and Chimp Trail', 'nyungwe-canopy-trail', 'Aerial forest perspective and rainforest primate interpretation.', 22, 'https://youtube.com/watch?v=example5', '/uploads/vt-nyungwe.jpg', '10 min', true, 5, true);
-
--- ═══════════════════════════════════════════════════════════════
 -- 12. PAGES
 -- ═══════════════════════════════════════════════════════════════
+
 INSERT INTO pages (title, slug, content, meta_title, meta_description, is_published) VALUES
 ('About Us', 'about', E'# About Altuvera Travel\n\nWe are a passionate team of travel enthusiasts dedicated to showcasing the beauty and diversity of Africa. Founded with a vision to create authentic, transformative travel experiences, we connect travelers with the soul of each destination.\n\n## Our Mission\n\nTo provide exceptional, personalized travel experiences that support local communities and preserve Africa''s natural and cultural heritage.\n\n## Why Choose Us\n\n- **Expert Local Knowledge**: Our team lives and breathes Africa\n- **Personalized Service**: Every trip is tailored to you\n- **Direct Communication**: Chat with us on WhatsApp anytime\n- **Sustainable Tourism**: We give back to communities\n\nContact us on WhatsApp to start planning your adventure!', 'About Us - Altuvera Travel', 'Learn about Altuvera Travel and our mission to share Africa with the world.', true),
 ('Contact Us', 'contact', E'# Contact Us\n\nWe''d love to hear from you! The best way to reach us is via WhatsApp.\n\n## WhatsApp\n\nClick the WhatsApp button on any page to start a conversation. We typically respond within a few hours.\n\n## Email\n\ninfo@altuvera.com\n\n## Office Hours\n\nMonday - Friday: 8am - 6pm (EAT)\nSaturday: 9am - 2pm (EAT)\nSunday: Closed (WhatsApp monitored)\n\nWe look forward to helping you plan your African adventure!', 'Contact Us - Altuvera Travel', 'Get in touch with Altuvera Travel via WhatsApp or email.', true),

@@ -1,29 +1,40 @@
+// controllers/countriesController.js
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES CONTROLLER v5.4
+ * COUNTRIES CONTROLLER v6.0
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- * Fixes in this version:
+ * Full support for all country fields returned by the API:
  *
- *  1. ensureCountriesSchema() — exported so server.js can call it at boot.
- *     Creates the table if it does not exist; safe to call multiple times.
+ *   Core identity   : name, slug, official_name, demonym, motto, tagline, flag,
+ *                     flag_url, continent, region, sub_region, capital
  *
- *  2. Array serialisation — the root cause of "malformed array literal":
- *       • TEXT[] columns  (languages, official_languages, highlights, experiences,
- *                          travel_tips, neighboring_countries, images)
- *         → always sent as a native JS array; pg driver converts to TEXT[]
- *       • JSONB columns   (hero_images, activities, faqs, extra_info, seasons,
- *                          geography, wildlife, cuisine)
- *         → always JSON.stringify'd
- *       • The old code received '["df"]' (a JSON string from the client) and
- *         passed it straight to pg for a TEXT[] column — pg rejected it.
- *         Now we always parse first, then decide how to send.
+ *   Descriptions    : description, full_description, short_description,
+ *                     short_notes, best_time_to_visit
  *
- *  3. VERIFIED_COLUMNS cache is reset when ensureCountriesSchema() runs so
- *     newly added columns are picked up.
+ *   Nested JSONB    : geography, wildlife, cuisine, climate_detail,
+ *                     key_facts, government, practical_info, extra_info,
+ *                     hero_images (array of objects), activities, faqs, seasons
  *
- *  4. getWritableColumns() now also reads pg column types so we can decide
- *     TEXT[] vs JSONB automatically instead of relying on a hard-coded set.
+ *   Flat TEXT[]     : languages, official_languages, highlights, experiences,
+ *                     travel_tips, neighboring_countries, images
+ *
+ *   Media           : image_url, cover_image_url, hero_image, flag_url,
+ *                     gallery (JSONB array of objects)
+ *
+ *   Numeric / stats : population, area, area_sq_km, latitude, longitude,
+ *                     urban_population, literacy_rate, life_expectancy,
+ *                     median_age, view_count, destination_count
+ *
+ *   Flags           : is_active, is_featured
+ *
+ * Key design decisions:
+ *
+ *  • JSONB_FIELDS  — always JSON.stringify'd before passing to pg
+ *  • ARRAY_FIELDS  — always passed as native JS arrays (TEXT[])
+ *  • prepareValue() is the single point that enforces this
+ *  • getWritableColumns() introspects the live schema and caches the result
+ *  • ensureCountriesSchema() is exported for server.js boot-time use
  */
 
 'use strict'
@@ -39,7 +50,7 @@ const {
    TINY HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Clamp an integer between min and max, returning def if not finite. */
+/** Clamp an integer; return def when the value is not finite. */
 const safeInt = (v, def = 0, min = 0, max = 99_999) => {
   const n = parseInt(v, 10)
   return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
@@ -76,13 +87,13 @@ const toSlug = (str = '') =>
 /**
  * Parse a value that might be:
  *   • Already a JS array / object  → return as-is
- *   • A JSON string like '["a","b"]' → parse and return the array
- *   • A plain string like "hello"    → return as-is (scalar)
- *   • null / undefined               → return null
+ *   • A JSON string '["a","b"]'    → parse and return the array
+ *   • A plain scalar string        → return as-is
+ *   • null / undefined             → return null
  */
 const parseIfJsonString = (val) => {
   if (val === null || val === undefined) return null
-  if (typeof val !== 'string')          return val   // already a JS value
+  if (typeof val !== 'string')          return val
   const trimmed = val.trim()
   if (trimmed.startsWith('[') || trimmed.startsWith('{')) {
     try { return JSON.parse(trimmed) } catch { /* fall through */ }
@@ -90,73 +101,124 @@ const parseIfJsonString = (val) => {
   return val
 }
 
-/* ─── Column-type registry — populated by getWritableColumns() ─────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   FIELD TYPE REGISTRY
+═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * JSONB columns: value must be JSON.stringify'd before passing to pg.
- * Everything else that is an array is TEXT[] and must be a native JS array.
+ * JSONB columns — value is JSON.stringify'd before the pg call.
+ * These hold structured objects / arrays-of-objects.
  */
 const JSONB_FIELDS = new Set([
-  'hero_images', 'activities', 'faqs', 'extra_info',
-  'seasons', 'geography', 'wildlife', 'cuisine',
+  // New rich fields
+  'geography',       // { terrain, highest_point, lakes[], forests[], volcanoes[] }
+  'wildlife',        // { primates[], big_five[], birds[] }
+  'cuisine',         // { famous_dishes[], staples[], beverages[] }
+  'climate_detail',  // { best_time, seasons: { 'Dry Season': {...}, ... } }
+  'key_facts',       // { urban_population, literacy_rate, life_expectancy }
+  'government',      // { type }
+  'practical_info',  // { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
+  'extra_info',      // { driving_side, water_safety, ... }
+  // Legacy / existing
+  'hero_images',     // array of { url, caption } objects
+  'gallery',         // array of { url, caption, source } objects
+  'activities',
+  'faqs',
+  'seasons',
 ])
 
 /**
- * TEXT[] columns: pg expects a native JS array (or null).
- * Do NOT JSON.stringify these — that produces the malformed literal error.
+ * TEXT[] columns — must be passed as a native JS array.
+ * Never JSON.stringify these; pg rejects a stringified array for TEXT[].
  */
 const ARRAY_FIELDS = new Set([
+  'highlights',
+  'experiences',
+  'travel_tips',
+  'neighboring_countries',
+  'images',
+  'languages',
+  'official_languages',
+])
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   WRITABLE COLUMN LIST
+   All columns the controller may write.  Filtered against live schema by
+   getWritableColumns() before any INSERT / UPDATE.
+═══════════════════════════════════════════════════════════════════════════ */
+
+const WRITABLE_COLUMNS = [
+  /* ── identity ─────────────────────────────────────────────────────── */
+  'name', 'slug', 'official_name', 'demonym', 'motto', 'tagline',
+  'continent', 'region', 'sub_region', 'capital', 'flag', 'flag_url',
+
+  /* ── descriptions ─────────────────────────────────────────────────── */
+  'description', 'full_description', 'short_description',
+  'short_notes', 'best_time_to_visit',
+
+  /* ── flat contact / travel fields ────────────────────────────────── */
+  'currency', 'currency_symbol', 'language',
+  'timezone', 'climate',
+  'visa_info', 'health_info', 'water_safety',
+  'electrical_plug', 'voltage', 'internet_tld',
+  'calling_code', 'driving_side', 'electricity',
+  'government_type',
+
+  /* ── media ────────────────────────────────────────────────────────── */
+  'image_url', 'cover_image_url', 'hero_image',
+
+  /* ── coordinates ──────────────────────────────────────────────────── */
+  'latitude', 'longitude',
+
+  /* ── numeric stats ────────────────────────────────────────────────── */
+  'population', 'area', 'area_sq_km',
+  'urban_population', 'literacy_rate', 'life_expectancy', 'median_age',
+
+  /* ── misc text ────────────────────────────────────────────────────── */
+  'safety_info', 'transport_info', 'food_info',
+  'culture_info', 'wildlife_info', 'geography_info',
+
+  /* ── TEXT[] arrays ────────────────────────────────────────────────── */
   'highlights', 'experiences', 'travel_tips',
   'neighboring_countries', 'images',
   'languages', 'official_languages',
-])
 
-/* ─── Every column the controller might write ───────────────────────────── */
-const WRITABLE_COLUMNS = [
-  // identity
-  'name', 'slug', 'official_name', 'demonym', 'motto', 'tagline',
-  'continent', 'region', 'sub_region',
-  // text descriptions
-  'description', 'full_description', 'short_description', 'short_notes',
-  // images
-  'image_url', 'hero_image', 'flag_url', 'flag', 'cover_image_url', 'hero_images',
-  // extended jsonb
-  'activities', 'faqs', 'extra_info',
-  // location
-  'capital', 'latitude', 'longitude',
-  // facts
-  'currency', 'currency_symbol', 'language',
-  'timezone', 'climate', 'best_time_to_visit',
-  'visa_info', 'health_info', 'water_safety',
-  'electrical_plug', 'voltage', 'internet_tld',
-  'calling_code', 'driving_side', 'electricity', 'government_type',
-  // stats
-  'population', 'area_sq_km', 'area',
-  'urban_population', 'literacy_rate', 'life_expectancy', 'median_age',
-  // scalar info fields
-  'safety_info', 'transport_info', 'food_info',
-  'culture_info', 'wildlife_info', 'geography_info',
-  // array / jsonb lists
-  'highlights', 'experiences', 'travel_tips',
-  'neighboring_countries', 'seasons',
-  'wildlife', 'cuisine', 'official_languages', 'languages', 'images',
-  // flags
+  /* ── JSONB (new rich fields) ─────────────────────────────────────── */
+  'geography',
+  'wildlife',
+  'cuisine',
+  'climate_detail',
+  'key_facts',
+  'government',
+  'practical_info',
+  'extra_info',
+
+  /* ── JSONB (legacy) ──────────────────────────────────────────────── */
+  'hero_images',
+  'gallery',
+  'activities',
+  'faqs',
+  'seasons',
+
+  /* ── flags ────────────────────────────────────────────────────────── */
   'is_active', 'is_featured',
-  // seo
+
+  /* ── seo ──────────────────────────────────────────────────────────── */
   'meta_title', 'meta_description',
 ]
 
-/* ─── Lazy-loaded, process-lifetime column cache ────────────────────────── */
+/* ─── Column cache ───────────────────────────────────────────────────────── */
 
-/** null = not loaded yet */
-let VERIFIED_COLUMNS  = null
-/** Map<columnName, pgDataType> — e.g. 'text[]', 'jsonb', 'text', 'integer' */
-let COLUMN_TYPE_MAP   = null
+/** null = not yet loaded */
+let VERIFIED_COLUMNS = null
+
+/** Map<columnName, { data_type, udt_name }> */
+let COLUMN_TYPE_MAP  = null
 
 /**
- * Returns only the WRITABLE_COLUMNS that actually exist in the DB.
- * Also populates COLUMN_TYPE_MAP for type-aware serialisation.
- * Result is cached after the first call.
+ * Returns the subset of WRITABLE_COLUMNS that actually exist in the DB.
+ * Also builds COLUMN_TYPE_MAP for runtime type-aware serialisation.
+ * Result is cached for the process lifetime (reset by ensureCountriesSchema).
  */
 const getWritableColumns = async () => {
   if (VERIFIED_COLUMNS) return VERIFIED_COLUMNS
@@ -169,11 +231,10 @@ const getWritableColumns = async () => {
          AND table_schema = 'public'`,
     )
 
-    const existing    = new Set(rows.map(r => r.column_name))
-    COLUMN_TYPE_MAP   = {}
+    const existing  = new Set(rows.map(r => r.column_name))
+    COLUMN_TYPE_MAP = {}
+
     for (const r of rows) {
-      // data_type is e.g. 'ARRAY', 'jsonb', 'text', 'integer'
-      // udt_name  is e.g. '_text' (TEXT[]), 'jsonb', 'text', 'int4'
       COLUMN_TYPE_MAP[r.column_name] = {
         data_type: r.data_type.toLowerCase(),
         udt_name:  r.udt_name.toLowerCase(),
@@ -195,52 +256,53 @@ const getWritableColumns = async () => {
   return VERIFIED_COLUMNS
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   VALUE SERIALISER
+═══════════════════════════════════════════════════════════════════════════ */
+
 /**
- * Prepare a value for a pg parameter based on the column's actual DB type.
+ * Prepare a value for a pg parameter based on the column's DB type.
  *
- *  JSONB column         → JSON.stringify (never pass a raw JS object)
- *  ARRAY column (TEXT[])→ ensure it's a native JS array (parse JSON string if needed)
- *  Everything else      → pass through as-is
- *
- * This is the single place where the "malformed array literal" was produced:
- * a string '["df"]' was passed directly as a pg parameter for a TEXT[] column.
+ *  JSONB  → JSON.stringify (raw JS objects / arrays must never go directly to pg)
+ *  ARRAY  → native JS array  (parse JSON strings first; pg TEXT[] rejects strings)
+ *  Scalar → pass through
  */
 const prepareValue = (col, val) => {
   if (val === null || val === undefined) return null
 
-  // ── JSONB ──────────────────────────────────────────────────────────────
-  if (JSONB_FIELDS.has(col)) {
-    // Also check live type map in case a field was added to the DB as jsonb
-    const typeInfo = COLUMN_TYPE_MAP?.[col]
-    const isJsonb  = typeInfo?.data_type === 'jsonb' || typeInfo?.udt_name === 'jsonb'
+  /* ── JSONB ──────────────────────────────────────────────────────────── */
+  const typeInfo = COLUMN_TYPE_MAP?.[col]
+  const isJsonb  =
+    JSONB_FIELDS.has(col)                        ||
+    typeInfo?.data_type === 'jsonb'              ||
+    typeInfo?.udt_name  === 'jsonb'
 
-    if (JSONB_FIELDS.has(col) || isJsonb) {
-      const parsed = parseIfJsonString(val)
-      try { return JSON.stringify(parsed) } catch { return null }
-    }
+  if (isJsonb) {
+    const parsed = parseIfJsonString(val)
+    try { return JSON.stringify(parsed) } catch { return null }
   }
 
-  // ── TEXT[] / ARRAY ─────────────────────────────────────────────────────
-  const typeInfo = COLUMN_TYPE_MAP?.[col]
-  const isArray  =
-    ARRAY_FIELDS.has(col) ||
-    typeInfo?.data_type === 'array' ||
-    (typeInfo?.udt_name || '').startsWith('_')   // pg udt_name for arrays starts with _
+  /* ── TEXT[] / ARRAY ─────────────────────────────────────────────────── */
+  const isArray =
+    ARRAY_FIELDS.has(col)                        ||
+    typeInfo?.data_type === 'array'              ||
+    (typeInfo?.udt_name ?? '').startsWith('_')   // pg udt_name for arrays starts with _
 
   if (isArray) {
     const parsed = parseIfJsonString(val)
-    // Must be a native JS array for pg TEXT[] binding
     if (Array.isArray(parsed)) return parsed
-    // Scalar string → wrap in array so the schema doesn't reject it
     if (typeof parsed === 'string' && parsed.trim() !== '') return [parsed]
     return null
   }
 
-  // ── Scalar ─────────────────────────────────────────────────────────────
+  /* ── Scalar ─────────────────────────────────────────────────────────── */
   return val
 }
 
-/* ─── Shared SELECT fragment ────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   SHARED SQL FRAGMENTS
+═══════════════════════════════════════════════════════════════════════════ */
+
 const COUNTRY_SELECT = `
   SELECT
     c.*,
@@ -269,143 +331,193 @@ const DEST_CARD_SELECT = `
 `
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   SCHEMA BOOTSTRAP  — exported so server.js can call it at boot time
-   Fixes: "ReferenceError: ensureCountriesSchema is not defined"
+   SCHEMA BOOTSTRAP
+   Exported so server.js can call it once at startup.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.ensureCountriesSchema = async () => {
   try {
+    /* ── Base table ─────────────────────────────────────────────────── */
     await query(`
       CREATE TABLE IF NOT EXISTS countries (
-        id                SERIAL PRIMARY KEY,
-        name              TEXT NOT NULL,
-        slug              TEXT NOT NULL UNIQUE,
-        official_name     TEXT,
-        demonym           TEXT,
-        motto             TEXT,
-        tagline           TEXT,
-        continent         TEXT,
-        region            TEXT,
-        sub_region        TEXT,
+        id                  SERIAL PRIMARY KEY,
 
-        description       TEXT,
-        full_description  TEXT,
-        short_description TEXT,
-        short_notes       TEXT,
+        -- Identity
+        name                TEXT NOT NULL,
+        slug                TEXT NOT NULL UNIQUE,
+        official_name       TEXT,
+        demonym             TEXT,
+        motto               TEXT,
+        tagline             TEXT,
+        flag                TEXT,
+        flag_url            TEXT,
+        continent           TEXT,
+        region              TEXT,
+        sub_region          TEXT,
+        capital             TEXT,
 
-        image_url         TEXT,
-        hero_image        TEXT,
-        flag_url          TEXT,
-        flag              TEXT,
-        cover_image_url   TEXT,
-        hero_images       JSONB,
+        -- Descriptions
+        description         TEXT,
+        full_description    TEXT,
+        short_description   TEXT,
+        short_notes         TEXT,
+        best_time_to_visit  TEXT,
 
-        capital           TEXT,
-        latitude          NUMERIC(10, 7),
-        longitude         NUMERIC(10, 7),
+        -- Practical travel (flat)
+        currency            TEXT,
+        currency_symbol     TEXT,
+        language            TEXT,
+        timezone            TEXT,
+        climate             TEXT,
+        visa_info           TEXT,
+        health_info         TEXT,
+        water_safety        TEXT,
+        electrical_plug     TEXT,
+        voltage             TEXT,
+        internet_tld        TEXT,
+        calling_code        TEXT,
+        driving_side        TEXT,
+        electricity         TEXT,
+        government_type     TEXT,
 
-        currency          TEXT,
-        currency_symbol   TEXT,
-        language          TEXT,
-        timezone          TEXT,
-        climate           TEXT,
-        best_time_to_visit TEXT,
-        visa_info         TEXT,
-        health_info       TEXT,
-        water_safety      TEXT,
-        electrical_plug   TEXT,
-        voltage           TEXT,
-        internet_tld      TEXT,
-        calling_code      TEXT,
-        driving_side      TEXT,
-        electricity       TEXT,
-        government_type   TEXT,
+        -- Media
+        image_url           TEXT,
+        cover_image_url     TEXT,
+        hero_image          TEXT,
 
-        population        BIGINT,
-        area              NUMERIC(15, 2),
-        area_sq_km        NUMERIC(15, 2),
-        urban_population  BIGINT,
-        literacy_rate     NUMERIC(5, 2),
-        life_expectancy   NUMERIC(5, 2),
-        median_age        NUMERIC(5, 2),
+        -- Coordinates
+        latitude            NUMERIC(10, 7),
+        longitude           NUMERIC(10, 7),
 
-        safety_info       TEXT,
-        transport_info    TEXT,
-        food_info         TEXT,
-        culture_info      TEXT,
-        wildlife_info     TEXT,
-        geography_info    TEXT,
+        -- Numeric stats
+        population          BIGINT,
+        area                NUMERIC(15, 2),
+        area_sq_km          NUMERIC(15, 2),
+        urban_population    BIGINT,
+        literacy_rate       NUMERIC(5, 2),
+        life_expectancy     NUMERIC(5, 2),
+        median_age          NUMERIC(5, 2),
 
-        highlights        TEXT[],
-        experiences       TEXT[],
-        travel_tips       TEXT[],
+        -- Misc text info
+        safety_info         TEXT,
+        transport_info      TEXT,
+        food_info           TEXT,
+        culture_info        TEXT,
+        wildlife_info       TEXT,
+        geography_info      TEXT,
+
+        -- TEXT[] arrays
+        highlights          TEXT[],
+        experiences         TEXT[],
+        travel_tips         TEXT[],
         neighboring_countries TEXT[],
-        images            TEXT[],
-        official_languages TEXT[],
-        languages         TEXT[],
+        images              TEXT[],
+        languages           TEXT[],
+        official_languages  TEXT[],
 
-        activities        JSONB,
-        faqs              JSONB,
-        extra_info        JSONB,
-        seasons           JSONB,
-        geography         JSONB,
-        wildlife          JSONB,
-        cuisine           JSONB,
+        -- JSONB — rich structured data
+        geography           JSONB,   -- { terrain, highest_point, lakes[], forests[], volcanoes[] }
+        wildlife            JSONB,   -- { primates[], big_five[], birds[] }
+        cuisine             JSONB,   -- { famous_dishes[], staples[], beverages[] }
+        climate_detail      JSONB,   -- { best_time, seasons: { 'Dry Season': {months,note}, ... } }
+        key_facts           JSONB,   -- { urban_population, literacy_rate, life_expectancy }
+        government          JSONB,   -- { type }
+        practical_info      JSONB,   -- { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
+        extra_info          JSONB,   -- { driving_side, water_safety, ... }
+        hero_images         JSONB,   -- [{ url, caption }]
+        gallery             JSONB,   -- [{ url, caption, source }]
+        activities          JSONB,
+        faqs                JSONB,
+        seasons             JSONB,
 
-        is_active         BOOLEAN NOT NULL DEFAULT true,
-        is_featured       BOOLEAN NOT NULL DEFAULT false,
+        -- Flags
+        is_active           BOOLEAN NOT NULL DEFAULT true,
+        is_featured         BOOLEAN NOT NULL DEFAULT false,
 
-        meta_title        TEXT,
-        meta_description  TEXT,
+        -- SEO
+        meta_title          TEXT,
+        meta_description    TEXT,
 
-        view_count        INTEGER NOT NULL DEFAULT 0,
+        -- Counters
+        view_count          INTEGER NOT NULL DEFAULT 0,
 
-        created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        -- Timestamps
+        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `)
 
-    // Add any columns that might be missing from older installs
+    /* ── Migrations: add columns that may be missing in older installs ── */
     const alterations = [
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS full_description TEXT`,
+      // Identity
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym           TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto             TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag              TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag_url          TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS sub_region        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS capital           TEXT`,
+
+      // Descriptions
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS full_description  TEXT`,
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_description TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_notes TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_image TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS sub_region TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_images JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS activities JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS faqs JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS extra_info JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS seasons JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cuisine JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS water_safety TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electrical_plug TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS voltage TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS internet_tld TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS driving_side TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electricity TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government_type TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS area_sq_km NUMERIC(15,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS urban_population BIGINT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS literacy_rate NUMERIC(5,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS life_expectancy NUMERIC(5,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS median_age NUMERIC(5,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS safety_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS transport_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS food_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS culture_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography_info TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS images TEXT[]`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_notes       TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS best_time_to_visit TEXT`,
+
+      // Media
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cover_image_url  TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_image        TEXT`,
+
+      // Practical flat
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS water_safety      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electrical_plug   TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS voltage           TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS internet_tld      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS calling_code      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS driving_side      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electricity       TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government_type   TEXT`,
+
+      // Numeric
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS area_sq_km        NUMERIC(15,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS urban_population   BIGINT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS literacy_rate      NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS life_expectancy    NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS median_age         NUMERIC(5,2)`,
+
+      // Misc text
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS safety_info        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS transport_info     TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS food_info          TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS culture_info       TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife_info      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography_info     TEXT`,
+
+      // TEXT[]
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS images             TEXT[]`,
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS official_languages TEXT[]`,
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS neighboring_countries TEXT[]`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_title TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_description TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0`,
+
+      // JSONB — new rich fields
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography          JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife           JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cuisine            JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS climate_detail     JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS key_facts          JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government         JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS practical_info     JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS extra_info         JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS gallery            JSONB`,
+
+      // JSONB — legacy
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_images        JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS activities         JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS faqs               JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS seasons            JSONB`,
+
+      // Counters / SEO
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS view_count         INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_title         TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_description   TEXT`,
     ]
 
     for (const sql of alterations) {
@@ -414,11 +526,26 @@ exports.ensureCountriesSchema = async () => {
       )
     }
 
-    // Reset column cache so getWritableColumns() re-reads after schema changes
+    /* ── Indexes ─────────────────────────────────────────────────────── */
+    const indexes = [
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug        ON countries (slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_continent   ON countries (continent)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_is_active   ON countries (is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_is_featured ON countries (is_featured)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_name        ON countries (name)`,
+    ]
+
+    for (const sql of indexes) {
+      await query(sql).catch(err =>
+        logger.warn('[Countries] INDEX skipped:', err.message),
+      )
+    }
+
+    /* ── Reset column cache so getWritableColumns() re-reads ────────── */
     VERIFIED_COLUMNS = null
     COLUMN_TYPE_MAP  = null
 
-    // Pre-warm the cache
+    // Pre-warm cache
     await getWritableColumns()
 
     logger.info('[Countries] Schema ready ✅')
@@ -448,7 +575,7 @@ exports.getAll = async (req, res, next) => {
     } = req.query
 
     const ALLOWED_SORT = new Set([
-      'name', 'continent', 'created_at', 'updated_at', 'view_count',
+      'name', 'continent', 'created_at', 'updated_at', 'view_count', 'population',
     ])
 
     const params = []
@@ -477,7 +604,8 @@ exports.getAll = async (req, res, next) => {
         c.name        ILIKE $${pi} OR
         c.description ILIKE $${pi} OR
         c.continent   ILIKE $${pi} OR
-        c.tagline     ILIKE $${pi}
+        c.tagline     ILIKE $${pi} OR
+        c.capital     ILIKE $${pi}
       )`)
       params.push(`%${search.trim()}%`)
       pi++
@@ -487,7 +615,7 @@ exports.getAll = async (req, res, next) => {
     const sortCol = ALLOWED_SORT.has(sortBy) ? sortBy : 'name'
     const sortDir = order.toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
     const lim     = safeInt(limit, 50, 1, 200)
-    const pg      = safeInt(page, 1, 1, 9_999)
+    const pg      = safeInt(page,   1, 1, 9_999)
     const offset  = (pg - 1) * lim
 
     const [countRes, dataRes] = await Promise.all([
@@ -593,7 +721,7 @@ exports.getOne = async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
 
-    // fire-and-forget view bump
+    // Fire-and-forget view bump
     query(
       'UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
       [country.id],
@@ -706,9 +834,9 @@ exports.getByContinent = async (req, res, next) => {
       [`%${continent}%`],
     )
     return res.json({
-      success: true,
-      data:    rows.map(transformCountryCard),
-      count:   rows.length,
+      success:   true,
+      data:      rows.map(transformCountryCard),
+      count:     rows.length,
       continent,
     })
   } catch (err) {
@@ -758,8 +886,10 @@ exports.getStats = async (req, res, next) => {
       success: true,
       data: {
         overview: overview[0] ?? {
-          total_countries: 0, active_countries: 0,
-          featured_countries: 0, continents: 0,
+          total_countries:    0,
+          active_countries:   0,
+          featured_countries: 0,
+          continents:         0,
         },
         by_continent:  byCont,
         top_countries: topCountries,
@@ -773,11 +903,6 @@ exports.getStats = async (req, res, next) => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    CREATE   POST /api/countries
-   ─────────────────────────────────────────────────────────────────────────
-   Fixes:
-   • Only writes columns that exist in DB (via getWritableColumns)
-   • Correctly serialises TEXT[] vs JSONB via prepareValue()
-   • Parses JSON strings from client before deciding how to bind
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.create = async (req, res, next) => {
@@ -785,7 +910,7 @@ exports.create = async (req, res, next) => {
     const body    = req.body || {}
     const columns = await getWritableColumns()
 
-    /* ── 1. Required fields ───────────────────────────────────────────── */
+    /* ── Required ────────────────────────────────────────────────────── */
     const name = String(body.name || '').trim()
     if (!name) {
       return res.status(400).json({ success: false, error: 'Country name is required' })
@@ -793,7 +918,7 @@ exports.create = async (req, res, next) => {
 
     const slug = String(body.slug || '').trim() || toSlug(name)
 
-    /* ── 2. Slug uniqueness check ─────────────────────────────────────── */
+    /* ── Slug uniqueness ─────────────────────────────────────────────── */
     const existing = await safeQuery(
       'SELECT id FROM countries WHERE slug = $1',
       [slug],
@@ -806,13 +931,29 @@ exports.create = async (req, res, next) => {
       })
     }
 
-    /* ── 3. Build INSERT ──────────────────────────────────────────────── */
+    /* ── Handle composite / nested fields sent from the admin form ───── */
+    //
+    // The admin sends e.g.:
+    //   body.geography      = { terrain, highest_point, lakes, forests, volcanoes }
+    //   body.wildlife       = { primates, big_five, birds }
+    //   body.cuisine        = { famous_dishes, staples, beverages }
+    //   body.climate_detail = { best_time, seasons: { 'Dry Season': {...}, ... } }
+    //   body.key_facts      = { urban_population, literacy_rate, life_expectancy }
+    //   body.government     = { type }
+    //   body.practical_info = { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
+    //   body.extra_info     = { driving_side, water_safety }
+    //   body.hero_images    = [{ url, caption }]
+    //   body.gallery        = [{ url, caption, source }]
+    //
+    // prepareValue() will JSON.stringify all JSONB_FIELDS automatically.
+
+    /* ── Build INSERT ────────────────────────────────────────────────── */
     const colNames = ['name', 'slug']
     const values   = [name, slug]
 
     for (const col of columns) {
-      if (col === 'name' || col === 'slug') continue   // already added
-      if (body[col] === undefined)          continue   // not sent by client
+      if (col === 'name' || col === 'slug') continue
+      if (body[col] === undefined)          continue
 
       const prepared = prepareValue(col, body[col])
       if (prepared === null || prepared === undefined) continue
@@ -821,7 +962,6 @@ exports.create = async (req, res, next) => {
       values.push(prepared)
     }
 
-    // timestamps — NOW() literals, not parameters
     colNames.push('created_at', 'updated_at')
     const placeholders = values.map((_, i) => `$${i + 1}`)
     placeholders.push('NOW()', 'NOW()')
@@ -834,7 +974,7 @@ exports.create = async (req, res, next) => {
 
     logger.info('[Countries] create SQL preview:', {
       cols: colNames,
-      sql:  sql.slice(0, 300),
+      sql:  sql.slice(0, 400),
     })
 
     const { rows } = await query(sql, values)
@@ -875,7 +1015,7 @@ exports.update = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Name cannot be empty' })
     }
 
-    /* ── Slug uniqueness on update ─────────────────────────────────────── */
+    /* ── Slug uniqueness on update ───────────────────────────────────── */
     if (body.slug) {
       const conflict = await safeQuery(
         'SELECT id FROM countries WHERE slug = $1 AND id != $2',
@@ -890,7 +1030,7 @@ exports.update = async (req, res, next) => {
       }
     }
 
-    /* ── Build SET clause ─────────────────────────────────────────────── */
+    /* ── Build SET clause ────────────────────────────────────────────── */
     const setClauses = []
     const values     = []
 
@@ -1010,7 +1150,7 @@ exports.remove = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Invalid country ID' })
     }
 
-    /* ── 1. Existence check ───────────────────────────────────────────── */
+    /* ── Existence check ─────────────────────────────────────────────── */
     const existRows = await safeQuery(
       'SELECT id, name FROM countries WHERE id = $1',
       [id],
@@ -1020,20 +1160,20 @@ exports.remove = async (req, res, next) => {
     }
     const countryName = existRows[0].name
 
-    /* ── 2. Count linked destinations ────────────────────────────────── */
+    /* ── Count linked destinations ───────────────────────────────────── */
     const linkedRows = await safeQuery(
       'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
       [id],
     )
     const destCount = parseInt(linkedRows[0]?.count ?? 0, 10)
 
-    /* ── 3. Resolve force flag ───────────────────────────────────────── */
+    /* ── Resolve force flag ──────────────────────────────────────────── */
     const force =
       req.query.force === 'true'                             ||
       req.body?.force === true                               ||
       String(req.body?.force || '').toLowerCase() === 'true'
 
-    /* ── 3a. Guard: linked destinations, no force ────────────────────── */
+    /* ── Guard: linked destinations, no force ────────────────────────── */
     if (destCount > 0 && !force) {
       return res.status(409).json({
         success:           false,
@@ -1046,7 +1186,7 @@ exports.remove = async (req, res, next) => {
       })
     }
 
-    /* ── 3b. Cascade delete ──────────────────────────────────────────── */
+    /* ── Cascade delete ──────────────────────────────────────────────── */
     let removedBookings     = 0
     let removedDestinations = 0
 
@@ -1079,7 +1219,7 @@ exports.remove = async (req, res, next) => {
       }
     }
 
-    /* ── 4. Delete the country ───────────────────────────────────────── */
+    /* ── Delete the country ──────────────────────────────────────────── */
     const { rows } = await query(
       'DELETE FROM countries WHERE id = $1 RETURNING id, name',
       [id],
@@ -1160,7 +1300,9 @@ exports.bulkDelete = async (req, res, next) => {
             await query(
               'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[])',
               [destIds],
-            ).catch(err => logger.warn(`[Countries] bulkDelete bookings id=${id}:`, err.message))
+            ).catch(err =>
+              logger.warn(`[Countries] bulkDelete bookings id=${id}:`, err.message),
+            )
             await query('DELETE FROM destinations WHERE country_id = $1', [id])
           }
         }

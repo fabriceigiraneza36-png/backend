@@ -36,6 +36,9 @@ const jwt         = require('jsonwebtoken')
 const { v4: uuidv4 } = require('uuid')
 const { Server }  = require('socket.io')
 
+// ── Push (VAPID) ──────────────────────────────────────────────────────────────
+const pushUtility = require('./utils/push')
+
 // ── Internal DB ───────────────────────────────────────────────────────────────
 const {
   query,
@@ -116,6 +119,7 @@ const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
 const notificationsRouter       = require('./routes/notifications')
 const maintenanceRouter         = require('./routes/maintenance')   // ← v7.1
+const pushRouter                = require('./routes/push')            // ← push
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -811,6 +815,7 @@ app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
 app.use('/api/maintenance',          maintenanceRouter)   // ← v7.1 ✅
+app.use('/api/push',                pushRouter)           // ← push notifications
 
 // ── Dev-only test routes ──────────────────────────────────────────────────────
 if (!IS_PROD) {
@@ -1824,6 +1829,29 @@ async function initializeServer () {
       }
     }
 
+    // ── Push subscriptions table ─────────────────────────────────────────────
+    try {
+      await query(`
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+          id          SERIAL PRIMARY KEY,
+          admin_id    INTEGER DEFAULT 0,
+          admin_email VARCHAR(255),
+          endpoint    TEXT NOT NULL,
+          p256dh      TEXT NOT NULL,
+          auth        TEXT NOT NULL,
+          user_agent  TEXT,
+          created_at  TIMESTAMP DEFAULT NOW(),
+          updated_at  TIMESTAMP DEFAULT NOW()
+        )
+      `)
+      logger.info('✅ Push Subscriptions table ready')
+    } catch (err) {
+      logger.warn('⚠️  Push Subscriptions table (non-fatal):', err.message)
+    }
+
+    // ── Initialise Web Push (VAPID) ─────────────────────────────────────────
+    pushUtility.initPush()
+
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
@@ -1839,6 +1867,7 @@ async function initializeServer () {
         logger.info(`  Theme        : green-white (#16a34a) 🟢`)
         logger.info(`  DNS          : ipv4first ✅`)
         logger.info(`  Maintenance  : /api/maintenance ✅`)
+        logger.info(`  Push Notifs  : /api/push ✅`)
         logger.info(`  Socket.io    : polling → websocket ✅`)
         logger.info(`  Test routes  : ${IS_PROD ? 'disabled (production)' : '/api/test/notifications ✅'}`)
         logger.info(`${line}\n`)

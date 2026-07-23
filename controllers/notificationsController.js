@@ -22,6 +22,12 @@
 const { query }  = require("../config/db");
 const logger     = require("../utils/logger");
 
+/* ── Push (optional) ──────────────────────────────────────────────────────── */
+let pushUtility = null
+try {
+  pushUtility = require("../utils/push")
+} catch { /* web-push not installed */ }
+
 /* ── Email (optional) ──────────────────────────────────────────────────────── */
 let sendEmail = null;
 try {
@@ -325,6 +331,35 @@ const createNotificationInternal = async ({
   // 2) Realtime
   emitNotification(req, notif);
 
+  // 2b) Push notification (fire-and-forget)
+  if (
+    pushUtility &&
+    (targetScope === "admin" || targetRole === "admin" || targetRole === "manager")
+  ) {
+    ;(async () => {
+      try {
+        const { rows } = await query(
+          `SELECT endpoint, p256dh, auth FROM push_subscriptions`
+        )
+        if (rows.length) {
+          await pushUtility.sendPushToSubscriptions(rows, {
+            title: title || "Altuvera Admin",
+            body: message || "",
+            icon: "/favicon.ico",
+            badge: "/favicon.ico",
+            data: {
+              url: actionUrl || "/notifications",
+              id: notif.id,
+            },
+            requireInteraction: priority === "high",
+          })
+        }
+      } catch {
+        /* non-fatal */
+      }
+    })()
+  }
+
   // 3) Email the user (only for individual user notifications)
   if (!skipUserEmail && targetScope === "individual" && userEmail) {
     sendUserEmail(notif, userEmail, actor?.name || actor?.fullName).catch(() => {});
@@ -453,6 +488,27 @@ const broadcastNotification = async ({
     targetScope, targetRole, actionUrl, actionLabel, priority, metadata,
   });
   emitNotification(null, notif);
+
+  if (pushUtility && targetScope === "admin") {
+    ;(async () => {
+      try {
+        const { rows } = await query(
+          `SELECT endpoint, p256dh, auth FROM push_subscriptions`
+        )
+        if (rows.length) {
+          await pushUtility.sendPushToSubscriptions(rows, {
+            title: title || "Altuvera Admin",
+            body: message || "",
+            icon: "/favicon.ico",
+            data: { url: actionUrl || "/notifications", id: notif.id },
+          })
+        }
+      } catch {
+        /* non-fatal */
+      }
+    })()
+  }
+
   return notif;
 };
 

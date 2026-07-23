@@ -57,6 +57,10 @@ const CATEGORY_TABLES = {
     'messages',
     'conversations',
   ],
+  comments: [
+    'destination_comments',
+    'country_comments',
+  ],
   posts: [
     'post_comments',
     'posts',

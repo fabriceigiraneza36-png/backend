@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * SEED DATA - FAQs, Services, Tips, Virtual Tours
+ * SEED DATA - FAQs, Services, Tips
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -152,27 +152,6 @@ async function seedTips() {
   console.log("✅ Travel Tips seeded successfully!");
 }
 
-async function seedVirtualTours() {
-  console.log("🎬 Seeding Virtual Tours...");
-  for (const tour of virtualToursData) {
-    try {
-      await query(
-        `INSERT INTO virtual_tours (title, slug, description, destination_id, video_url, thumbnail_url, duration, view_count, is_featured, is_active, sort_order)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-         ON CONFLICT (slug) DO UPDATE SET
-           title = EXCLUDED.title,
-           description = EXCLUDED.description,
-           view_count = EXCLUDED.view_count,
-           is_featured = EXCLUDED.is_featured`,
-        [tour.title, tour.slug, tour.description, tour.destination_id, tour.video_url, tour.thumbnail_url, tour.duration, tour.view_count, tour.is_featured, tour.is_active, tour.sort_order]
-      );
-    } catch (err) {
-      console.log(`  ⚠ Virtual tour error: ${tour.slug}`);
-    }
-  }
-  console.log("✅ Virtual Tours seeded successfully!");
-}
-
 async function seedContacts() {
   console.log("📞 Seeding Test Contact Messages...");
   for (const contact of contactData) {
@@ -253,7 +232,6 @@ async function main() {
     console.log(`   - ${faqsData.length} FAQs`);
     console.log(`   - ${servicesData.length} Services`);
     console.log(`   - ${tipsData.length} Travel Tips`);
-    console.log(`   - ${virtualToursData.length} Virtual Tours`);
     console.log(`   - ${contactData.length} Test Contact Messages`);
     console.log(`   - ${8} Site Settings`);
     

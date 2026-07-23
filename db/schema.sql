@@ -604,26 +604,6 @@ CREATE TRIGGER trg_pages_updated
   BEFORE UPDATE ON pages
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
--- 14. Virtual Tours
-DROP TABLE IF EXISTS virtual_tours CASCADE;
-CREATE TABLE virtual_tours (
-  id              SERIAL PRIMARY KEY,
-  title           VARCHAR(255) NOT NULL,
-  slug            VARCHAR(255) UNIQUE NOT NULL,
-  description     TEXT,
-  destination_id  INTEGER REFERENCES destinations(id) ON DELETE SET NULL,
-  video_url       VARCHAR(500),
-  thumbnail_url   VARCHAR(500),
-  panorama_url    VARCHAR(500),
-  duration        VARCHAR(50),
-  view_count      INTEGER DEFAULT 0,
-  is_featured     BOOLEAN DEFAULT false,
-  is_active       BOOLEAN DEFAULT true,
-  sort_order      INTEGER DEFAULT 0,
-  created_at      TIMESTAMP DEFAULT NOW(),
-  updated_at      TIMESTAMP DEFAULT NOW()
-);
-
 CREATE TRIGGER trg_virtual_tours_updated
   BEFORE UPDATE ON virtual_tours
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
