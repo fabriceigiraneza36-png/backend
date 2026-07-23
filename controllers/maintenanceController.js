@@ -1,145 +1,255 @@
 // controllers/maintenanceController.js
 // ═══════════════════════════════════════════════════════════════════════════════
-// Maintenance / Data Cleanup Utility
+// Maintenance / Data Cleanup Utility v2.0
 // -----------------------------------------------------------------------------
-// Provides admin-only endpoints to purge all records for a given content
-// category.  Every destructive action requires an explicit confirmation token
-// in the request body to prevent accidental clicks.
+// Admin-only endpoints to:
+//   GET  /api/maintenance/categories  — record counts per table per category
+//   POST /api/maintenance/purge/:cat  — delete all records (requires confirm)
+//
+// Every table count is wrapped in its own try/catch so a missing table
+// never crashes the whole endpoint.
 // ═══════════════════════════════════════════════════════════════════════════════
 
-const { query } = require("../config/db");
-const logger    = require("../utils/logger");
+'use strict'
 
-/*
-  Category → tables (delete order: children before parents to satisfy FK)
-*/
+const { query } = require('../config/db')
+const logger    = require('../utils/logger')
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   CATEGORY → TABLES MAP
+   Delete order within each category: children before parents (FK safety).
+───────────────────────────────────────────────────────────────────────────── */
 const CATEGORY_TABLES = {
   destinations: [
-    "destination_tips",
-    "destination_practical_info",
-    "destination_tags",
-    "destination_reviews",
-    "destination_itineraries",
-    "destination_images",
-    "destinations",
+    'destination_tips',
+    'destination_practical_info',
+    'destination_tags',
+    'destination_reviews',
+    'destination_itineraries',
+    'destination_images',
+    'destinations',
   ],
   countries: [
-    "destinations",
-    "bookings",
-    "countries",
+    'destination_tips',
+    'destination_practical_info',
+    'destination_tags',
+    'destination_reviews',
+    'destination_itineraries',
+    'destination_images',
+    'destinations',
+    'bookings',
+    'countries',
   ],
   bookings: [
-    "package_bookings",
-    "admin_info_requests",
-    "bookings",
+    'package_bookings',
+    'admin_info_requests',
+    'bookings',
   ],
   packages: [
-    "package_chat_preferences",
-    "package_messages",
-    "package_bookings",
-    "admin_info_requests",
-    "packages",
+    'package_chat_preferences',
+    'package_messages',
+    'package_bookings',
+    'admin_info_requests',
+    'packages',
   ],
-  messages: [
-    "typing_indicators",
-    "messages",
-    "conversations",
+  messaging: [
+    'typing_indicators',
+    'messages',
+    'conversations',
   ],
   posts: [
-    "post_comments",
-    "posts",
+    'post_comments',
+    'posts',
   ],
   contact: [
-    "contact_replies",
-    "contact_messages",
+    'contact_replies',
+    'contact_messages',
   ],
-  users:        ["users"],
-  reviews:      ["reviews"],
-  gallery:      ["gallery"],
-  team:         ["team"],
-  testimonials: ["testimonials"],
-  faqs:         ["faqs"],
-  services:     ["services"],
-  tips:         ["tips"],
-  pages:        ["pages"],
-  subscribers:  ["subscribers"],
-  notifications: ["notifications"],
-};
+  users:         ['users'],
+  reviews:       ['reviews'],
+  gallery:       ['gallery'],
+  team:          ['team'],
+  testimonials:  ['testimonials'],
+  faqs:          ['faqs'],
+  services:      ['services'],
+  tips:          ['tips'],
+  pages:         ['pages'],
+  subscribers:   ['subscribers'],
+  notifications: ['notifications'],
+}
 
-const ALL_CATEGORIES = Object.keys(CATEGORY_TABLES);
+const ALL_CATEGORIES = Object.keys(CATEGORY_TABLES)
 
-/* ─── Helpers ────────────────────────────────────────────────────────────── */
+/* ─────────────────────────────────────────────────────────────────────────────
+   HELPERS
+───────────────────────────────────────────────────────────────────────────── */
 
+/**
+ * Returns the row count for a single table.
+ * Returns 0 (never throws) if the table does not exist.
+ */
 const countTable = async (table) => {
-  const { rows } = await query(`SELECT COUNT(*)::INT AS cnt FROM "${table}"`);
-  return rows[0]?.cnt || 0;
-};
+  try {
+    const { rows } = await query(
+      `SELECT COUNT(*)::INT AS cnt FROM "${table}"`,
+    )
+    return rows[0]?.cnt ?? 0
+  } catch {
+    return 0
+  }
+}
 
+/**
+ * Deletes every row from a table and returns how many were removed.
+ * Returns 0 (never throws) if the table does not exist.
+ */
 const deleteFromTable = async (table) => {
-  const { rows } = await query(`DELETE FROM "${table}" RETURNING 1`);
-  return rows.length;
-};
+  try {
+    const { rowCount } = await query(`DELETE FROM "${table}"`)
+    return rowCount ?? 0
+  } catch (err) {
+    logger.warn(`[Maintenance] deleteFromTable skipped "${table}": ${err.message}`)
+    return 0
+  }
+}
 
-/* ─── Controllers ────────────────────────────────────────────────────────── */
-
+/* ─────────────────────────────────────────────────────────────────────────────
+   GET /api/maintenance/categories
+   Returns:
+   {
+     success: true,
+     data: [
+       {
+         category:     "posts",
+         tables:       [{ table: "post_comments", count: 3 }, { table: "posts", count: 7 }],
+         totalRecords: 10,
+       },
+       …
+     ]
+   }
+───────────────────────────────────────────────────────────────────────────── */
 exports.listCategories = async (req, res) => {
   try {
-    const cats = await Promise.all(
-      ALL_CATEGORIES.map(async (cat) => {
-        const tables = CATEGORY_TABLES[cat];
-        const tableStats = await Promise.all(
-          tables.map(async (t) => ({ table: t, count: await countTable(t) }))
-        );
-        const total = tableStats.reduce((s, t) => s + t.count, 0);
-        return { category: cat, tables: tableStats, totalRecords: total };
-      })
-    );
-    res.json({ success: true, data: cats });
-  } catch (err) {
-    logger.error("[Maintenance] listCategories failed:", err.message);
-    res.status(500).json({ success: false, message: err.message });
-  }
-};
+    const data = await Promise.all(
+      ALL_CATEGORIES.map(async (category) => {
+        const tableList = CATEGORY_TABLES[category]
 
+        // Fetch counts for all tables in this category in parallel
+        const tables = await Promise.all(
+          tableList.map(async (table) => ({
+            table,
+            count: await countTable(table),
+          })),
+        )
+
+        // De-duplicate table names that appear more than once
+        // (e.g. "countries" category re-lists destination tables)
+        const seen        = new Set()
+        const uniqueTables = tables.filter(({ table }) => {
+          if (seen.has(table)) return false
+          seen.add(table)
+          return true
+        })
+
+        const totalRecords = uniqueTables.reduce((sum, t) => sum + t.count, 0)
+
+        return { category, tables: uniqueTables, totalRecords }
+      }),
+    )
+
+    return res.json({ success: true, data })
+  } catch (err) {
+    logger.error('[Maintenance] listCategories failed:', err.message)
+    return res.status(500).json({
+      success: false,
+      message: 'Failed to load maintenance categories.',
+    })
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   POST /api/maintenance/purge/:category
+   Body: { confirm: "DELETE_ALL" }
+   Returns:
+   {
+     success: true,
+     message: "Purged 42 records across 2 tables.",
+     category: "posts",
+     results: {
+       post_comments: { before: 35, deleted: 35, after: 0 },
+       posts:         { before:  7, deleted:  7, after: 0 },
+     }
+   }
+───────────────────────────────────────────────────────────────────────────── */
 exports.purgeCategory = async (req, res) => {
   try {
-    const { category } = req.params;
-    const { confirm } = req.body || {};
+    const { category }   = req.params
+    const { confirm }    = req.body || {}
+    const adminId        = req.user?.id
+    const adminEmail     = req.user?.email || 'unknown'
 
+    // ── Validate category ────────────────────────────────────────────────
     if (!CATEGORY_TABLES[category]) {
       return res.status(400).json({
         success: false,
-        message: `Unknown category "${category}". Allowed: ${ALL_CATEGORIES.join(", ")}`,
-      });
+        message: `Unknown category "${category}". Allowed: ${ALL_CATEGORIES.join(', ')}.`,
+      })
     }
 
-    if (confirm !== "DELETE_ALL") {
+    // ── Require explicit confirmation token ──────────────────────────────
+    if (confirm !== 'DELETE_ALL') {
       return res.status(400).json({
         success: false,
-        message: 'Confirmation required. Set body.confirm = "DELETE_ALL" to proceed.',
-      });
+        message: 'Confirmation required. Send { confirm: "DELETE_ALL" } in the request body.',
+      })
     }
 
-    const tables = CATEGORY_TABLES[category];
-    const results = {};
+    const tableList = CATEGORY_TABLES[category]
+    const results   = {}
+    let   totalDeleted = 0
 
-    for (const table of tables) {
-      const before = await countTable(table);
-      const deleted = await deleteFromTable(table);
-      results[table] = { before, deleted, after: before - deleted };
-      logger.info(`[Maintenance] Purged ${deleted} rows from ${table} (category=${category})`);
+    // De-duplicate (same reason as listCategories)
+    const seen        = new Set()
+    const uniqueTables = tableList.filter((t) => {
+      if (seen.has(t)) return false
+      seen.add(t)
+      return true
+    })
+
+    // Delete in defined order (children first)
+    for (const table of uniqueTables) {
+      const before  = await countTable(table)
+      const deleted = await deleteFromTable(table)
+      const after   = await countTable(table)
+
+      results[table] = { before, deleted, after }
+      totalDeleted  += deleted
+
+      logger.info(
+        `[Maintenance] admin=${adminEmail} purged ${deleted} rows from "${table}" ` +
+        `(category=${category})`,
+      )
     }
 
-    const totalDeleted = Object.values(results).reduce((s, r) => s + r.deleted, 0);
+    logger.warn(
+      `[Maintenance] PURGE COMPLETE — category="${category}" ` +
+      `totalDeleted=${totalDeleted} by admin id=${adminId} email=${adminEmail}`,
+    )
 
-    res.json({
+    return res.json({
       success: true,
-      message: `Purged ${totalDeleted} records across ${tables.length} tables.`,
+      message: `Purged ${totalDeleted} records across ${uniqueTables.length} table(s) in "${category}".`,
       category,
       results,
-    });
+    })
   } catch (err) {
-    logger.error(`[Maintenance] purgeCategory ${req.params.category} failed:`, err.message);
-    res.status(500).json({ success: false, message: err.message });
+    logger.error(
+      `[Maintenance] purgeCategory "${req.params?.category}" failed:`,
+      err.message,
+    )
+    return res.status(500).json({
+      success: false,
+      message: 'Purge failed. See server logs for details.',
+    })
   }
-};
+}

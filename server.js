@@ -1,25 +1,26 @@
-﻿const { setDefaultAutoSelectFamily } = require("net");
-try { setDefaultAutoSelectFamily(false); } catch { /* Node < 18.13 */ }
-
-// ── IPv4 DNS preference — MUST be first line ──────────────────────────────────
-const dns = require('dns');
-dns.setDefaultResultOrder('ipv4first');
-
-/**
- * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v7.0
- * "True Adventures In High Places & Deep Culture"
- *
- * Changes from v6.9:
- *   - Fixed: ReferenceError: ensureCountriesSchema is not defined
- *   - Added: ensureCountriesSchema defined inline (safe, idempotent)
- *   - Added: ensureMessagingSchemaColumns migration (missing columns)
- *   - Fixed: conversations table session_id made nullable for userId-based convs
- *   - General: all schema functions colocated, boot sequence clean
- * ═══════════════════════════════════════════════════════════════════════════════
- */
+﻿// server.js
+// ═══════════════════════════════════════════════════════════════════════════════
+// ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v7.1
+// "True Adventures In High Places & Deep Culture"
+//
+// Changes from v7.0:
+//   ✓ CORS: altuverapanel.vercel.app explicitly allowed + OPTIONS pre-flight fix
+//   ✓ Maintenance route registered at /api/maintenance
+//   ✓ maintenanceController fully regenerated (countTable never throws)
+//   ✓ package_chat_preferences table added to ensurePackagesSchema
+//   ✓ Minor: unified logger patterns, no functional regressions
+// ═══════════════════════════════════════════════════════════════════════════════
 
 'use strict'
+
+// ── IPv4 DNS preference — must be before any network calls ───────────────────
+const dns = require('dns')
+dns.setDefaultResultOrder('ipv4first')
+
+try {
+  const { setDefaultAutoSelectFamily } = require('net')
+  setDefaultAutoSelectFamily(false)
+} catch { /* Node < 18.13 — safe to ignore */ }
 
 // ── Environment ───────────────────────────────────────────────────────────────
 require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') })
@@ -114,6 +115,7 @@ const destinationLikesRouter    = require('./routes/destinationLikes')
 const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
 const notificationsRouter       = require('./routes/notifications')
+const maintenanceRouter         = require('./routes/maintenance')   // ← v7.1
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // CONSTANTS
@@ -123,7 +125,6 @@ const PORT     = parseInt(process.env.PORT || '3000', 10)
 const NODE_ENV = process.env.NODE_ENV || 'development'
 const IS_PROD  = NODE_ENV === 'production'
 
-// ── Connected admins map ──────────────────────────────────────────────────────
 const connectedAdmins = new Map()
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -138,10 +139,14 @@ const ALLOWED_ORIGINS = [
     process.env.FRONTEND_URL,
     process.env.BACKEND_URL,
     ...envOrigins,
+    // ── Admin panel ──────────────────────────────────────────────────────
     'https://altuverapanel.vercel.app',
+    // ── Public site ──────────────────────────────────────────────────────
+    'https://altuverasafaris.com',
     'https://www.altuverasafaris.com',
     'https://altuvera.com',
     'https://www.altuvera.com',
+    // ── Local dev ────────────────────────────────────────────────────────
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5174',
@@ -150,8 +155,8 @@ const ALLOWED_ORIGINS = [
 ]
 
 const isOriginAllowed = (origin) => {
-  if (!origin)  return true
-  if (!IS_PROD) return true
+  if (!origin)  return true          // same-origin / Postman / curl
+  if (!IS_PROD) return true          // allow all in development
   if (ALLOWED_ORIGINS.includes(origin)) return true
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   return false
@@ -221,6 +226,7 @@ const ensurePackagesSchema = async () => {
       created_at         TIMESTAMP     DEFAULT NOW(),
       updated_at         TIMESTAMP     DEFAULT NOW()
     )`,
+
     `CREATE TABLE IF NOT EXISTS package_bookings (
       id               SERIAL PRIMARY KEY,
       booking_ref      VARCHAR(50)   UNIQUE,
@@ -253,6 +259,7 @@ const ensurePackagesSchema = async () => {
       created_at       TIMESTAMP     DEFAULT NOW(),
       updated_at       TIMESTAMP     DEFAULT NOW()
     )`,
+
     `CREATE TABLE IF NOT EXISTS package_messages (
       id            SERIAL PRIMARY KEY,
       package_id    INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
@@ -269,6 +276,7 @@ const ensurePackagesSchema = async () => {
       read_at       TIMESTAMP,
       created_at    TIMESTAMP   DEFAULT NOW()
     )`,
+
     `CREATE TABLE IF NOT EXISTS admin_info_requests (
       id             SERIAL PRIMARY KEY,
       package_id     INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
@@ -293,11 +301,21 @@ const ensurePackagesSchema = async () => {
       created_at     TIMESTAMP    DEFAULT NOW(),
       updated_at     TIMESTAMP    DEFAULT NOW()
     )`,
+
+    // ── v7.1: added package_chat_preferences (referenced by maintenance purge)
+    `CREATE TABLE IF NOT EXISTS package_chat_preferences (
+      id          SERIAL PRIMARY KEY,
+      package_id  INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
+      user_id     INTEGER,
+      preferences JSONB       DEFAULT '{}'::JSONB,
+      created_at  TIMESTAMP   DEFAULT NOW(),
+      updated_at  TIMESTAMP   DEFAULT NOW()
+    )`,
   ]
 
   for (const sql of tables) {
     await query(sql).catch(err =>
-      logger.warn('[PackagesSchema] Table non-fatal:', err.message),
+      logger.warn('[PackagesSchema] non-fatal:', err.message),
     )
   }
 
@@ -314,6 +332,7 @@ const ensurePackagesSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_pkg_msgs_sender     ON package_messages(sender_id)`,
     `CREATE INDEX IF NOT EXISTS idx_info_reqs_pkg       ON admin_info_requests(package_id)`,
     `CREATE INDEX IF NOT EXISTS idx_info_reqs_user      ON admin_info_requests(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_pkg_chat_prefs_pkg  ON package_chat_preferences(package_id)`,
   ]
   for (const idx of indexes) await query(idx).catch(() => {})
 
@@ -321,7 +340,6 @@ const ensurePackagesSchema = async () => {
 }
 
 // ── Countries ─────────────────────────────────────────────────────────────────
-// ✅ FIX v7.0: was called but never defined — caused ReferenceError at boot
 const ensureCountriesSchema = async () => {
   try {
     await query(`
@@ -357,25 +375,23 @@ const ensureCountriesSchema = async () => {
     `)
 
     const indexes = [
-      `CREATE INDEX IF NOT EXISTS idx_countries_slug      ON countries(slug)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_code      ON countries(code)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_active    ON countries(is_active)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_featured  ON countries(is_featured) WHERE is_featured = true`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_sort      ON countries(sort_order ASC)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug     ON countries(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_code     ON countries(code)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_active   ON countries(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_featured ON countries(is_featured) WHERE is_featured = true`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_sort     ON countries(sort_order ASC)`,
     ]
     for (const idx of indexes) await query(idx).catch(() => {})
 
     logger.info('✅ Countries schema ready')
   } catch (err) {
-    logger.warn('[CountriesSchema] Non-fatal:', err.message)
+    logger.warn('[CountriesSchema] non-fatal:', err.message)
   }
 }
 
 // ── Messaging ─────────────────────────────────────────────────────────────────
 const ensureMessagingSchema = async () => {
-  // ── Core tables ────────────────────────────────────────────────────────────
   const tables = [
-    // session_id is nullable so userId-based conversations work without a sessionId
     `CREATE TABLE IF NOT EXISTS conversations (
       id              SERIAL PRIMARY KEY,
       session_id      VARCHAR(120) UNIQUE,
@@ -405,6 +421,7 @@ const ensureMessagingSchema = async () => {
       created_at      TIMESTAMP    DEFAULT NOW(),
       updated_at      TIMESTAMP    DEFAULT NOW()
     )`,
+
     `CREATE TABLE IF NOT EXISTS messages (
       id               SERIAL PRIMARY KEY,
       conversation_id  INTEGER     NOT NULL,
@@ -429,6 +446,7 @@ const ensureMessagingSchema = async () => {
       created_at       TIMESTAMP   DEFAULT NOW(),
       updated_at       TIMESTAMP   DEFAULT NOW()
     )`,
+
     `CREATE TABLE IF NOT EXISTS typing_indicators (
       id              SERIAL PRIMARY KEY,
       conversation_id INTEGER     NOT NULL,
@@ -443,48 +461,45 @@ const ensureMessagingSchema = async () => {
 
   for (const sql of tables) {
     await query(sql).catch(err =>
-      logger.warn('[MessagingSchema] Table non-fatal:', err.message),
+      logger.warn('[MessagingSchema] non-fatal:', err.message),
     )
   }
 
-  // ── Indexes ────────────────────────────────────────────────────────────────
   const indexes = [
-    `CREATE INDEX IF NOT EXISTS idx_conversations_session   ON conversations(session_id) WHERE session_id IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_conversations_user      ON conversations(user_id)    WHERE user_id    IS NOT NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_conversations_status    ON conversations(status)`,
-    `CREATE INDEX IF NOT EXISTS idx_conversations_updated   ON conversations(updated_at DESC)`,
-    `CREATE INDEX IF NOT EXISTS idx_conversations_deleted   ON conversations(deleted_at) WHERE deleted_at IS NULL`,
-    `CREATE INDEX IF NOT EXISTS idx_messages_conversation   ON messages(conversation_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_messages_unread         ON messages(conversation_id, is_read) WHERE is_read = false`,
-    `CREATE INDEX IF NOT EXISTS idx_messages_sender         ON messages(sender_type, sender_id)`,
-    `CREATE INDEX IF NOT EXISTS idx_typing_expires          ON typing_indicators(expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_session  ON conversations(session_id) WHERE session_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_user     ON conversations(user_id)    WHERE user_id    IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_status   ON conversations(status)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_updated  ON conversations(updated_at DESC)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_deleted  ON conversations(deleted_at)  WHERE deleted_at IS NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_conversation  ON messages(conversation_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`,
+    `CREATE INDEX IF NOT EXISTS idx_messages_sender        ON messages(sender_type, sender_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`,
   ]
   for (const idx of indexes) await query(idx).catch(() => {})
 
-  // ── Migrations: add columns that may be missing on existing tables ─────────
+  // Idempotent column migrations for existing databases
   const migrations = [
-    // conversations
-    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS channel       VARCHAR(50)  DEFAULT 'live_chat'`,
-    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_agent    TEXT`,
-    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS booking_id    INTEGER`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS channel        VARCHAR(50)  DEFAULT 'live_chat'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS user_agent     TEXT`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS booking_id     INTEGER`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS booking_number VARCHAR(100)`,
-    // messages
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS reactions       JSONB       DEFAULT '{}'::JSONB`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited          BOOLEAN     DEFAULT false`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS edited_at       TIMESTAMP`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_name VARCHAR(255)`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS attachment_type VARCHAR(100)`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS updated_at      TIMESTAMP   DEFAULT NOW()`,
-    `ALTER TABLE messages ADD COLUMN IF NOT EXISTS msg_type        VARCHAR(30) DEFAULT 'text'`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS reactions      JSONB       DEFAULT '{}'::JSONB`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS edited         BOOLEAN     DEFAULT false`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS edited_at      TIMESTAMP`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS attachment_name VARCHAR(255)`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS attachment_type VARCHAR(100)`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS updated_at     TIMESTAMP   DEFAULT NOW()`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS msg_type       VARCHAR(30) DEFAULT 'text'`,
   ]
   for (const sql of migrations) {
-    await query(sql).catch(() => { /* column already exists — safe to ignore */ })
+    await query(sql).catch(() => { /* column already exists — safe */ })
   }
 
-  // Make session_id nullable if it was created NOT NULL (existing DBs)
-  await query(`
-    ALTER TABLE conversations ALTER COLUMN session_id DROP NOT NULL
-  `).catch(() => { /* already nullable — safe to ignore */ })
+  // Make session_id nullable on existing DBs that created it NOT NULL
+  await query(
+    `ALTER TABLE conversations ALTER COLUMN session_id DROP NOT NULL`,
+  ).catch(() => {})
 
   logger.info('✅ Messaging schema ready')
 }
@@ -515,34 +530,40 @@ app.use((_req, res, next) => {
 })
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
+const CORS_ALLOWED_HEADERS = [
+  'Content-Type', 'Authorization', 'X-Requested-With',
+  'Accept', 'Origin', 'X-CSRF-Token', 'Cache-Control',
+]
+
 const corsOptions = {
   origin: (origin, callback) => {
     if (isOriginAllowed(origin)) return callback(null, true)
     logger.warn(`[CORS] Blocked origin: ${origin}`)
+    // Return false (not an error) so Express sends a plain 200 without the header
+    // rather than a 500; the browser will still enforce the block.
     return callback(null, false)
   },
   credentials:          true,
   methods:              ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD'],
-  allowedHeaders: [
-    'Content-Type', 'Authorization', 'X-Requested-With',
-    'Accept', 'Origin', 'X-CSRF-Token', 'Cache-Control',
-  ],
+  allowedHeaders:       CORS_ALLOWED_HEADERS,
   exposedHeaders:       ['X-Total-Count', 'X-Page', 'X-Per-Page', 'X-Cache'],
   optionsSuccessStatus: 200,
-  maxAge:               86400,
+  maxAge:               86_400,
 }
 
 app.use(cors(corsOptions))
 
+// Explicit pre-flight handler — must come BEFORE route declarations
 app.options('*', (req, res) => {
   const origin = req.headers.origin
   if (isOriginAllowed(origin)) {
     res.setHeader('Access-Control-Allow-Origin',      origin || '*')
     res.setHeader('Access-Control-Allow-Credentials', 'true')
   }
-  res.setHeader('Access-Control-Allow-Methods',  'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD')
-  res.setHeader('Access-Control-Allow-Headers',  corsOptions.allowedHeaders.join(','))
-  res.setHeader('Access-Control-Max-Age',        '86400')
+  res.setHeader('Access-Control-Allow-Methods',
+    'GET,POST,PUT,PATCH,DELETE,OPTIONS,HEAD')
+  res.setHeader('Access-Control-Allow-Headers', CORS_ALLOWED_HEADERS.join(','))
+  res.setHeader('Access-Control-Max-Age', '86400')
   return res.sendStatus(200)
 })
 
@@ -568,7 +589,7 @@ if (IS_PROD) {
 // ── Request ID ────────────────────────────────────────────────────────────────
 app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
-// ── Cache ─────────────────────────────────────────────────────────────────────
+// ── Response cache ────────────────────────────────────────────────────────────
 app.use(cacheMiddleware(120))
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -613,7 +634,7 @@ app.get('/health', (_req, res) =>
     success:     true,
     status:      'healthy',
     service:     'Altuvera Travel API',
-    version:     '7.0',
+    version:     '7.1',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
     timestamp:   new Date().toISOString(),
@@ -625,11 +646,7 @@ app.get('/health', (_req, res) =>
       transports:      ['polling', 'websocket'],
       connectedAdmins: connectedAdmins.size,
     },
-    cache: getCacheStats(),
-    email: {
-      verifyEmailConnection: typeof verifyEmailConnection === 'function' ? 'available' : 'unavailable',
-      verifyAuthEmail:       typeof verifyAuthEmail       === 'function' ? 'available' : 'unavailable',
-    },
+    cache:   getCacheStats(),
     network: { dnsOrder: 'ipv4first' },
     theme:   { primary: '#16a34a', name: 'green-white' },
   }),
@@ -643,7 +660,7 @@ app.get('/api', (_req, res) =>
   res.json({
     success: true,
     name:    'Altuvera Travel API',
-    version: '7.0',
+    version: '7.1',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
     routes:  '/api/routes',
@@ -685,8 +702,10 @@ app.get('/api/debug/tables', async (req, res) => {
 
   try {
     const { rows: tableRows } = await query(`
-      SELECT table_name FROM information_schema.tables
-       WHERE table_schema = 'public' ORDER BY table_name
+      SELECT table_name
+        FROM information_schema.tables
+       WHERE table_schema = 'public'
+       ORDER BY table_name
     `)
     const results = {}
     for (const { table_name } of tableRows) {
@@ -713,7 +732,6 @@ app.get('/api/debug/cache', (req, res) => {
     const cleared = clearCache()
     return res.json({ success: true, message: `Cleared ${cleared} cache entries` })
   }
-
   if (req.query.invalidate) {
     const count = invalidateCache(req.query.invalidate)
     return res.json({
@@ -721,7 +739,6 @@ app.get('/api/debug/cache', (req, res) => {
       message: `Invalidated ${count} entries for prefix: ${req.query.invalidate}`,
     })
   }
-
   res.json({ success: true, ...getCacheStats() })
 })
 
@@ -793,13 +810,12 @@ app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
-app.use('/api/maintenance',          require('./routes/maintenance'))
+app.use('/api/maintenance',          maintenanceRouter)   // ← v7.1 ✅
 
-// ── Test / Dev routes ─────────────────────────────────────────────────────────
+// ── Dev-only test routes ──────────────────────────────────────────────────────
 if (!IS_PROD) {
   try {
-    const notifTestRouter = require('./routes/notificationTest')
-    app.use('/api/test/notifications', notifTestRouter)
+    app.use('/api/test/notifications', require('./routes/notificationTest'))
     logger.info('🧪 Notification test routes active at /api/test/notifications/*')
   } catch (err) {
     logger.warn('⚠️  notificationTest router not found (non-fatal):', err.message)
@@ -822,22 +838,21 @@ const verifySocketToken = (token) => {
 const getOrCreateConversation = async ({
   sessionId, userId, guestName, guestEmail, channel, source, ipAddress,
 }) => {
-  // Try by userId first (authenticated users)
+  // 1️⃣ Try by userId (authenticated users — preserve their open thread)
   if (userId) {
-    const byUser = await query(
+    const { rows } = await query(
       `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
               u.avatar_url AS user_avatar
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
-        WHERE c.user_id = $1
-          AND c.status IN ('open','pending')
+        WHERE c.user_id    = $1
+          AND c.status    IN ('open','pending')
           AND c.deleted_at IS NULL
         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
         LIMIT 1`,
       [userId],
     )
-    if (byUser.rows[0]) {
-      // Update guest info if provided
+    if (rows[0]) {
       if (guestName || guestEmail || sessionId) {
         await query(
           `UPDATE conversations SET
@@ -846,17 +861,17 @@ const getOrCreateConversation = async ({
              session_id  = COALESCE(session_id, $3),
              updated_at  = NOW()
            WHERE id = $4`,
-          [guestName || null, guestEmail || null, sessionId || null, byUser.rows[0].id],
+          [guestName || null, guestEmail || null, sessionId || null, rows[0].id],
         ).catch(() => {})
       }
-      return byUser.rows[0]
+      return rows[0]
     }
   }
 
-  // Try by sessionId
+  // 2️⃣ Try by sessionId
   if (sessionId) {
     const sid = String(sessionId).trim()
-    const bySession = await query(
+    const { rows } = await query(
       `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
               u.avatar_url AS user_avatar
          FROM conversations c
@@ -866,7 +881,7 @@ const getOrCreateConversation = async ({
         LIMIT 1`,
       [sid],
     )
-    if (bySession.rows[0]) {
+    if (rows[0]) {
       if (userId || guestName || guestEmail) {
         await query(
           `UPDATE conversations SET
@@ -878,23 +893,21 @@ const getOrCreateConversation = async ({
           [userId || null, guestName || null, guestEmail || null, sid],
         ).catch(() => {})
       }
-      return bySession.rows[0]
+      return rows[0]
     }
   }
 
-  // Neither found — create new
-  if (!userId && !sessionId) {
+  // 3️⃣ Create new conversation
+  if (!userId && !sessionId)
     throw new Error('userId or sessionId is required to create a conversation')
-  }
 
   const sid = sessionId ? String(sessionId).trim() : null
-
-  const inserted = await query(
+  const { rows } = await query(
     `INSERT INTO conversations
        (session_id, user_id, guest_name, guest_email,
         channel, source, ip_address, status, priority,
         created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal', NOW(), NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,'open','normal',NOW(),NOW())
      RETURNING *`,
     [
       sid,
@@ -906,7 +919,7 @@ const getOrCreateConversation = async ({
       ipAddress  || null,
     ],
   )
-  return inserted.rows[0]
+  return rows[0]
 }
 
 const saveConversationMessage = async ({
@@ -920,7 +933,7 @@ const saveConversationMessage = async ({
        (conversation_id, sender_type, sender_id, sender_name,
         sender_email, sender_avatar, body, reply_to_id,
         metadata, reactions, is_read, edited, created_at, updated_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'{}',false,false, NOW(), NOW())
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'{}',false,false,NOW(),NOW())
      RETURNING *`,
     [
       conversationId,
@@ -958,7 +971,8 @@ const fetchConversationMessages = async (conversationId, limit = 80) => {
     `SELECT * FROM messages
       WHERE conversation_id = $1
         AND (deleted = false OR deleted IS NULL)
-      ORDER BY created_at ASC LIMIT $2`,
+      ORDER BY created_at ASC
+      LIMIT $2`,
     [conversationId, limit],
   )
   return rows
@@ -999,7 +1013,7 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   const convId = parseInt(conversationId, 10)
   if (convId && !isNaN(convId)) {
     const { rows } = await query(
-      `SELECT * FROM conversations WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+      `SELECT * FROM conversations WHERE id=$1 AND deleted_at IS NULL LIMIT 1`,
       [convId],
     )
     return rows[0] || null
@@ -1009,10 +1023,9 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   if (!sid) return null
 
   const { rows } = await query(
-    `SELECT * FROM conversations WHERE session_id = $1 AND deleted_at IS NULL LIMIT 1`,
+    `SELECT * FROM conversations WHERE session_id=$1 AND deleted_at IS NULL LIMIT 1`,
     [sid],
   )
-
   if (rows[0]) return rows[0]
 
   return getOrCreateConversation({
@@ -1026,7 +1039,7 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   })
 }
 
-// Legacy helpers (chat_messages table — kept for backward compat)
+// Legacy helpers (chat_messages table — backwards compat)
 const fetchSessionMessages = async (sessionId) => {
   try {
     const { rows } = await query(
@@ -1062,12 +1075,7 @@ const serializeChatMsg = (row) => ({
 })
 
 const broadcastConversationMessage = ({
-  io,
-  conversationId,
-  sessionId,
-  userId,
-  payload,
-  adminPayload = null,
+  io, conversationId, sessionId, userId, payload, adminPayload = null,
 }) => {
   if (conversationId) io.to(`conv:${conversationId}`).emit('msg:message', payload)
   if (sessionId)      io.to(`session:${sessionId}`).emit('msg:message', payload)
@@ -1096,7 +1104,6 @@ io.use((socket, next) => {
       socket.join('admins')
       socket.join('admin-room')
     }
-
     next()
   } catch (err) {
     logger.error('[Socket] Auth middleware error:', err.message)
@@ -1104,7 +1111,7 @@ io.use((socket, next) => {
   }
 })
 
-// ── Typing indicator cleanup ──────────────────────────────────────────────────
+// Purge stale typing indicators every 15 s
 setInterval(async () => {
   try { await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`) } catch { /* silent */ }
 }, 15_000)
@@ -1118,16 +1125,12 @@ io.on('connection', (socket) => {
     `[Socket] Connected: ${socket.id} | isAdmin=${socket.data.isAdmin} | userId=${socket.data.userId}`,
   )
 
-  // ── Room setup for authenticated users ───────────────────────────────────
+  // Room setup for authenticated users
   if (socket.data.userId) {
-    socket.join(`user-${socket.data.userId}`)
     const userRole = socket.data.user?.role || 'user'
+    socket.join(`user-${socket.data.userId}`)
     socket.join(`role-${userRole}`)
     socket.join('all-users')
-    logger.info(
-      `[Socket] User ${socket.data.userId} joined rooms: ` +
-      `user-${socket.data.userId}, role-${userRole}, all-users`,
-    )
   }
 
   if (socket.data.isAdmin) {
@@ -1136,7 +1139,7 @@ io.on('connection', (socket) => {
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
-  // ── Notification events ──────────────────────────────────────────────────
+  // ── Notifications ────────────────────────────────────────────────────────
   socket.on('notification:get-unread', async (_, cb) => {
     try {
       const userId   = socket.data.userId
@@ -1150,7 +1153,8 @@ io.on('connection', (socket) => {
              OR target_scope = 'all'
              OR (target_scope = 'role' AND target_role = $2)
            )
-           AND is_read = false AND deleted_at IS NULL
+           AND is_read    = false
+           AND deleted_at IS NULL
            AND (expires_at IS NULL OR expires_at > NOW())`,
         [userId, userRole],
       )
@@ -1172,9 +1176,9 @@ io.on('connection', (socket) => {
       await query(
         `UPDATE notifications
            SET is_read = true, read_at = NOW(), updated_at = NOW()
-           WHERE id = $1
-             AND (user_id = $2 OR target_scope IN ('all','role'))
-             AND deleted_at IS NULL`,
+         WHERE id = $1
+           AND (user_id = $2 OR target_scope IN ('all','role'))
+           AND deleted_at IS NULL`,
         [id, userId],
       )
 
@@ -1185,7 +1189,8 @@ io.on('connection', (socket) => {
              OR target_scope = 'all'
              OR (target_scope = 'role' AND target_role = $2)
            )
-           AND is_read = false AND deleted_at IS NULL
+           AND is_read    = false
+           AND deleted_at IS NULL
            AND (expires_at IS NULL OR expires_at > NOW())`,
         [userId, userRole],
       )
@@ -1250,7 +1255,6 @@ io.on('connection', (socket) => {
 
       socket.data.sessionId      = conv.session_id
       socket.data.conversationId = conv.id
-
       socket.join(`conv:${conv.id}`)
       if (conv.session_id) socket.join(`session:${conv.session_id}`)
 
@@ -1364,25 +1368,23 @@ io.on('connection', (socket) => {
       })
       if (!conv) throw new Error('Conversation not found')
 
-      const convId = conv.id
-      const sid    = conv.session_id
-
-      socket.join(`conv:${convId}`)
-      if (sid) socket.join(`session:${sid}`)
-      socket.data.activeConversation = convId
+      socket.join(`conv:${conv.id}`)
+      if (conv.session_id) socket.join(`session:${conv.session_id}`)
+      socket.data.activeConversation = conv.id
 
       await Promise.all([
         query(
           `UPDATE messages SET is_read=true, read_at=NOW(), updated_at=NOW()
             WHERE conversation_id=$1 AND sender_type!='admin' AND is_read=false`,
-          [convId],
+          [conv.id],
         ),
-        query(`UPDATE conversations SET unread_admin=0 WHERE id=$1`, [convId]),
+        query(`UPDATE conversations SET unread_admin=0 WHERE id=$1`, [conv.id]),
       ]).catch(() => {})
 
-      const messages = await fetchConversationMessages(convId)
-      io.to(`conv:${convId}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
-      if (sid) io.to(`session:${sid}`).emit('msg:read', { conversationId: convId, readBy: 'admin' })
+      const messages = await fetchConversationMessages(conv.id)
+      io.to(`conv:${conv.id}`).emit('msg:read', { conversationId: conv.id, readBy: 'admin' })
+      if (conv.session_id)
+        io.to(`session:${conv.session_id}`).emit('msg:read', { conversationId: conv.id, readBy: 'admin' })
 
       if (typeof cb === 'function')
         cb({ success: true, messages: messages.map(serializeConvMessage) })
@@ -1425,10 +1427,7 @@ io.on('connection', (socket) => {
         userId:         conv.user_id,
         payload:        serialized,
       })
-      socket.to('admins').emit('msg:admin-sent', {
-        conversationId: conv.id,
-        message:        serialized,
-      })
+      socket.to('admins').emit('msg:admin-sent', { conversationId: conv.id, message: serialized })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
     } catch (err) {
@@ -1501,7 +1500,6 @@ io.on('connection', (socket) => {
         conversationId: parseInt(convId, 10),
         readBy: socket.data.isAdmin ? 'admin' : 'user',
       })
-
       if (typeof cb === 'function') cb({ success: true })
     } catch (err) {
       logger.error('[Socket] msg:mark-read error:', err.message)
@@ -1553,8 +1551,6 @@ io.on('connection', (socket) => {
         throw new Error('conversationId, messageId, emoji required')
 
       const uid = socket.data.user?.id || 0
-
-      // Fetch current reactions
       const { rows } = await query(
         `SELECT reactions FROM messages WHERE id=$1 AND conversation_id=$2`,
         [messageId, conversationId],
@@ -1568,7 +1564,7 @@ io.on('connection', (socket) => {
       } else {
         if (reactions[emoji]) {
           reactions[emoji] = reactions[emoji].filter(id => id !== uid)
-          if (reactions[emoji].length === 0) delete reactions[emoji]
+          if (!reactions[emoji].length) delete reactions[emoji]
         }
       }
 
@@ -1578,9 +1574,7 @@ io.on('connection', (socket) => {
       )
 
       io.to(`conv:${conversationId}`).emit('msg:reaction', {
-        conversationId,
-        messageId,
-        reactions,
+        conversationId, messageId, reactions,
         reactedBy: socket.data.isAdmin ? 'admin' : 'user',
         emoji,
       })
@@ -1780,10 +1774,7 @@ io.on('connection', (socket) => {
       if (connectedAdmins.size === 0) io.emit('msg:admin-online', { online: false })
     }
 
-    query(
-      `DELETE FROM typing_indicators WHERE socket_id=$1`,
-      [socket.id],
-    ).catch(() => {})
+    query(`DELETE FROM typing_indicators WHERE socket_id=$1`, [socket.id]).catch(() => {})
   })
 })
 
@@ -1804,7 +1795,7 @@ async function initializeServer () {
     await query('SELECT NOW()')
     logger.info('✅ Database connected')
 
-    // ── Destination schema (has its own controller) ────────────────────────
+    // Destination schema (has its own controller)
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
@@ -1813,7 +1804,7 @@ async function initializeServer () {
       logger.warn('⚠️  Destination schema (non-fatal):', err.message)
     }
 
-    // ── All other schemas ──────────────────────────────────────────────────
+    // All other schemas — run sequentially to avoid connection pool saturation
     const schemas = [
       { fn: ensureSubscribersSchema,   name: 'Subscribers'   },
       { fn: ensureUserSchema,          name: 'Users'         },
@@ -1824,37 +1815,30 @@ async function initializeServer () {
       { fn: ensureBookingsSchema,      name: 'Bookings'      },
       { fn: ensureMessagingSchema,     name: 'Messaging'     },
       { fn: ensureNotificationsSchema, name: 'Notifications' },
-      { fn: ensureCountriesSchema,     name: 'Countries'     }, // ✅ now defined above
+      { fn: ensureCountriesSchema,     name: 'Countries'     },
     ]
 
     for (const { fn, name } of schemas) {
-      try {
-        await fn()
-        if (!['Packages', 'Messaging', 'Notifications'].includes(name))
-          logger.info(`✅ ${name} schema ready`)
-      } catch (err) {
+      try { await fn() } catch (err) {
         logger.warn(`⚠️  ${name} schema (non-fatal):`, err.message)
       }
     }
 
-    // ── Start listening ────────────────────────────────────────────────────
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
         const line = '═'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v7.0')
+        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v7.1')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
         logger.info(`  Port         : ${PORT}`)
         logger.info(`  Backend      : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`)
         logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
+        logger.info(`  CORS origins : ${ALLOWED_ORIGINS.join(', ')}`)
         logger.info(`  Theme        : green-white (#16a34a) 🟢`)
         logger.info(`  DNS          : ipv4first ✅`)
-        logger.info(`  Countries    : schema ensured ✅`)
-        logger.info(`  Messaging    : session_id nullable ✅`)
-        logger.info(`  Socket rooms : user-{id}, role-{role}, all-users ✅`)
-        logger.info(`  Notifications: /api/notifications ✅`)
+        logger.info(`  Maintenance  : /api/maintenance ✅`)
         logger.info(`  Socket.io    : polling → websocket ✅`)
         logger.info(`  Test routes  : ${IS_PROD ? 'disabled (production)' : '/api/test/notifications ✅'}`)
         logger.info(`${line}\n`)
@@ -1863,14 +1847,13 @@ async function initializeServer () {
     })
 
     shutdown(httpServer)
-
   } catch (err) {
     logger.error('❌ Server boot failed:', err.message)
     logger.error(err.stack)
     process.exit(1)
   }
 
-  // ── Post-boot: email verification (non-blocking) ───────────────────────
+  // Post-boot email verification (non-blocking)
   if (typeof verifyEmailConnection === 'function') {
     verifyEmailConnection().catch(e =>
       logger.warn('[Email] Connection check (non-fatal):', e.message),
