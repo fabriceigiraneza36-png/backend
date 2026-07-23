@@ -1092,4 +1092,166 @@ router.delete("/conversations/:id", adminProtect, async (req, res) => {
   }
 });
 
+// backend/src/routes/message.js  — ADD these socket handlers after the routes
+// Add this at the bottom of message.js, before module.exports
+
+/* ══════════════════════════════════════════════════════════════════════════
+   SOCKET.IO REAL-TIME HANDLERS
+   Called from server.js:  setupMessageSockets(io)
+══════════════════════════════════════════════════════════════════════════ */
+
+function setupMessageSockets(io) {
+  io.on("connection", (socket) => {
+    const user = socket.handshake.auth?.user || socket.user || null;
+
+    /* ── Join personal room (user gets admin messages) ── */
+    socket.on("join:user", ({ userId }) => {
+      if (userId) {
+        socket.join(`user-${userId}`);
+        logger.debug(`[Socket] ${socket.id} joined user-${userId}`);
+      }
+    });
+
+    /* ── Join / leave conversation room ── */
+    socket.on("join:conversation", ({ conversationId }) => {
+      if (conversationId) {
+        socket.join(`conversation-${conversationId}`);
+        logger.debug(`[Socket] ${socket.id} joined conversation-${conversationId}`);
+      }
+    });
+
+    socket.on("leave:conversation", ({ conversationId }) => {
+      if (conversationId) {
+        socket.leave(`conversation-${conversationId}`);
+      }
+    });
+
+    /* ── Typing broadcast ── */
+    socket.on("msg:typing", (payload) => {
+      const { conversationId, isTyping, senderType, senderName } = payload;
+      if (!conversationId) return;
+
+      // Broadcast to everyone else in the conversation room
+      socket.to(`conversation-${conversationId}`).emit("msg:typing", {
+        conversationId,
+        isTyping:   Boolean(isTyping),
+        senderType: senderType || "user",
+        senderName: senderName || null,
+      });
+    });
+
+    /* ── Admin sends a message via socket ── */
+    socket.on("msg:admin-send", async (payload, ack) => {
+      const { conversationId, body, replyToId } = payload;
+      if (!conversationId || !body?.trim()) {
+        return ack?.({ success: false, error: "conversationId and body are required" });
+      }
+
+      try {
+        // Verify conversation exists
+        const convCheck = await query(
+          `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+          [conversationId]
+        );
+        if (!convCheck.rows[0]) {
+          return ack?.({ success: false, error: "Conversation not found" });
+        }
+
+        const adminUser = socket.handshake.auth?.user || socket.user || {};
+
+        const msg = await insertMessage({
+          conversationId,
+          senderType:   "admin",
+          senderId:     adminUser.id    || null,
+          senderName:   adminUser.full_name || adminUser.username || "Admin",
+          senderEmail:  adminUser.email  || null,
+          senderAvatar: adminUser.avatar_url || null,
+          body:         body.trim(),
+          replyToId:    replyToId || null,
+        });
+
+        const shaped = reshapeMessage(msg);
+
+        // Broadcast to conversation room (admin + user)
+        io.to(`conversation-${conversationId}`).emit("msg:message", shaped);
+
+        // Also push to user's personal room (in case they're not in the conv room)
+        const userId = convCheck.rows[0].user_id;
+        if (userId) {
+          io.to(`user-${userId}`).emit("msg:new-from-admin", {
+            conversationId,
+            message: shaped,
+          });
+        }
+
+        // Acknowledge to sender
+        ack?.({ success: true, message: shaped });
+      } catch (err) {
+        logger.error(`[Socket] msg:admin-send error: ${err.message}`);
+        ack?.({ success: false, error: err.message });
+      }
+    });
+
+    /* ── User sends a message via socket ── */
+    socket.on("msg:user-send", async (payload, ack) => {
+      const { conversationId, body, replyToId } = payload;
+      if (!conversationId || !body?.trim()) {
+        return ack?.({ success: false, error: "conversationId and body are required" });
+      }
+
+      try {
+        const convCheck = await query(
+          `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+          [conversationId]
+        );
+        if (!convCheck.rows[0]) {
+          return ack?.({ success: false, error: "Conversation not found" });
+        }
+
+        const socketUser = socket.handshake.auth?.user || socket.user || {};
+
+        const msg = await insertMessage({
+          conversationId,
+          senderType:   "user",
+          senderId:     socketUser.id       || null,
+          senderName:   socketUser.full_name || socketUser.name || "User",
+          senderEmail:  socketUser.email    || null,
+          senderAvatar: socketUser.avatar_url || null,
+          body:         body.trim(),
+          replyToId:    replyToId || null,
+        });
+
+        const shaped = reshapeMessage(msg);
+
+        // Broadcast to everyone in the room
+        io.to(`conversation-${conversationId}`).emit("msg:message", shaped);
+
+        // Notify admins
+        io.to("admin-room").emit("msg:new-from-user", {
+          conversationId,
+          message: shaped,
+        });
+
+        ack?.({ success: true, message: shaped });
+      } catch (err) {
+        logger.error(`[Socket] msg:user-send error: ${err.message}`);
+        ack?.({ success: false, error: err.message });
+      }
+    });
+
+    /* ── Admin joins admin room ── */
+    socket.on("join:admin", () => {
+      socket.join("admin-room");
+      logger.debug(`[Socket] ${socket.id} joined admin-room`);
+    });
+
+    socket.on("disconnect", () => {
+      logger.debug(`[Socket] ${socket.id} disconnected`);
+    });
+  });
+}
+
+module.exports = router;
+module.exports.setupMessageSockets = setupMessageSockets;
+
 module.exports = router;
