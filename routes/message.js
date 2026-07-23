@@ -64,13 +64,14 @@ try {
   _markConversationRead      = messaging.markConversationRead;
   _listConversations         = messaging.listConversations;
   _getConversationWithMessages = messaging.getConversationWithMessages;
+  _getConversationByBookingId = messaging.getConversationByBookingId;
   _toggleReaction            = messaging.toggleReaction;
   _changeConversationStatus  = messaging.changeConversationStatus;
 
   // Log which ones are missing so it is easy to spot in logs
   const names = [
     "getOrCreateConversation", "insertMessage", "markConversationRead",
-    "listConversations", "getConversationWithMessages",
+    "listConversations", "getConversationWithMessages", "getConversationByBookingId",
     "toggleReaction", "changeConversationStatus",
   ];
   for (const name of names) {
@@ -85,7 +86,7 @@ try {
 /* ── Inline fallback: listConversations ─────────────────────────────────── */
 const listConversations = typeof _listConversations === "function"
   ? _listConversations
-  : async ({ status, limit = 100, page = 1, search } = {}) => {
+  : async ({ status, limit = 100, page = 1, search, bookingId } = {}) => {
       const conditions = ["c.deleted_at IS NULL"];
       const params     = [];
       let   p          = 1;
@@ -93,6 +94,11 @@ const listConversations = typeof _listConversations === "function"
       if (status && status !== "all") {
         conditions.push(`c.status = $${p++}`);
         params.push(status);
+      }
+
+      if (bookingId) {
+        conditions.push(`c.booking_id = $${p++}`);
+        params.push(parseInt(bookingId, 10) || bookingId);
       }
 
       if (search && String(search).trim()) {
@@ -161,6 +167,56 @@ const listConversations = typeof _listConversations === "function"
       }));
 
       return { rows, total };
+    };
+
+/* ── Inline fallback: getConversationByBookingId ─────────────────────────── */
+const getConversationByBookingId = typeof _getConversationByBookingId === "function"
+  ? _getConversationByBookingId
+  : async (bookingId) => {
+      if (!bookingId) return null;
+
+      const convRes = await query(
+        `SELECT
+           c.*,
+           u.full_name   AS user_full_name,
+           u.email       AS user_email,
+           u.avatar_url  AS user_avatar,
+           u.phone       AS user_phone,
+           u.nationality AS user_nationality,
+           u.username    AS user_username
+         FROM conversations c
+         LEFT JOIN users u ON u.id = c.user_id
+         WHERE c.booking_id = $1 AND c.deleted_at IS NULL
+         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+         LIMIT 1`,
+        [bookingId],
+      );
+
+      const conv = convRes.rows[0];
+      if (!conv) return null;
+
+      const msgRes = await query(
+        `SELECT * FROM messages WHERE conversation_id = $1 ORDER BY created_at ASC`,
+        [conv.id],
+      );
+
+      return {
+        ...conv,
+        guest_name:  conv.guest_name  || conv.user_full_name || null,
+        guest_email: conv.guest_email || conv.user_email     || null,
+        user: conv.user_id
+          ? {
+              id:          conv.user_id,
+              fullName:    conv.user_full_name,
+              email:       conv.user_email,
+              avatarUrl:   conv.user_avatar,
+              phone:       conv.user_phone,
+              nationality: conv.user_nationality,
+              username:    conv.user_username,
+            }
+          : null,
+        messages: msgRes.rows,
+      };
     };
 
 /* ── Inline fallback: getOrCreateConversation ───────────────────────────── */
@@ -591,21 +647,26 @@ router.get("/users-list", adminProtect, async (req, res) => {
   }
 });
 
-/* ── GET /conversations — admin list ────────────────────────────────────── */
-router.get("/conversations", adminProtect, async (req, res) => {
+/* ── GET /conversations — list conversations (admin: all, user: own) ─────── */
+router.get("/conversations", protect, async (req, res) => {
   try {
     const {
       status = "open",
       limit  = 100,
       page   = 1,
       search,
+      bookingId,
     } = req.query;
+
+    const userFilter = isAdminUser(req) ? {} : { user_id: req.user.id };
 
     const { rows, total } = await listConversations({
       status,
       limit:  parseInt(limit,  10),
       page:   parseInt(page,   10),
       search,
+      userFilter,
+      bookingId: bookingId || null,
     });
 
     const lim = parseInt(limit, 10) || 100;
@@ -794,12 +855,18 @@ router.post("/conversations", optionalAuth, async (req, res) => {
 });
 
 /* ── GET /conversations/:id ─────────────────────────────────────────────── */
-router.get("/conversations/:id", adminProtect, async (req, res) => {
+router.get("/conversations/:id", protect, async (req, res) => {
   try {
     const data = await getConversationWithMessages(req.params.id);
     if (!data) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
+
+    /* Users may only see their own conversation */
+    if (!isAdminUser(req) && data.user_id && data.user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
     return res.json({ success: true, data: reshapeConversation(data, true) });
   } catch (err) {
     logger.error(`[Messages] GET /conversations/:id: ${err.message}`, { stack: err.stack });
@@ -807,8 +874,25 @@ router.get("/conversations/:id", adminProtect, async (req, res) => {
   }
 });
 
+/* ── GET /conversations/by-booking/:bookingId — lookup by booking ─────────── */
+router.get("/conversations/by-booking/:bookingId", protect, async (req, res) => {
+  try {
+    const { bookingId } = req.params;
+    const data = await getConversationByBookingId(parseInt(bookingId, 10) || bookingId);
+
+    if (!data) {
+      return res.status(404).json({ success: false, message: "No conversation found for this booking" });
+    }
+
+    return res.json({ success: true, data: reshapeConversation(data, true) });
+  } catch (err) {
+    logger.error(`[Messages] GET /conversations/by-booking: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to fetch booking conversation" });
+  }
+});
+
 /* ── POST /conversations/:id/messages ───────────────────────────────────── */
-router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
+router.post("/conversations/:id/messages", protect, async (req, res) => {
   try {
     const { id }              = req.params;
     const { body, replyToId } = req.body;
@@ -826,11 +910,19 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
+    /* Users may only message their own conversation */
+    if (!isAdminUser(req) && convCheck.rows[0].user_id && convCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    const isAdminReq = isAdminUser(req);
     const msg = await insertMessage({
       conversationId: id,
-      senderType:     "admin",
+      senderType:     isAdminReq ? "admin" : "user",
       senderId:       req.user.id,
-      senderName:     req.user.full_name || req.user.username || "Admin",
+      senderName:     isAdminReq
+        ? (req.user.full_name || req.user.username || "Admin")
+        : (req.user.full_name || req.user.name || "User"),
       senderEmail:    req.user.email,
       senderAvatar:   req.user.avatar_url || null,
       body:           String(body).trim(),
@@ -841,7 +933,7 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
       const io = req.app.get("io");
       if (io) {
         io.to(`conversation-${id}`).emit("msg:message", reshapeMessage(msg));
-        if (convCheck.rows[0].user_id) {
+        if (!isAdminReq && convCheck.rows[0].user_id) {
           io.to(`user-${convCheck.rows[0].user_id}`).emit("msg:new-from-admin", {
             conversationId: id,
             message:        reshapeMessage(msg),
@@ -861,19 +953,34 @@ router.post("/conversations/:id/messages", adminProtect, async (req, res) => {
 });
 
 /* ── PATCH /conversations/:id/read ─────────────────────────────────────── */
-router.patch("/conversations/:id/read", adminProtect, async (req, res) => {
+router.patch("/conversations/:id/read", protect, async (req, res) => {
   try {
+    const convCheck = await query(
+      `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+      [req.params.id],
+    );
+    if (!convCheck.rows[0]) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    /* Users may only mark their own conversation as read */
+    if (!isAdminUser(req) && convCheck.rows[0].user_id && convCheck.rows[0].user_id !== req.user.id) {
+      return res.status(403).json({ success: false, message: "Access denied" });
+    }
+
+    const readerType = isAdminUser(req) ? "admin" : "user";
     await markConversationRead({
       conversationId: req.params.id,
-      readerType:     "admin",
+      readerType,
     });
 
     try {
       const io = req.app.get("io");
       if (io) {
         io.to(`conversation-${req.params.id}`).emit("msg:conversation-updated", {
-          id:          req.params.id,
-          unreadAdmin: 0,
+          id:            req.params.id,
+          unreadAdmin:   readerType === "admin" ? 0 : undefined,
+          unreadUser:    readerType === "user" ? 0 : undefined,
         });
       }
     } catch (_) { /* silent */ }

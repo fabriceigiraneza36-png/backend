@@ -238,14 +238,16 @@ async function markConversationRead({ conversationId, readerType }) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
-   listConversations  ← THIS WAS MISSING / NOT EXPORTED
+   listConversations
    ───────────────────────────────────────────────────────────────────────────── */
 async function listConversations({
   status = "open",
   limit  = 100,
   page   = 1,
   search = null,
-} = {}) {
+  userFilter = null,
+  bookingId = null,
+} = "") {
 
   const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
   const conditions = ["c.deleted_at IS NULL"];
@@ -256,6 +258,12 @@ async function listConversations({
   if (status && status !== "all") {
     conditions.push(`c.status = $${p++}`);
     params.push(status);
+  }
+
+  /* User filter — for non-admin users to see only their own conversations */
+  if (userFilter && userFilter.user_id) {
+    conditions.push(`c.user_id = $${p++}`);
+    params.push(userFilter.user_id);
   }
 
   /* Search filter */
@@ -270,6 +278,12 @@ async function listConversations({
     )`);
     params.push(`%${String(search).trim()}%`);
     p++;
+  }
+
+  /* Booking filter */
+  if (bookingId) {
+    conditions.push(`c.booking_id = $${p++}`);
+    params.push(parseInt(bookingId, 10) || bookingId);
   }
 
   const where = conditions.join(" AND ");
@@ -389,6 +403,58 @@ async function getConversationWithMessages(conversationId) {
 }
 
 /* ─────────────────────────────────────────────────────────────────────────────
+   getConversationByBookingId
+   ───────────────────────────────────────────────────────────────────────────── */
+async function getConversationByBookingId(bookingId) {
+  if (!bookingId) return null;
+
+  const convRes = await query(
+    `SELECT
+       c.*,
+       u.full_name   AS user_full_name,
+       u.email       AS user_email,
+       u.avatar_url  AS user_avatar,
+       u.phone       AS user_phone,
+       u.nationality AS user_nationality,
+       u.username    AS user_username
+     FROM conversations c
+     LEFT JOIN users u ON u.id = c.user_id
+     WHERE c.booking_id = $1 AND c.deleted_at IS NULL
+     ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
+     LIMIT 1`,
+    [bookingId],
+  );
+
+  const conv = convRes.rows[0];
+  if (!conv) return null;
+
+  const msgRes = await query(
+    `SELECT * FROM messages
+       WHERE conversation_id = $1
+       ORDER BY created_at ASC`,
+    [conv.id],
+  );
+
+  return {
+    ...conv,
+    guest_name:  conv.guest_name  || conv.user_full_name || null,
+    guest_email: conv.guest_email || conv.user_email     || null,
+    user: conv.user_id
+      ? {
+          id:          conv.user_id,
+          fullName:    conv.user_full_name,
+          email:       conv.user_email,
+          avatarUrl:   conv.user_avatar,
+          phone:       conv.user_phone,
+          nationality: conv.user_nationality,
+          username:    conv.user_username,
+        }
+      : null,
+    messages: msgRes.rows,
+  };
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
    toggleReaction
    ───────────────────────────────────────────────────────────────────────────── */
 async function toggleReaction({ messageId, userId, emoji, add = true }) {
@@ -464,8 +530,9 @@ module.exports = {
   getOrCreateConversation,
   insertMessage,
   markConversationRead,
-  listConversations,           // ← was missing
+  listConversations,
   getConversationWithMessages,
+  getConversationByBookingId,
   toggleReaction,
   changeConversationStatus,
 };

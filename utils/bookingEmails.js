@@ -96,12 +96,13 @@ const ENV = {
   heroImage:    process.env.EMAIL_HERO_URL ||
     "https://res.cloudinary.com/doijjawna/image/upload/v1781342220/ChatGPT_Image_Jun_13_2026_11_16_51_AM_oibwwb.png",
 
-  social: {
-    instagram: "https://www.instagram.com/altuverasafaris/",
-    facebook:  "https://www.facebook.com/profile.php?id=61591972225527",
-    twitter:   "https://x.com/altuverasafari",
-    linkedin:  "https://www.linkedin.com/in/altuvera-safari-14b9033b5/",
-  },
+social: {
+  facebook: "https://www.facebook.com/profile.php?id=61591972225527",
+  instagram: "https://www.instagram.com/altuverasafaris/",
+  twitter: "https://x.com/altuverasafari",
+  linkedin: "https://www.linkedin.com/in/altuvera-safari-14b9033b5/",
+  youtube: "https://www.youtube.com/@altuverasafaris",
+},
 };
 
 logger.info(`[BookingEmails] FRONTEND_URL = ${ENV.frontendUrl}`);
@@ -217,14 +218,15 @@ const statusPill = (s = "pending") => {
    SOCIAL ICONS
 ════════════════════════════════════════════════════════════════════════════ */
 const SOCIAL_ICONS = {
-  instagram: "https://cdn-icons-png.flaticon.com/128/2111/2111463.png",
-  facebook:  "https://cdn-icons-png.flaticon.com/128/5968/5968764.png",
-  twitter:   "https://cdn-icons-png.flaticon.com/128/5968/5968958.png",
-  linkedin:  "https://cdn-icons-png.flaticon.com/128/174/174857.png",
-  whatsapp:  "https://cdn-icons-png.flaticon.com/128/3670/3670051.png",
-  email:     "https://cdn-icons-png.flaticon.com/128/732/732200.png",
-  phone:     "https://cdn-icons-png.flaticon.com/128/597/597177.png",
-  location:  "https://cdn-icons-png.flaticon.com/128/684/684908.png",
+  instagram: "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/instagram.svg",
+  facebook:  "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/facebook.svg",
+  twitter:   "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/x.svg",
+  linkedin:  "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/linkedin.svg",
+  youtube:   "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/youtube.svg",
+  whatsapp:  "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/whatsapp.svg",
+  email:     "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/gmail.svg",
+  phone:     "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/googlevoice.svg",
+  location:  "https://cdn.jsdelivr.net/npm/simple-icons@latest/icons/googlemaps.svg",
 };
 
 const socialBar = () => `

@@ -1323,90 +1323,243 @@ exports.track = async (req, res, next) => {
   }
 };
 
-/* ═════════════════════════════════════════════════════════════════════
-   MY BOOKINGS
-═════════════════════════════════════════════════════════════════════ */
+// controllers/bookingsController.js — getMyBookings
+// ═══════════════════════════════════════════════════════════════════════════════
+// Fixes in this version:
+//  ✓ Matches bookings by user_id (int cast) OR email (covers guest bookings
+//    that were later linked to an account)
+//  ✓ Robust JOIN with COALESCE fallbacks for every name column
+//  ✓ Status filter supports comma-separated values
+//  ✓ Safe fallback query if main query fails (schema differences)
+//  ✓ Count query mirrors the same WHERE clause as the data query
+//  ✓ Returns both `data` and `bookings` keys for frontend compatibility
+//  ✓ Extended stats block
+// ═══════════════════════════════════════════════════════════════════════════════
+
 exports.getMyBookings = async (req, res) => {
   try {
-    const userId = req.user.id;
-    const page = Math.max(1, parseInt(req.query.page || "1", 10));
-    const limit = Math.min(100, parseInt(req.query.limit || "10", 10));
-    const offset = (page - 1) * limit;
-    const status = req.query.status || null;
+    /* ── Auth ──────────────────────────────────────────────────────────────── */
+    const userId    = req.user?.id    ? parseInt(req.user.id, 10) : null;
+    const userEmail = req.user?.email ? String(req.user.email).trim().toLowerCase() : null;
 
-    let statusFilter = "";
-    const params = [userId];
-    let p = 2;
-
-    if (status) {
-      const statuses = String(status).split(",").map((s) => s.trim());
-      statusFilter = ` AND b.status = ANY($${p}::text[])`;
-      params.push(statuses);
-      p++;
+    if (!userId && !userEmail) {
+      return res.status(401).json({
+        success: false,
+        message: "Authentication required — no user identity found in token.",
+      });
     }
 
-    params.push(limit, offset);
+    /* ── Pagination ────────────────────────────────────────────────────────── */
+    const page   = Math.max(1, parseInt(req.query.page  || "1",  10));
+    const limit  = Math.min(100, Math.max(1, parseInt(req.query.limit || "10", 10)));
+    const offset = (page - 1) * limit;
 
-    const { rows } = await query(
-      `SELECT b.*,
-              COALESCE(d.name, b.destination_name, '') AS destination_name,
-              COALESCE(d.thumbnail_url, d.image_url, '') AS destination_image,
-              COALESCE(d.slug, '') AS destination_slug,
-              COALESCE(c.name, b.country_name, b.country, '') AS country_name,
-              s.title AS service_name
+    /* ── Status filter ─────────────────────────────────────────────────────── */
+    const rawStatus = req.query.status || null;
+    const statuses  = rawStatus
+      ? String(rawStatus).split(",").map((s) => s.trim()).filter(Boolean)
+      : null;
+
+    /* ── Build a reusable WHERE clause ─────────────────────────────────────── */
+    //
+    // Strategy: match on user_id OR email so that:
+    //   (a) bookings created while logged in (have user_id) are found, AND
+    //   (b) bookings created as a guest but with the same email are also found.
+    //
+    // We always cast $1 to integer to avoid type-mismatch on strict DBs.
+    //
+    const buildWhere = (startAt = 1) => {
+      const parts  = [];
+      const params = [];
+      let   p      = startAt;
+
+      if (userId && userEmail) {
+        parts.push(`(b.user_id = $${p}::integer OR LOWER(b.email) = $${p + 1})`);
+        params.push(userId, userEmail);
+        p += 2;
+      } else if (userId) {
+        parts.push(`b.user_id = $${p}::integer`);
+        params.push(userId);
+        p += 1;
+      } else {
+        parts.push(`LOWER(b.email) = $${p}`);
+        params.push(userEmail);
+        p += 1;
+      }
+
+      if (statuses?.length) {
+        parts.push(`b.status = ANY($${p}::text[])`);
+        params.push(statuses);
+        p += 1;
+      }
+
+      return { clause: `WHERE ${parts.join(" AND ")}`, params, nextP: p };
+    };
+
+    /* ── Count ─────────────────────────────────────────────────────────────── */
+    const { clause: countClause, params: countParams } = buildWhere(1);
+
+    const countResult = await query(
+      `SELECT COUNT(*)::INT AS total
          FROM bookings b
-         LEFT JOIN destinations d ON d.id = b.destination_id
-         LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
-         LEFT JOIN services s ON s.id = b.service_id
-        WHERE b.user_id = $1
-          ${statusFilter}
-        ORDER BY
-          CASE WHEN b.status = 'confirmed' THEN 0 ELSE 1 END,
-          b.travel_date ASC NULLS LAST,
-          b.created_at DESC
-        LIMIT $${p++} OFFSET $${p++}`,
-      params,
+        ${countClause}`,
+      countParams,
     ).catch(() =>
+      // Ultra-safe fallback — no JOINs, no status filter
       query(
-        `SELECT * FROM bookings
-          WHERE user_id = $1
-          ORDER BY created_at DESC
-          LIMIT $2 OFFSET $3`,
-        [userId, limit, offset],
+        `SELECT COUNT(*)::INT AS total
+           FROM bookings
+          WHERE user_id = $1::integer`,
+        [userId || 0],
       ),
     );
 
-    const countRes = await query(
-      `SELECT COUNT(*) FROM bookings WHERE user_id = $1`,
-      [userId],
-    );
+    const total      = countResult.rows[0]?.total ?? 0;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
 
-    const total = parseInt(countRes.rows[0].count, 10);
-    const completed = rows.filter((b) => b.status === "completed");
-    const countries = [...new Set(rows.map((b) => b.country_name).filter(Boolean))];
+    /* ── Data ──────────────────────────────────────────────────────────────── */
+    const { clause: dataClause, params: baseParams, nextP } = buildWhere(1);
+    const dataParams = [...baseParams, limit, offset];
+    const limitIdx   = nextP;
+    const offsetIdx  = nextP + 1;
 
+    let rows = [];
+
+    try {
+      const result = await query(
+        `SELECT
+           b.*,
+
+           -- Destination
+           COALESCE(d.name,          b.destination_name, b.destination, '')   AS destination_name,
+           COALESCE(d.thumbnail_url, d.image_url,        b.image_url,   '')   AS destination_image,
+           COALESCE(d.slug,          '')                                       AS destination_slug,
+
+           -- Country
+           COALESCE(c.name,          b.country_name, b.country, '')           AS country_name,
+
+           -- Service
+           COALESCE(s.title,         s.name, b.service_name, '')              AS service_name,
+
+           -- Cancellation / refund request (if columns exist)
+           COALESCE(b.cancel_request_status, 'none')                          AS cancel_request_status,
+           COALESCE(b.cancel_request_type,   '')                              AS cancel_request_type,
+           b.cancel_request_reason,
+           b.cancel_admin_response,
+           b.refund_amount
+
+         FROM bookings b
+         LEFT JOIN destinations d ON d.id = b.destination_id
+         LEFT JOIN countries    c ON c.id = COALESCE(b.country_id, d.country_id)
+         LEFT JOIN services     s ON s.id = b.service_id
+
+         ${dataClause}
+
+         ORDER BY
+           /* Confirmed + upcoming first */
+           CASE
+             WHEN b.status = 'confirmed'
+                  AND b.travel_date >= CURRENT_DATE THEN 0
+             WHEN b.status = 'pending'              THEN 1
+             WHEN b.status = 'confirmed'            THEN 2
+             ELSE 3
+           END,
+           b.travel_date ASC NULLS LAST,
+           b.created_at  DESC
+
+         LIMIT  $${limitIdx}
+         OFFSET $${offsetIdx}`,
+        dataParams,
+      );
+
+      rows = result.rows;
+    } catch (joinErr) {
+      logger.warn("[getMyBookings] Full JOIN query failed, using fallback:", joinErr.message);
+
+      // Fallback — raw bookings only, no JOINs
+      const fallbackWhere = userId
+        ? `WHERE (user_id = $1::integer${userEmail ? ` OR LOWER(email) = $2` : ""})`
+        : `WHERE LOWER(email) = $1`;
+
+      const fallbackParams = userId && userEmail
+        ? [userId, userEmail, limit, offset]
+        : userId
+        ? [userId, limit, offset]
+        : [userEmail, limit, offset];
+
+      const lIdx = fallbackParams.length - 1;
+      const oIdx = fallbackParams.length;
+
+      const fallback = await query(
+        `SELECT *
+           FROM bookings
+          ${fallbackWhere}
+          ORDER BY created_at DESC
+          LIMIT  $${lIdx}
+          OFFSET $${oIdx}`,
+        fallbackParams,
+      );
+
+      rows = fallback.rows.map((r) => ({
+        ...r,
+        destination_name:        r.destination_name  || r.destination || "",
+        destination_image:       r.image_url         || "",
+        destination_slug:        "",
+        country_name:            r.country_name      || r.country     || "",
+        service_name:            r.service_name      || "",
+        cancel_request_status:   r.cancel_request_status || "none",
+        cancel_request_type:     r.cancel_request_type  || "",
+        cancel_request_reason:   r.cancel_request_reason   || null,
+        cancel_admin_response:   r.cancel_admin_response   || null,
+        refund_amount:           r.refund_amount            || null,
+      }));
+    }
+
+    /* ── Stats ─────────────────────────────────────────────────────────────── */
+    const uniqueCountries = [
+      ...new Set(rows.map((b) => b.country_name).filter(Boolean)),
+    ];
+
+    const stats = {
+      total,
+      shown:             rows.length,
+      confirmed:         rows.filter((b) => b.status === "confirmed").length,
+      pending:           rows.filter((b) => b.status === "pending").length,
+      completed:         rows.filter((b) => b.status === "completed").length,
+      cancelled:         rows.filter((b) => b.status === "cancelled").length,
+      on_hold:           rows.filter((b) => b.status === "on-hold").length,
+      paid:              rows.filter((b) => b.payment_status === "paid").length,
+      unpaid:            rows.filter((b) => ["unpaid", "pending"].includes(b.payment_status ?? "")).length,
+      countries_visited: uniqueCountries.length,
+      upcoming:          rows.filter((b) => {
+        const d = b.travel_date ? new Date(b.travel_date) : null;
+        return d && d >= new Date() && b.status === "confirmed";
+      }).length,
+      has_cancellation_request: rows.some(
+        (b) => b.cancel_request_status && b.cancel_request_status !== "none",
+      ),
+    };
+
+    /* ── Response ──────────────────────────────────────────────────────────── */
     return res.json({
-      success: true,
-      data: rows,
-      bookings: rows,
-      stats: {
-        total,
-        completed: completed.length,
-        countries_visited: countries.length,
-        paid: rows.filter((b) => b.payment_status === "paid").length,
-        unpaid: rows.filter((b) => ["unpaid", "pending"].includes(b.payment_status)).length,
-      },
+      success:  true,
+      data:     rows,      // primary key (new frontend)
+      bookings: rows,      // legacy key (old frontend compatibility)
+      stats,
       pagination: {
         page,
         limit,
         total,
-        total_pages: Math.ceil(total / limit),
+        total_pages: totalPages,
+        has_next:    page < totalPages,
+        has_prev:    page > 1,
       },
     });
   } catch (err) {
+    logger.error("[getMyBookings] Unhandled error:", err.message, err.stack);
     return res.status(500).json({
       success: false,
-      message: err.message || "Failed to load bookings",
+      message: err.message || "Failed to load bookings.",
     });
   }
 };
