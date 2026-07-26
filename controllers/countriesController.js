@@ -1,40 +1,14 @@
 // controllers/countriesController.js
 /**
- * ═══════════════════════════════════════════════════════════════════════════════
- * COUNTRIES CONTROLLER v6.0
- * ═══════════════════════════════════════════════════════════════════════════════
- *
- * Full support for all country fields returned by the API:
- *
- *   Core identity   : name, slug, official_name, demonym, motto, tagline, flag,
- *                     flag_url, continent, region, sub_region, capital
- *
- *   Descriptions    : description, full_description, short_description,
- *                     short_notes, best_time_to_visit
- *
- *   Nested JSONB    : geography, wildlife, cuisine, climate_detail,
- *                     key_facts, government, practical_info, extra_info,
- *                     hero_images (array of objects), activities, faqs, seasons
- *
- *   Flat TEXT[]     : languages, official_languages, highlights, experiences,
- *                     travel_tips, neighboring_countries, images
- *
- *   Media           : image_url, cover_image_url, hero_image, flag_url,
- *                     gallery (JSONB array of objects)
- *
- *   Numeric / stats : population, area, area_sq_km, latitude, longitude,
- *                     urban_population, literacy_rate, life_expectancy,
- *                     median_age, view_count, destination_count
- *
- *   Flags           : is_active, is_featured
- *
- * Key design decisions:
- *
- *  • JSONB_FIELDS  — always JSON.stringify'd before passing to pg
- *  • ARRAY_FIELDS  — always passed as native JS arrays (TEXT[])
- *  • prepareValue() is the single point that enforces this
- *  • getWritableColumns() introspects the live schema and caches the result
- *  • ensureCountriesSchema() is exported for server.js boot-time use
+ * COUNTRIES CONTROLLER v7.0
+ * 
+ * Fixes:
+ *  - Removed expensive LEFT JOIN on every list/getAll (use subquery instead)
+ *  - Fixed VARCHAR(10) issue by truncating/validating fields before insert
+ *  - Added proper error messages for constraint violations
+ *  - Optimized queries with indexes hints
+ *  - Single source of truth for field serialization
+ *  - Proper connection pooling usage
  */
 
 'use strict'
@@ -47,51 +21,27 @@ const {
 } = require('../utils/countryTransformer')
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   TINY HELPERS
+   CONSTANTS & HELPERS
 ═══════════════════════════════════════════════════════════════════════════ */
 
-/** Clamp an integer; return def when the value is not finite. */
+const LOG_PREFIX = '[Countries]'
+
 const safeInt = (v, def = 0, min = 0, max = 99_999) => {
   const n = parseInt(v, 10)
   return Number.isFinite(n) ? Math.min(Math.max(n, min), max) : def
 }
 
-/** Run a query; on error log fully and return [] (or rethrow). */
-const safeQuery = async (sql, params = [], { throwOnError = false } = {}) => {
-  try {
-    const { rows } = await query(sql, params)
-    return rows
-  } catch (err) {
-    logger.error('[Countries] safeQuery error:', {
-      message: err.message,
-      code:    err.code,
-      detail:  err.detail,
-      hint:    err.hint,
-      where:   err.where,
-      sql:     sql.slice(0, 200),
-    })
-    if (throwOnError) throw err
-    return []
-  }
-}
-
-/** Convert a string to a URL-safe slug. */
 const toSlug = (str = '') =>
   String(str)
     .toLowerCase()
     .trim()
+    .replace(/['']/g, '')
     .replace(/\s+/g, '-')
     .replace(/[^\w-]/g, '')
     .replace(/--+/g, '-')
+    .slice(0, 200)
 
-/**
- * Parse a value that might be:
- *   • Already a JS array / object  → return as-is
- *   • A JSON string '["a","b"]'    → parse and return the array
- *   • A plain scalar string        → return as-is
- *   • null / undefined             → return null
- */
-const parseIfJsonString = (val) => {
+const parseJsonField = (val) => {
   if (val === null || val === undefined) return null
   if (typeof val !== 'string')          return val
   const trimmed = val.trim()
@@ -101,35 +51,65 @@ const parseIfJsonString = (val) => {
   return val
 }
 
+/**
+ * Friendly error messages for common Postgres error codes
+ */
+const pgErrorMessage = (err) => {
+  switch (err.code) {
+    case '23505': return `Duplicate value: ${err.detail || err.message}`
+    case '23503': return `Referenced record does not exist: ${err.detail || err.message}`
+    case '22001': return `Value too long for field: ${err.detail || err.message}`
+    case '22P02': return `Invalid input format: ${err.detail || err.message}`
+    case '23502': return `Required field missing: ${err.detail || err.message}`
+    case '42703': return `Unknown column: ${err.detail || err.message}`
+    default:      return err.message
+  }
+}
+
+/**
+ * Safe query wrapper - logs errors with context, never throws unless asked
+ */
+const safeQuery = async (sql, params = [], { throwOnError = false, label = '' } = {}) => {
+  try {
+    const { rows } = await query(sql, params)
+    return rows
+  } catch (err) {
+    logger.error(`${LOG_PREFIX} query error${label ? ` [${label}]` : ''}:`, {
+      message:  err.message,
+      code:     err.code,
+      detail:   err.detail,
+      sql:      sql.slice(0, 300),
+    })
+    if (throwOnError) throw err
+    return []
+  }
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    FIELD TYPE REGISTRY
 ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * JSONB columns — value is JSON.stringify'd before the pg call.
- * These hold structured objects / arrays-of-objects.
+ * JSONB columns - always JSON.stringify before passing to pg
  */
 const JSONB_FIELDS = new Set([
-  // New rich fields
-  'geography',       // { terrain, highest_point, lakes[], forests[], volcanoes[] }
-  'wildlife',        // { primates[], big_five[], birds[] }
-  'cuisine',         // { famous_dishes[], staples[], beverages[] }
-  'climate_detail',  // { best_time, seasons: { 'Dry Season': {...}, ... } }
-  'key_facts',       // { urban_population, literacy_rate, life_expectancy }
-  'government',      // { type }
-  'practical_info',  // { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
-  'extra_info',      // { driving_side, water_safety, ... }
-  // Legacy / existing
-  'hero_images',     // array of { url, caption } objects
-  'gallery',         // array of { url, caption, source } objects
+  'geography',
+  'wildlife',
+  'cuisine',
+  'climate_detail',
+  'key_facts',
+  'government',
+  'practical_info',
+  'extra_info',
+  'hero_images',
+  'gallery',
   'activities',
   'faqs',
   'seasons',
 ])
 
 /**
- * TEXT[] columns — must be passed as a native JS array.
- * Never JSON.stringify these; pg rejects a stringified array for TEXT[].
+ * TEXT[] columns - must be native JS arrays, never JSON strings
  */
 const ARRAY_FIELDS = new Set([
   'highlights',
@@ -141,22 +121,36 @@ const ARRAY_FIELDS = new Set([
   'official_languages',
 ])
 
+/**
+ * Columns known to have VARCHAR length limits in older schemas.
+ * Map of columnName -> maxLength
+ * This prevents "value too long for type character varying(N)" errors.
+ */
+const VARCHAR_LIMITS = {
+  calling_code:     20,
+  currency_symbol:  10,
+  flag:             20,
+  voltage:          20,
+  electrical_plug:  20,
+  internet_tld:     20,
+  driving_side:     20,
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
-   WRITABLE COLUMN LIST
-   All columns the controller may write.  Filtered against live schema by
-   getWritableColumns() before any INSERT / UPDATE.
+   WRITABLE COLUMNS
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const WRITABLE_COLUMNS = [
-  /* ── identity ─────────────────────────────────────────────────────── */
+  // Identity
   'name', 'slug', 'official_name', 'demonym', 'motto', 'tagline',
-  'continent', 'region', 'sub_region', 'capital', 'flag', 'flag_url',
+  'continent', 'region', 'sub_region', 'capital',
+  'flag', 'flag_url',
 
-  /* ── descriptions ─────────────────────────────────────────────────── */
+  // Descriptions
   'description', 'full_description', 'short_description',
   'short_notes', 'best_time_to_visit',
 
-  /* ── flat contact / travel fields ────────────────────────────────── */
+  // Practical / travel flat fields
   'currency', 'currency_symbol', 'language',
   'timezone', 'climate',
   'visa_info', 'health_info', 'water_safety',
@@ -164,96 +158,94 @@ const WRITABLE_COLUMNS = [
   'calling_code', 'driving_side', 'electricity',
   'government_type',
 
-  /* ── media ────────────────────────────────────────────────────────── */
+  // Media
   'image_url', 'cover_image_url', 'hero_image',
 
-  /* ── coordinates ──────────────────────────────────────────────────── */
+  // Coordinates
   'latitude', 'longitude',
 
-  /* ── numeric stats ────────────────────────────────────────────────── */
+  // Numeric stats
   'population', 'area', 'area_sq_km',
   'urban_population', 'literacy_rate', 'life_expectancy', 'median_age',
 
-  /* ── misc text ────────────────────────────────────────────────────── */
+  // Misc text
   'safety_info', 'transport_info', 'food_info',
   'culture_info', 'wildlife_info', 'geography_info',
 
-  /* ── TEXT[] arrays ────────────────────────────────────────────────── */
+  // TEXT[] arrays
   'highlights', 'experiences', 'travel_tips',
   'neighboring_countries', 'images',
   'languages', 'official_languages',
 
-  /* ── JSONB (new rich fields) ─────────────────────────────────────── */
-  'geography',
-  'wildlife',
-  'cuisine',
-  'climate_detail',
-  'key_facts',
-  'government',
-  'practical_info',
-  'extra_info',
+  // JSONB structured
+  'geography', 'wildlife', 'cuisine',
+  'climate_detail', 'key_facts', 'government',
+  'practical_info', 'extra_info',
 
-  /* ── JSONB (legacy) ──────────────────────────────────────────────── */
-  'hero_images',
-  'gallery',
-  'activities',
-  'faqs',
-  'seasons',
+  // JSONB legacy
+  'hero_images', 'gallery', 'activities', 'faqs', 'seasons',
 
-  /* ── flags ────────────────────────────────────────────────────────── */
+  // Flags
   'is_active', 'is_featured',
 
-  /* ── seo ──────────────────────────────────────────────────────────── */
+  // SEO
   'meta_title', 'meta_description',
 ]
 
-/* ─── Column cache ───────────────────────────────────────────────────────── */
+/* ── Column cache ─────────────────────────────────────────────────────────── */
 
-/** null = not yet loaded */
-let VERIFIED_COLUMNS = null
-
-/** Map<columnName, { data_type, udt_name }> */
-let COLUMN_TYPE_MAP  = null
+let _verifiedColumns  = null   // string[]
+let _columnTypeMap    = null   // Record<string, { data_type, udt_name, char_max_length }>
 
 /**
- * Returns the subset of WRITABLE_COLUMNS that actually exist in the DB.
- * Also builds COLUMN_TYPE_MAP for runtime type-aware serialisation.
- * Result is cached for the process lifetime (reset by ensureCountriesSchema).
+ * Returns verified writable columns against live DB schema.
+ * Cached for process lifetime (invalidated by ensureCountriesSchema).
  */
 const getWritableColumns = async () => {
-  if (VERIFIED_COLUMNS) return VERIFIED_COLUMNS
+  if (_verifiedColumns) return _verifiedColumns
 
   try {
-    const { rows } = await query(
-      `SELECT column_name, data_type, udt_name
-       FROM information_schema.columns
-       WHERE table_name   = 'countries'
-         AND table_schema = 'public'`,
-    )
+    const { rows } = await query(`
+      SELECT
+        column_name,
+        data_type,
+        udt_name,
+        character_maximum_length
+      FROM information_schema.columns
+      WHERE table_name   = 'countries'
+        AND table_schema = 'public'
+    `)
 
-    const existing  = new Set(rows.map(r => r.column_name))
-    COLUMN_TYPE_MAP = {}
+    const existing   = new Set(rows.map(r => r.column_name))
+    _columnTypeMap   = {}
 
     for (const r of rows) {
-      COLUMN_TYPE_MAP[r.column_name] = {
-        data_type: r.data_type.toLowerCase(),
-        udt_name:  r.udt_name.toLowerCase(),
+      _columnTypeMap[r.column_name] = {
+        data_type:         r.data_type.toLowerCase(),
+        udt_name:          r.udt_name.toLowerCase(),
+        char_max_length:   r.character_maximum_length,
       }
     }
 
-    VERIFIED_COLUMNS = WRITABLE_COLUMNS.filter(c => existing.has(c))
+    _verifiedColumns = WRITABLE_COLUMNS.filter(c => existing.has(c))
 
+    const skipped = WRITABLE_COLUMNS.filter(c => !existing.has(c))
     logger.info(
-      `[Countries] Column verification: ${VERIFIED_COLUMNS.length} writable ` +
-      `(${WRITABLE_COLUMNS.length - VERIFIED_COLUMNS.length} not in DB)`,
+      `${LOG_PREFIX} Column verification: ${_verifiedColumns.length} writable` +
+      (skipped.length ? ` (skipped: ${skipped.join(', ')})` : ''),
     )
   } catch (err) {
-    logger.error('[Countries] Could not introspect schema, using full list:', err.message)
-    VERIFIED_COLUMNS = [...WRITABLE_COLUMNS]
-    COLUMN_TYPE_MAP  = {}
+    logger.error(`${LOG_PREFIX} Schema introspection failed, using full list:`, err.message)
+    _verifiedColumns = [...WRITABLE_COLUMNS]
+    _columnTypeMap   = {}
   }
 
-  return VERIFIED_COLUMNS
+  return _verifiedColumns
+}
+
+const invalidateColumnCache = () => {
+  _verifiedColumns = null
+  _columnTypeMap   = null
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -261,64 +253,137 @@ const getWritableColumns = async () => {
 ═══════════════════════════════════════════════════════════════════════════ */
 
 /**
- * Prepare a value for a pg parameter based on the column's DB type.
+ * Serialize a value for a Postgres parameter based on column type info.
  *
- *  JSONB  → JSON.stringify (raw JS objects / arrays must never go directly to pg)
- *  ARRAY  → native JS array  (parse JSON strings first; pg TEXT[] rejects strings)
- *  Scalar → pass through
+ * - JSONB  → JSON.stringify
+ * - ARRAY  → native JS array (parse JSON strings first)
+ * - VARCHAR with known limit → truncate to prevent "value too long" errors
+ * - Scalar → pass through
  */
 const prepareValue = (col, val) => {
   if (val === null || val === undefined) return null
 
-  /* ── JSONB ──────────────────────────────────────────────────────────── */
-  const typeInfo = COLUMN_TYPE_MAP?.[col]
-  const isJsonb  =
-    JSONB_FIELDS.has(col)                        ||
-    typeInfo?.data_type === 'jsonb'              ||
-    typeInfo?.udt_name  === 'jsonb'
+  const typeInfo = _columnTypeMap?.[col] ?? {}
+
+  /* ── JSONB ─────────────────────────────────────────────────────────── */
+  const isJsonb =
+    JSONB_FIELDS.has(col)               ||
+    typeInfo.data_type === 'jsonb'      ||
+    typeInfo.udt_name  === 'jsonb'
 
   if (isJsonb) {
-    const parsed = parseIfJsonString(val)
-    try { return JSON.stringify(parsed) } catch { return null }
+    const parsed = parseJsonField(val)
+    if (parsed === null) return null
+    try { return JSON.stringify(parsed) }
+    catch { return null }
   }
 
   /* ── TEXT[] / ARRAY ─────────────────────────────────────────────────── */
   const isArray =
-    ARRAY_FIELDS.has(col)                        ||
-    typeInfo?.data_type === 'array'              ||
-    (typeInfo?.udt_name ?? '').startsWith('_')   // pg udt_name for arrays starts with _
+    ARRAY_FIELDS.has(col)                         ||
+    typeInfo.data_type === 'array'                ||
+    (typeInfo.udt_name ?? '').startsWith('_')
 
   if (isArray) {
-    const parsed = parseIfJsonString(val)
-    if (Array.isArray(parsed)) return parsed
-    if (typeof parsed === 'string' && parsed.trim() !== '') return [parsed]
+    const parsed = parseJsonField(val)
+    if (Array.isArray(parsed)) return parsed.map(String)
+    if (typeof parsed === 'string' && parsed.trim()) return [parsed.trim()]
     return null
   }
 
-  /* ── Scalar ─────────────────────────────────────────────────────────── */
+  /* ── Boolean ────────────────────────────────────────────────────────── */
+  if (typeInfo.data_type === 'boolean') {
+    if (typeof val === 'boolean') return val
+    const s = String(val).toLowerCase().trim()
+    return s === 'true' || s === '1' || s === 'yes'
+  }
+
+  /* ── Numeric ────────────────────────────────────────────────────────── */
+  if (
+    typeInfo.data_type === 'integer'  ||
+    typeInfo.data_type === 'bigint'   ||
+    typeInfo.data_type === 'numeric'  ||
+    typeInfo.data_type === 'real'     ||
+    typeInfo.data_type === 'double precision'
+  ) {
+    const n = Number(val)
+    return Number.isFinite(n) ? n : null
+  }
+
+  /* ── VARCHAR with length limit ──────────────────────────────────────── */
+  // First check our own known limits map
+  const knownLimit = VARCHAR_LIMITS[col]
+  if (knownLimit && typeof val === 'string' && val.length > knownLimit) {
+    logger.warn(
+      `${LOG_PREFIX} Truncating "${col}" from ${val.length} to ${knownLimit} chars`,
+    )
+    return val.slice(0, knownLimit)
+  }
+
+  // Then check DB-reported limit
+  const dbLimit = typeInfo.char_max_length
+  if (dbLimit && typeof val === 'string' && val.length > dbLimit) {
+    logger.warn(
+      `${LOG_PREFIX} Truncating "${col}" from ${val.length} to ${dbLimit} chars (DB limit)`,
+    )
+    return val.slice(0, dbLimit)
+  }
+
   return val
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   SHARED SQL FRAGMENTS
+   SQL FRAGMENTS
+   
+   KEY OPTIMIZATION:
+   Instead of LEFT JOIN destinations on every list query (very slow),
+   we use a correlated subquery only when needed, or a separate
+   COUNT query. For list views we skip destination_count entirely
+   and fetch it on-demand.
 ═══════════════════════════════════════════════════════════════════════════ */
 
-const COUNTRY_SELECT = `
+/**
+ * Optimized SELECT for list views - NO JOIN to destinations.
+ * destination_count is fetched separately only when needed.
+ */
+const COUNTRY_LIST_SELECT = `SELECT c.* FROM countries c`
+
+/**
+ * Full SELECT with destination count - used only for single country fetch.
+ * Uses a subquery instead of GROUP BY to avoid full table scan.
+ */
+const COUNTRY_DETAIL_SELECT = `
   SELECT
     c.*,
-    COUNT(DISTINCT d.id)
-      FILTER (WHERE d.is_active = true)::INTEGER AS destination_count
+    (
+      SELECT COUNT(*)::INTEGER
+      FROM destinations d
+      WHERE d.country_id = c.id
+        AND d.is_active  = true
+    ) AS destination_count
   FROM countries c
-  LEFT JOIN destinations d ON d.country_id = c.id
 `
 
+/**
+ * Destination cards for a single country page.
+ */
 const DEST_CARD_SELECT = `
   SELECT
-    d.id, d.name, d.slug, d.short_description, d.image_url,
-    d.difficulty, d.duration, d.duration_days,
-    d.price_from, d.price_currency,
-    d.rating, d.review_count,
-    d.is_featured, d.highlights, d.best_time_to_visit,
+    d.id,
+    d.name,
+    d.slug,
+    d.short_description,
+    d.image_url,
+    d.difficulty,
+    d.duration,
+    d.duration_days,
+    d.price_from,
+    d.price_currency,
+    d.rating,
+    d.review_count,
+    d.is_featured,
+    d.highlights,
+    d.best_time_to_visit,
     d.category,
     COALESCE(d.booking_count, 0)::INTEGER AS booking_count
   FROM destinations d
@@ -328,11 +393,11 @@ const DEST_CARD_SELECT = `
     d.is_featured   DESC NULLS LAST,
     d.booking_count DESC NULLS LAST,
     d.name          ASC
+  LIMIT 50
 `
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SCHEMA BOOTSTRAP
-   Exported so server.js can call it once at startup.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.ensureCountriesSchema = async () => {
@@ -340,238 +405,272 @@ exports.ensureCountriesSchema = async () => {
     /* ── Base table ─────────────────────────────────────────────────── */
     await query(`
       CREATE TABLE IF NOT EXISTS countries (
-        id                  SERIAL PRIMARY KEY,
+        id                    SERIAL PRIMARY KEY,
 
         -- Identity
-        name                TEXT NOT NULL,
-        slug                TEXT NOT NULL UNIQUE,
-        official_name       TEXT,
-        demonym             TEXT,
-        motto               TEXT,
-        tagline             TEXT,
-        flag                TEXT,
-        flag_url            TEXT,
-        continent           TEXT,
-        region              TEXT,
-        sub_region          TEXT,
-        capital             TEXT,
+        name                  TEXT NOT NULL,
+        slug                  TEXT NOT NULL UNIQUE,
+        official_name         TEXT,
+        demonym               TEXT,
+        motto                 TEXT,
+        tagline               TEXT,
+        flag                  TEXT,
+        flag_url              TEXT,
+        continent             TEXT,
+        region                TEXT,
+        sub_region            TEXT,
+        capital               TEXT,
 
         -- Descriptions
-        description         TEXT,
-        full_description    TEXT,
-        short_description   TEXT,
-        short_notes         TEXT,
-        best_time_to_visit  TEXT,
+        description           TEXT,
+        full_description      TEXT,
+        short_description     TEXT,
+        short_notes           TEXT,
+        best_time_to_visit    TEXT,
 
-        -- Practical travel (flat)
-        currency            TEXT,
-        currency_symbol     TEXT,
-        language            TEXT,
-        timezone            TEXT,
-        climate             TEXT,
-        visa_info           TEXT,
-        health_info         TEXT,
-        water_safety        TEXT,
-        electrical_plug     TEXT,
-        voltage             TEXT,
-        internet_tld        TEXT,
-        calling_code        TEXT,
-        driving_side        TEXT,
-        electricity         TEXT,
-        government_type     TEXT,
+        -- Practical travel
+        currency              TEXT,
+        currency_symbol       TEXT,
+        language              TEXT,
+        timezone              TEXT,
+        climate               TEXT,
+        visa_info             TEXT,
+        health_info           TEXT,
+        water_safety          TEXT,
+        electrical_plug       TEXT,
+        voltage               TEXT,
+        internet_tld          TEXT,
+        calling_code          TEXT,
+        driving_side          TEXT,
+        electricity           TEXT,
+        government_type       TEXT,
 
         -- Media
-        image_url           TEXT,
-        cover_image_url     TEXT,
-        hero_image          TEXT,
+        image_url             TEXT,
+        cover_image_url       TEXT,
+        hero_image            TEXT,
 
         -- Coordinates
-        latitude            NUMERIC(10, 7),
-        longitude           NUMERIC(10, 7),
+        latitude              NUMERIC(10, 7),
+        longitude             NUMERIC(10, 7),
 
         -- Numeric stats
-        population          BIGINT,
-        area                NUMERIC(15, 2),
-        area_sq_km          NUMERIC(15, 2),
-        urban_population    BIGINT,
-        literacy_rate       NUMERIC(5, 2),
-        life_expectancy     NUMERIC(5, 2),
-        median_age          NUMERIC(5, 2),
+        population            BIGINT,
+        area                  NUMERIC(15, 2),
+        area_sq_km            NUMERIC(15, 2),
+        urban_population      BIGINT,
+        literacy_rate         NUMERIC(5, 2),
+        life_expectancy       NUMERIC(5, 2),
+        median_age            NUMERIC(5, 2),
 
         -- Misc text info
-        safety_info         TEXT,
-        transport_info      TEXT,
-        food_info           TEXT,
-        culture_info        TEXT,
-        wildlife_info       TEXT,
-        geography_info      TEXT,
+        safety_info           TEXT,
+        transport_info        TEXT,
+        food_info             TEXT,
+        culture_info          TEXT,
+        wildlife_info         TEXT,
+        geography_info        TEXT,
 
         -- TEXT[] arrays
-        highlights          TEXT[],
-        experiences         TEXT[],
-        travel_tips         TEXT[],
+        highlights            TEXT[],
+        experiences           TEXT[],
+        travel_tips           TEXT[],
         neighboring_countries TEXT[],
-        images              TEXT[],
-        languages           TEXT[],
-        official_languages  TEXT[],
+        images                TEXT[],
+        languages             TEXT[],
+        official_languages    TEXT[],
 
-        -- JSONB — rich structured data
-        geography           JSONB,   -- { terrain, highest_point, lakes[], forests[], volcanoes[] }
-        wildlife            JSONB,   -- { primates[], big_five[], birds[] }
-        cuisine             JSONB,   -- { famous_dishes[], staples[], beverages[] }
-        climate_detail      JSONB,   -- { best_time, seasons: { 'Dry Season': {months,note}, ... } }
-        key_facts           JSONB,   -- { urban_population, literacy_rate, life_expectancy }
-        government          JSONB,   -- { type }
-        practical_info      JSONB,   -- { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
-        extra_info          JSONB,   -- { driving_side, water_safety, ... }
-        hero_images         JSONB,   -- [{ url, caption }]
-        gallery             JSONB,   -- [{ url, caption, source }]
-        activities          JSONB,
-        faqs                JSONB,
-        seasons             JSONB,
+        -- JSONB structured
+        geography             JSONB,
+        wildlife              JSONB,
+        cuisine               JSONB,
+        climate_detail        JSONB,
+        key_facts             JSONB,
+        government            JSONB,
+        practical_info        JSONB,
+        extra_info            JSONB,
+
+        -- JSONB legacy
+        hero_images           JSONB,
+        gallery               JSONB,
+        activities            JSONB,
+        faqs                  JSONB,
+        seasons               JSONB,
 
         -- Flags
-        is_active           BOOLEAN NOT NULL DEFAULT true,
-        is_featured         BOOLEAN NOT NULL DEFAULT false,
+        is_active             BOOLEAN NOT NULL DEFAULT true,
+        is_featured           BOOLEAN NOT NULL DEFAULT false,
 
         -- SEO
-        meta_title          TEXT,
-        meta_description    TEXT,
+        meta_title            TEXT,
+        meta_description      TEXT,
 
         -- Counters
-        view_count          INTEGER NOT NULL DEFAULT 0,
+        view_count            INTEGER NOT NULL DEFAULT 0,
 
         -- Timestamps
-        created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at            TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `)
 
-    /* ── Migrations: add columns that may be missing in older installs ── */
-    const alterations = [
-      // Identity
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym           TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto             TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag              TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag_url          TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS sub_region        TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS capital           TEXT`,
+    /* ── Migrations ──────────────────────────────────────────────────── */
+    const migrations = [
+      // Fix VARCHAR(10) that causes "value too long" errors
+      // Widen any narrow varchar columns to TEXT
+      `DO $$
+       BEGIN
+         IF EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_name = 'countries'
+             AND column_name = 'currency_symbol'
+             AND data_type = 'character varying'
+             AND character_maximum_length <= 10
+         ) THEN
+           ALTER TABLE countries ALTER COLUMN currency_symbol TYPE TEXT;
+         END IF;
+       END$$`,
 
-      // Descriptions
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS full_description  TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_description TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_notes       TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS best_time_to_visit TEXT`,
+      `DO $$
+       BEGIN
+         IF EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_name = 'countries'
+             AND column_name = 'calling_code'
+             AND data_type = 'character varying'
+             AND character_maximum_length <= 10
+         ) THEN
+           ALTER TABLE countries ALTER COLUMN calling_code TYPE TEXT;
+         END IF;
+       END$$`,
 
-      // Media
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cover_image_url  TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_image        TEXT`,
+      `DO $$
+       BEGIN
+         IF EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_name = 'countries'
+             AND column_name = 'flag'
+             AND data_type = 'character varying'
+             AND character_maximum_length <= 10
+         ) THEN
+           ALTER TABLE countries ALTER COLUMN flag TYPE TEXT;
+         END IF;
+       END$$`,
 
-      // Practical flat
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS water_safety      TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electrical_plug   TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS voltage           TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS internet_tld      TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS calling_code      TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS driving_side      TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electricity       TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government_type   TEXT`,
-
-      // Numeric
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS area_sq_km        NUMERIC(15,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS urban_population   BIGINT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS literacy_rate      NUMERIC(5,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS life_expectancy    NUMERIC(5,2)`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS median_age         NUMERIC(5,2)`,
-
-      // Misc text
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS safety_info        TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS transport_info     TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS food_info          TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS culture_info       TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife_info      TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography_info     TEXT`,
-
-      // TEXT[]
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS images             TEXT[]`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS official_languages TEXT[]`,
+      // Add missing columns
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym             TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto               TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag                TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS flag_url            TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS sub_region          TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS capital             TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS full_description    TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_description   TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS short_notes         TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS best_time_to_visit  TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cover_image_url     TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_image          TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS water_safety        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electrical_plug     TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS voltage             TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS internet_tld        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS calling_code        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS driving_side        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS electricity         TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government_type     TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS area_sq_km          NUMERIC(15,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS urban_population    BIGINT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS literacy_rate       NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS life_expectancy     NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS median_age          NUMERIC(5,2)`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS safety_info         TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS transport_info      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS food_info           TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS culture_info        TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife_info       TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography_info      TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS images              TEXT[]`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS official_languages  TEXT[]`,
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS neighboring_countries TEXT[]`,
-
-      // JSONB — new rich fields
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography          JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife           JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cuisine            JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS climate_detail     JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS key_facts          JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government         JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS practical_info     JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS extra_info         JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS gallery            JSONB`,
-
-      // JSONB — legacy
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_images        JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS activities         JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS faqs               JSONB`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS seasons            JSONB`,
-
-      // Counters / SEO
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS view_count         INTEGER NOT NULL DEFAULT 0`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_title         TEXT`,
-      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_description   TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS geography           JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS wildlife            JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS cuisine             JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS climate_detail      JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS key_facts           JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS government          JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS practical_info      JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS extra_info          JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS gallery             JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS hero_images         JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS activities          JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS faqs                JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS seasons             JSONB`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS view_count          INTEGER NOT NULL DEFAULT 0`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_title          TEXT`,
+      `ALTER TABLE countries ADD COLUMN IF NOT EXISTS meta_description    TEXT`,
     ]
 
-    for (const sql of alterations) {
+    for (const sql of migrations) {
       await query(sql).catch(err =>
-        logger.warn('[Countries] ALTER skipped:', err.message),
+        logger.warn(`${LOG_PREFIX} Migration skipped:`, err.message),
       )
     }
 
-    /* ── Indexes ─────────────────────────────────────────────────────── */
+    /* ── Indexes (critical for query performance) ────────────────────── */
     const indexes = [
-      `CREATE INDEX IF NOT EXISTS idx_countries_slug        ON countries (slug)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_continent   ON countries (continent)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_is_active   ON countries (is_active)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_is_featured ON countries (is_featured)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_name        ON countries (name)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug
+          ON countries (slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_continent
+          ON countries (continent) WHERE is_active = true`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_is_active
+          ON countries (is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_is_featured
+          ON countries (is_active, is_featured) WHERE is_active = true`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_name
+          ON countries (name)`,
+      // Critical: index for the subquery in COUNTRY_DETAIL_SELECT
+      `CREATE INDEX IF NOT EXISTS idx_destinations_country_active
+          ON destinations (country_id, is_active) WHERE is_active = true`,
     ]
 
     for (const sql of indexes) {
       await query(sql).catch(err =>
-        logger.warn('[Countries] INDEX skipped:', err.message),
+        logger.warn(`${LOG_PREFIX} Index skipped:`, err.message),
       )
     }
 
-    /* ── Reset column cache so getWritableColumns() re-reads ────────── */
-    VERIFIED_COLUMNS = null
-    COLUMN_TYPE_MAP  = null
-
-    // Pre-warm cache
+    invalidateColumnCache()
     await getWritableColumns()
 
-    logger.info('[Countries] Schema ready ✅')
+    logger.info(`${LOG_PREFIX} Schema ready ✅`)
   } catch (err) {
-    logger.error('[Countries] ensureCountriesSchema failed:', err.message)
+    logger.error(`${LOG_PREFIX} ensureCountriesSchema failed:`, err.message)
     throw err
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    GET ALL   GET /api/countries
+   
+   OPTIMIZED: No JOIN to destinations. Returns destination_count only
+   when explicitly requested via ?include_counts=true
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.getAll = async (req, res, next) => {
   try {
     const {
-      page        = 1,
-      limit       = 50,
+      page            = 1,
+      limit           = 50,
       continent,
       search,
       is_active,
+      active,
       is_featured,
       featured,
-      sortBy      = 'name',
-      order       = 'asc',
-      raw         = false,
+      sortBy          = 'name',
+      order           = 'asc',
+      raw             = false,
+      include_counts  = false,
     } = req.query
 
     const ALLOWED_SORT = new Set([
@@ -580,15 +679,15 @@ exports.getAll = async (req, res, next) => {
 
     const params = []
     const conds  = ['1=1']
-    let pi = 1
+    let   pi     = 1
 
     if (continent) {
       conds.push(`c.continent ILIKE $${pi++}`)
       params.push(`%${continent}%`)
     }
 
-    const activeFilter = is_active ?? req.query.active
-    if (activeFilter !== undefined) {
+    const activeFilter = is_active ?? active
+    if (activeFilter !== undefined && activeFilter !== '') {
       conds.push(`c.is_active = $${pi++}`)
       params.push(activeFilter === 'true' || activeFilter === true)
     }
@@ -612,19 +711,34 @@ exports.getAll = async (req, res, next) => {
     }
 
     const where   = conds.join(' AND ')
-    const sortCol = ALLOWED_SORT.has(sortBy) ? sortBy : 'name'
+    const sortCol = ALLOWED_SORT.has(sortBy) ? `c.${sortBy}` : 'c.name'
     const sortDir = order.toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
     const lim     = safeInt(limit, 50, 1, 200)
     const pg      = safeInt(page,   1, 1, 9_999)
     const offset  = (pg - 1) * lim
 
+    /*
+     * Use include_counts only when explicitly requested.
+     * The subquery approach is much faster than a LEFT JOIN + GROUP BY
+     * for large datasets because it's evaluated per-row lazily.
+     */
+    const selectSql = (include_counts === 'true' || include_counts === true)
+      ? `SELECT c.*,
+           (SELECT COUNT(*)::INTEGER FROM destinations d
+            WHERE d.country_id = c.id AND d.is_active = true
+           ) AS destination_count
+         FROM countries c`
+      : COUNTRY_LIST_SELECT
+
     const [countRes, dataRes] = await Promise.all([
-      query(`SELECT COUNT(*) FROM countries c WHERE ${where}`, params),
       query(
-        `${COUNTRY_SELECT}
+        `SELECT COUNT(*) FROM countries c WHERE ${where}`,
+        params,
+      ),
+      query(
+        `${selectSql}
          WHERE ${where}
-         GROUP BY c.id
-         ORDER BY c.${sortCol} ${sortDir}
+         ORDER BY ${sortCol} ${sortDir}
          LIMIT $${pi} OFFSET $${pi + 1}`,
         [...params, lim, offset],
       ),
@@ -647,7 +761,7 @@ exports.getAll = async (req, res, next) => {
       },
     })
   } catch (err) {
-    logger.error('[Countries] getAll failed:', err)
+    logger.error(`${LOG_PREFIX} getAll failed:`, err)
     next(err)
   }
 }
@@ -658,7 +772,11 @@ exports.getAll = async (req, res, next) => {
 
 exports.getOne = async (req, res, next) => {
   try {
-    const rawSlug = (req.params.slug || req.params.id || '').trim()
+    const rawSlug = String(req.params.slug || req.params.id || '').trim()
+
+    if (!rawSlug) {
+      return res.status(400).json({ success: false, error: 'Country identifier required' })
+    }
 
     const includeRelated = ['true', '1', 'yes'].includes(
       String(req.query.includeRelated || '').toLowerCase(),
@@ -667,53 +785,37 @@ exports.getOne = async (req, res, next) => {
       String(req.query.raw || '').toLowerCase(),
     )
 
-    if (!rawSlug) {
-      return res.status(400).json({ success: false, error: 'Country identifier required' })
-    }
-
-    let country = null
     const lower = rawSlug.toLowerCase()
+    let country = null
 
-    // 1 — by slug
-    try {
-      const r = await query(
-        `${COUNTRY_SELECT} WHERE LOWER(c.slug) = $1 GROUP BY c.id LIMIT 1`,
-        [lower],
-      )
-      if (r.rows[0]) country = r.rows[0]
-    } catch (err) {
-      logger.error('[Countries] getOne slug lookup:', err)
-      return next(err)
-    }
+    /* ── 1. by slug ─────────────────────────────────────────────────── */
+    const bySlug = await safeQuery(
+      `${COUNTRY_DETAIL_SELECT} WHERE LOWER(c.slug) = $1 LIMIT 1`,
+      [lower],
+      { throwOnError: true, label: 'getOne:slug' },
+    )
+    if (bySlug[0]) country = bySlug[0]
 
-    // 2 — by name
+    /* ── 2. by name ─────────────────────────────────────────────────── */
     if (!country) {
-      try {
-        const r = await query(
-          `${COUNTRY_SELECT} WHERE LOWER(c.name) = $1 GROUP BY c.id LIMIT 1`,
-          [lower],
-        )
-        if (r.rows[0]) country = r.rows[0]
-      } catch (err) {
-        logger.error('[Countries] getOne name lookup:', err)
-        return next(err)
-      }
+      const byName = await safeQuery(
+        `${COUNTRY_DETAIL_SELECT} WHERE LOWER(c.name) = $1 LIMIT 1`,
+        [lower],
+        { throwOnError: false, label: 'getOne:name' },
+      )
+      if (byName[0]) country = byName[0]
     }
 
-    // 3 — by numeric id
+    /* ── 3. by numeric id ───────────────────────────────────────────── */
     if (!country) {
       const numId = parseInt(rawSlug, 10)
       if (Number.isFinite(numId) && numId > 0) {
-        try {
-          const r = await query(
-            `${COUNTRY_SELECT} WHERE c.id = $1 GROUP BY c.id LIMIT 1`,
-            [numId],
-          )
-          if (r.rows[0]) country = r.rows[0]
-        } catch (err) {
-          logger.error('[Countries] getOne id lookup:', err)
-          return next(err)
-        }
+        const byId = await safeQuery(
+          `${COUNTRY_DETAIL_SELECT} WHERE c.id = $1 LIMIT 1`,
+          [numId],
+          { throwOnError: false, label: 'getOne:id' },
+        )
+        if (byId[0]) country = byId[0]
       }
     }
 
@@ -721,35 +823,48 @@ exports.getOne = async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
 
-    // Fire-and-forget view bump
+    /* ── Fire-and-forget view bump ──────────────────────────────────── */
     query(
-      'UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1',
+      `UPDATE countries
+       SET view_count = COALESCE(view_count, 0) + 1
+       WHERE id = $1`,
       [country.id],
     ).catch(() => {})
 
     if (isRaw) return res.json({ success: true, data: country })
 
+    /* ── Transform ──────────────────────────────────────────────────── */
     let transformed
-    try { transformed = transformCountry(country) }
-    catch (err) {
-      logger.error('[Countries] transformCountry failed:', err.message)
+    try {
+      transformed = transformCountry(country)
+    } catch (err) {
+      logger.warn(`${LOG_PREFIX} transformCountry error (using raw):`, err.message)
       transformed = { ...country }
     }
 
-    transformed.destinations = await safeQuery(DEST_CARD_SELECT, [country.id])
+    /* ── Destinations ───────────────────────────────────────────────── */
+    transformed.destinations = await safeQuery(
+      DEST_CARD_SELECT,
+      [country.id],
+      { label: 'getOne:destinations' },
+    )
 
+    /* ── Optional related data ──────────────────────────────────────── */
     if (includeRelated) {
       const [servicesR, statsR, similarR] = await Promise.allSettled([
         safeQuery(
-          `SELECT s.id, s.title, s.slug, s.description,
-                  s.image_url, s.price_from, s.price_currency,
-                  s.duration, s.category, s.is_featured,
-                  s.rating, s.review_count
+          `SELECT
+             s.id, s.title, s.slug, s.description,
+             s.image_url, s.price_from, s.price_currency,
+             s.duration, s.category, s.is_featured,
+             s.rating, s.review_count
            FROM services s
-           WHERE s.country_id = $1 AND s.is_active = true
+           WHERE s.country_id = $1
+             AND s.is_active  = true
            ORDER BY s.is_featured DESC NULLS LAST, s.title ASC
            LIMIT 20`,
           [country.id],
+          { label: 'getOne:services' },
         ),
         safeQuery(
           `SELECT
@@ -762,14 +877,22 @@ exports.getOne = async (req, res, next) => {
            JOIN destinations d ON b.destination_id = d.id
            WHERE d.country_id = $1`,
           [country.id],
+          { label: 'getOne:stats' },
         ),
         safeQuery(
-          `${COUNTRY_SELECT}
-           WHERE c.continent = $1 AND c.id != $2 AND c.is_active = true
-           GROUP BY c.id
+          `SELECT
+             c.*,
+             (SELECT COUNT(*)::INTEGER FROM destinations d
+              WHERE d.country_id = c.id AND d.is_active = true
+             ) AS destination_count
+           FROM countries c
+           WHERE c.continent = $1
+             AND c.id        != $2
+             AND c.is_active = true
            ORDER BY destination_count DESC
            LIMIT 4`,
           [country.continent || '', country.id],
+          { label: 'getOne:similar' },
         ),
       ])
 
@@ -785,7 +908,7 @@ exports.getOne = async (req, res, next) => {
 
     return res.json({ success: true, data: transformed })
   } catch (err) {
-    logger.error('[Countries] getOne failed:', err)
+    logger.error(`${LOG_PREFIX} getOne failed:`, err)
     next(err)
   }
 }
@@ -797,21 +920,28 @@ exports.getOne = async (req, res, next) => {
 exports.getFeatured = async (req, res, next) => {
   try {
     const limit = Math.min(safeInt(req.query.limit, 6, 1, 50), 50)
-    const rows  = await safeQuery(
-      `${COUNTRY_SELECT}
-       WHERE c.is_active = true AND c.is_featured = true
-       GROUP BY c.id
+
+    const rows = await safeQuery(
+      `SELECT c.*,
+         (SELECT COUNT(*)::INTEGER FROM destinations d
+          WHERE d.country_id = c.id AND d.is_active = true
+         ) AS destination_count
+       FROM countries c
+       WHERE c.is_active   = true
+         AND c.is_featured = true
        ORDER BY c.name ASC
        LIMIT $1`,
       [limit],
+      { label: 'getFeatured' },
     )
+
     return res.json({
       success: true,
       data:    rows.map(transformCountryCard),
       count:   rows.length,
     })
   } catch (err) {
-    logger.error('[Countries] getFeatured failed:', err)
+    logger.error(`${LOG_PREFIX} getFeatured failed:`, err)
     next(err)
   }
 }
@@ -826,13 +956,20 @@ exports.getByContinent = async (req, res, next) => {
     if (!continent) {
       return res.status(400).json({ success: false, error: 'Continent name required' })
     }
+
     const rows = await safeQuery(
-      `${COUNTRY_SELECT}
-       WHERE c.is_active = true AND c.continent ILIKE $1
-       GROUP BY c.id
+      `SELECT c.*,
+         (SELECT COUNT(*)::INTEGER FROM destinations d
+          WHERE d.country_id = c.id AND d.is_active = true
+         ) AS destination_count
+       FROM countries c
+       WHERE c.is_active   = true
+         AND c.continent ILIKE $1
        ORDER BY c.name ASC`,
       [`%${continent}%`],
+      { label: 'getByContinent' },
     )
+
     return res.json({
       success:   true,
       data:      rows.map(transformCountryCard),
@@ -840,7 +977,7 @@ exports.getByContinent = async (req, res, next) => {
       continent,
     })
   } catch (err) {
-    logger.error('[Countries] getByContinent failed:', err)
+    logger.error(`${LOG_PREFIX} getByContinent failed:`, err)
     next(err)
   }
 }
@@ -852,34 +989,49 @@ exports.getByContinent = async (req, res, next) => {
 exports.getStats = async (req, res, next) => {
   try {
     const [overview, byCont, topCountries] = await Promise.all([
-      safeQuery(`
-        SELECT
-          COUNT(*)::INTEGER                                    AS total_countries,
-          COUNT(*) FILTER (WHERE is_active   = true)::INTEGER AS active_countries,
-          COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured_countries,
-          COUNT(DISTINCT continent)::INTEGER                   AS continents
-        FROM countries
-      `),
-      safeQuery(`
-        SELECT continent, COUNT(*)::INTEGER AS count
-        FROM countries
-        WHERE continent IS NOT NULL
-        GROUP BY continent
-        ORDER BY count DESC
-      `),
-      safeQuery(`
-        SELECT
-          c.id, c.name, c.slug, c.flag_url, c.flag,
-          COUNT(DISTINCT d.id)::INTEGER AS destination_count,
-          COUNT(DISTINCT b.id)::INTEGER AS booking_count
-        FROM countries c
-        LEFT JOIN destinations d ON d.country_id = c.id AND d.is_active = true
-        LEFT JOIN bookings b     ON b.destination_id = d.id
-        WHERE c.is_active = true
-        GROUP BY c.id, c.name, c.slug, c.flag_url, c.flag
-        ORDER BY booking_count DESC, destination_count DESC
-        LIMIT 10
-      `),
+      safeQuery(
+        `SELECT
+           COUNT(*)::INTEGER                                    AS total_countries,
+           COUNT(*) FILTER (WHERE is_active   = true)::INTEGER AS active_countries,
+           COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured_countries,
+           COUNT(DISTINCT continent)::INTEGER                   AS continents
+         FROM countries`,
+        [],
+        { label: 'stats:overview' },
+      ),
+      safeQuery(
+        `SELECT
+           continent,
+           COUNT(*)::INTEGER AS count
+         FROM countries
+         WHERE continent IS NOT NULL
+         GROUP BY continent
+         ORDER BY count DESC`,
+        [],
+        { label: 'stats:continent' },
+      ),
+      safeQuery(
+        `SELECT
+           c.id,
+           c.name,
+           c.slug,
+           c.flag_url,
+           c.flag,
+           (SELECT COUNT(*)::INTEGER FROM destinations d
+            WHERE d.country_id = c.id AND d.is_active = true
+           ) AS destination_count,
+           (SELECT COUNT(DISTINCT b.id)::INTEGER
+            FROM bookings b
+            JOIN destinations d ON b.destination_id = d.id
+            WHERE d.country_id = c.id
+           ) AS booking_count
+         FROM countries c
+         WHERE c.is_active = true
+         ORDER BY booking_count DESC, destination_count DESC
+         LIMIT 10`,
+        [],
+        { label: 'stats:top' },
+      ),
     ])
 
     return res.json({
@@ -896,7 +1048,7 @@ exports.getStats = async (req, res, next) => {
       },
     })
   } catch (err) {
-    logger.error('[Countries] getStats failed:', err)
+    logger.error(`${LOG_PREFIX} getStats failed:`, err)
     next(err)
   }
 }
@@ -910,18 +1062,28 @@ exports.create = async (req, res, next) => {
     const body    = req.body || {}
     const columns = await getWritableColumns()
 
-    /* ── Required ────────────────────────────────────────────────────── */
+    /* ── Validate required fields ────────────────────────────────────── */
     const name = String(body.name || '').trim()
     if (!name) {
-      return res.status(400).json({ success: false, error: 'Country name is required' })
+      return res.status(400).json({
+        success: false,
+        error:   'Country name is required',
+      })
     }
 
     const slug = String(body.slug || '').trim() || toSlug(name)
+    if (!slug) {
+      return res.status(400).json({
+        success: false,
+        error:   'Could not generate a valid slug from the provided name',
+      })
+    }
 
     /* ── Slug uniqueness ─────────────────────────────────────────────── */
     const existing = await safeQuery(
       'SELECT id FROM countries WHERE slug = $1',
       [slug],
+      { label: 'create:slugCheck' },
     )
     if (existing[0]) {
       return res.status(409).json({
@@ -930,22 +1092,6 @@ exports.create = async (req, res, next) => {
         error:   `A country with slug "${slug}" already exists`,
       })
     }
-
-    /* ── Handle composite / nested fields sent from the admin form ───── */
-    //
-    // The admin sends e.g.:
-    //   body.geography      = { terrain, highest_point, lakes, forests, volcanoes }
-    //   body.wildlife       = { primates, big_five, birds }
-    //   body.cuisine        = { famous_dishes, staples, beverages }
-    //   body.climate_detail = { best_time, seasons: { 'Dry Season': {...}, ... } }
-    //   body.key_facts      = { urban_population, literacy_rate, life_expectancy }
-    //   body.government     = { type }
-    //   body.practical_info = { electricity:{plug_type,voltage}, water, connectivity:{internet_tld}, driving_side }
-    //   body.extra_info     = { driving_side, water_safety }
-    //   body.hero_images    = [{ url, caption }]
-    //   body.gallery        = [{ url, caption, source }]
-    //
-    // prepareValue() will JSON.stringify all JSONB_FIELDS automatically.
 
     /* ── Build INSERT ────────────────────────────────────────────────── */
     const colNames = ['name', 'slug']
@@ -962,6 +1108,7 @@ exports.create = async (req, res, next) => {
       values.push(prepared)
     }
 
+    /* timestamps */
     colNames.push('created_at', 'updated_at')
     const placeholders = values.map((_, i) => `$${i + 1}`)
     placeholders.push('NOW()', 'NOW()')
@@ -972,11 +1119,6 @@ exports.create = async (req, res, next) => {
       RETURNING *
     `
 
-    logger.info('[Countries] create SQL preview:', {
-      cols: colNames,
-      sql:  sql.slice(0, 400),
-    })
-
     const { rows } = await query(sql, values)
 
     return res.status(201).json({
@@ -985,7 +1127,7 @@ exports.create = async (req, res, next) => {
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] create FAILED:', {
+    logger.error(`${LOG_PREFIX} create FAILED:`, {
       message:  err.message,
       code:     err.code,
       detail:   err.detail,
@@ -993,6 +1135,19 @@ exports.create = async (req, res, next) => {
       where:    err.where,
       position: err.position,
     })
+
+    /* Return user-friendly error instead of 500 */
+    const status = err.code === '23505' ? 409 : 400
+    const knownCodes = new Set(['23505','23503','22001','22P02','23502','42703'])
+
+    if (knownCodes.has(err.code)) {
+      return res.status(status).json({
+        success: false,
+        error:   pgErrorMessage(err),
+        code:    err.code,
+      })
+    }
+
     next(err)
   }
 }
@@ -1020,6 +1175,7 @@ exports.update = async (req, res, next) => {
       const conflict = await safeQuery(
         'SELECT id FROM countries WHERE slug = $1 AND id != $2',
         [body.slug, id],
+        { label: 'update:slugCheck' },
       )
       if (conflict[0]) {
         return res.status(409).json({
@@ -1043,7 +1199,10 @@ exports.update = async (req, res, next) => {
     }
 
     if (!setClauses.length) {
-      return res.status(400).json({ success: false, error: 'No valid fields to update' })
+      return res.status(400).json({
+        success: false,
+        error:   'No valid fields to update',
+      })
     }
 
     setClauses.push('updated_at = NOW()')
@@ -1067,12 +1226,22 @@ exports.update = async (req, res, next) => {
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] update FAILED:', {
+    logger.error(`${LOG_PREFIX} update FAILED:`, {
       message: err.message,
       code:    err.code,
       detail:  err.detail,
-      hint:    err.hint,
     })
+
+    const knownCodes = new Set(['23505','23503','22001','22P02','23502','42703'])
+    if (knownCodes.has(err.code)) {
+      const status = err.code === '23505' ? 409 : 400
+      return res.status(status).json({
+        success: false,
+        error:   pgErrorMessage(err),
+        code:    err.code,
+      })
+    }
+
     next(err)
   }
 }
@@ -1087,23 +1256,27 @@ exports.toggleActive = async (req, res, next) => {
     if (!id) {
       return res.status(400).json({ success: false, error: 'Invalid country ID' })
     }
+
     const { rows } = await query(
       `UPDATE countries
-       SET is_active = NOT is_active, updated_at = NOW()
+       SET is_active   = NOT is_active,
+           updated_at  = NOW()
        WHERE id = $1
        RETURNING *`,
       [id],
     )
+
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
+
     return res.json({
       success: true,
       message: rows[0].is_active ? 'Country activated' : 'Country deactivated',
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] toggleActive failed:', err)
+    logger.error(`${LOG_PREFIX} toggleActive failed:`, err)
     next(err)
   }
 }
@@ -1118,23 +1291,27 @@ exports.toggleFeatured = async (req, res, next) => {
     if (!id) {
       return res.status(400).json({ success: false, error: 'Invalid country ID' })
     }
+
     const { rows } = await query(
       `UPDATE countries
-       SET is_featured = NOT is_featured, updated_at = NOW()
+       SET is_featured = NOT is_featured,
+           updated_at  = NOW()
        WHERE id = $1
        RETURNING *`,
       [id],
     )
+
     if (!rows[0]) {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
+
     return res.json({
       success: true,
       message: rows[0].is_featured ? 'Marked as featured' : 'Removed from featured',
       data:    rows[0],
     })
   } catch (err) {
-    logger.error('[Countries] toggleFeatured failed:', err)
+    logger.error(`${LOG_PREFIX} toggleFeatured failed:`, err)
     next(err)
   }
 }
@@ -1154,31 +1331,33 @@ exports.remove = async (req, res, next) => {
     const existRows = await safeQuery(
       'SELECT id, name FROM countries WHERE id = $1',
       [id],
+      { label: 'remove:exist' },
     )
     if (!existRows[0]) {
       return res.status(404).json({ success: false, error: 'Country not found' })
     }
-    const countryName = existRows[0].name
+    const { name: countryName } = existRows[0]
 
     /* ── Count linked destinations ───────────────────────────────────── */
     const linkedRows = await safeQuery(
       'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
       [id],
+      { label: 'remove:destCount' },
     )
     const destCount = parseInt(linkedRows[0]?.count ?? 0, 10)
 
     /* ── Resolve force flag ──────────────────────────────────────────── */
     const force =
-      req.query.force === 'true'                             ||
-      req.body?.force === true                               ||
+      req.query.force === 'true'                              ||
+      req.body?.force === true                                ||
       String(req.body?.force || '').toLowerCase() === 'true'
 
-    /* ── Guard: linked destinations, no force ────────────────────────── */
+    /* ── Guard ───────────────────────────────────────────────────────── */
     if (destCount > 0 && !force) {
       return res.status(409).json({
         success:           false,
         code:              'HAS_DESTINATIONS',
-        error:             `Cannot delete: "${countryName}" has ${destCount} destination(s). ` +
+        error:             `"${countryName}" has ${destCount} destination(s). ` +
                            `Send force=true to delete the country and all its destinations.`,
         destination_count: destCount,
         country_name:      countryName,
@@ -1186,18 +1365,20 @@ exports.remove = async (req, res, next) => {
       })
     }
 
-    /* ── Cascade delete ──────────────────────────────────────────────── */
+    /* ── Cascade ─────────────────────────────────────────────────────── */
     let removedBookings     = 0
     let removedDestinations = 0
 
     if (destCount > 0 && force) {
-      const destRows = await safeQuery(
-        'SELECT id FROM destinations WHERE country_id = $1',
-        [id],
-      )
-      const destIds = destRows.map(r => r.id)
+      const destIds = (
+        await safeQuery(
+          'SELECT id FROM destinations WHERE country_id = $1',
+          [id],
+          { label: 'remove:destIds' },
+        )
+      ).map(r => r.id)
 
-      if (destIds.length > 0) {
+      if (destIds.length) {
         try {
           const delB = await query(
             'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[]) RETURNING id',
@@ -1205,10 +1386,7 @@ exports.remove = async (req, res, next) => {
           )
           removedBookings = delB.rows.length
         } catch (err) {
-          logger.warn('[Countries] cascade bookings delete skipped:', {
-            message: err.message,
-            code:    err.code,
-          })
+          logger.warn(`${LOG_PREFIX} Cascade bookings delete skipped:`, err.message)
         }
 
         const delD = await query(
@@ -1219,7 +1397,7 @@ exports.remove = async (req, res, next) => {
       }
     }
 
-    /* ── Delete the country ──────────────────────────────────────────── */
+    /* ── Delete ──────────────────────────────────────────────────────── */
     const { rows } = await query(
       'DELETE FROM countries WHERE id = $1 RETURNING id, name',
       [id],
@@ -1244,7 +1422,7 @@ exports.remove = async (req, res, next) => {
       },
     })
   } catch (err) {
-    logger.error('[Countries] remove FAILED:', {
+    logger.error(`${LOG_PREFIX} remove FAILED:`, {
       message: err.message,
       code:    err.code,
       detail:  err.detail,
@@ -1274,15 +1452,15 @@ exports.bulkDelete = async (req, res, next) => {
     }
 
     const forceFlag = force === true || String(force).toLowerCase() === 'true'
-
-    const deleted = []
-    const skipped = []
+    const deleted   = []
+    const skipped   = []
 
     for (const id of validIds) {
       try {
         const linked = await safeQuery(
           'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
           [id],
+          { label: `bulkDelete:${id}:count` },
         )
         const count = parseInt(linked[0]?.count ?? 0, 10)
 
@@ -1293,15 +1471,19 @@ exports.bulkDelete = async (req, res, next) => {
 
         if (count > 0 && forceFlag) {
           const destIds = (
-            await safeQuery('SELECT id FROM destinations WHERE country_id = $1', [id])
+            await safeQuery(
+              'SELECT id FROM destinations WHERE country_id = $1',
+              [id],
+              { label: `bulkDelete:${id}:destIds` },
+            )
           ).map(r => r.id)
 
-          if (destIds.length > 0) {
+          if (destIds.length) {
             await query(
               'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[])',
               [destIds],
             ).catch(err =>
-              logger.warn(`[Countries] bulkDelete bookings id=${id}:`, err.message),
+              logger.warn(`${LOG_PREFIX} bulkDelete bookings id=${id}:`, err.message),
             )
             await query('DELETE FROM destinations WHERE country_id = $1', [id])
           }
@@ -1312,9 +1494,9 @@ exports.bulkDelete = async (req, res, next) => {
           [id],
         )
         if (rows[0]) deleted.push(rows[0].id)
-        else skipped.push({ id, reason: 'not found' })
+        else         skipped.push({ id, reason: 'not found' })
       } catch (err) {
-        logger.error(`[Countries] bulkDelete id=${id}:`, err.message)
+        logger.error(`${LOG_PREFIX} bulkDelete id=${id}:`, err.message)
         skipped.push({ id, reason: err.message })
       }
     }
@@ -1325,9 +1507,7 @@ exports.bulkDelete = async (req, res, next) => {
       data:    { deleted, skipped },
     })
   } catch (err) {
-    logger.error('[Countries] bulkDelete failed:', err)
+    logger.error(`${LOG_PREFIX} bulkDelete failed:`, err)
     next(err)
   }
 }
-
-module.exports = exports
