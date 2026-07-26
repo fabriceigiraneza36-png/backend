@@ -1,15 +1,15 @@
 // controllers/destinationsController.js
 /**
- * DESTINATIONS CONTROLLER v6.0
+ * DESTINATIONS CONTROLLER v6.1
  *
- * Fixes & Improvements:
+ * Fixes:
+ *  - Fixed "paginate.limitOffset is not iterable" error
  *  - Removed slow GROUP BY + COUNT JOIN on every list query
  *  - Fixed VARCHAR constraint errors with auto-truncation
  *  - All pg errors return proper 400/409 instead of 500
  *  - safeTask pattern for fault-tolerant getOne sub-queries
  *  - Schema introspection cached for process lifetime
- *  - Proper index-aware query structure
- *  - INNER JOIN → LEFT JOIN where country may be null
+ *  - LEFT JOIN instead of INNER JOIN so destinations without country still appear
  *  - Consistent error logging with context
  */
 
@@ -52,7 +52,7 @@ const toArr = (v) => {
 }
 
 const parseJson = (v, def = {}) => {
-  if (!v)                   return def
+  if (!v)                    return def
   if (typeof v === 'object') return v
   try { return JSON.parse(v) } catch { return def }
 }
@@ -63,6 +63,13 @@ const fmtDuration = (days, nights) => {
   if (nights)         return `${nights} Night${nights > 1 ? 's' : ''}`
   return null
 }
+
+/**
+ * Safe integer limits for pagination
+ */
+const safeLimit  = (v, def = 12)  => Math.min(Math.max(parseInt(v, 10)  || def, 1), 200)
+const safePage   = (v, def = 1)   => Math.max(parseInt(v, 10) || def, 1)
+const safeOffset = (page, limit)  => (page - 1) * limit
 
 /**
  * Friendly Postgres error messages — stops 500s for validation failures.
@@ -95,10 +102,7 @@ const handlePgError = (err, res, next) => {
  */
 const safeTask = (label, fn) =>
   fn().catch(err => {
-    console.error(
-      `${LOG} "${label}" sub-task failed (non-fatal):`,
-      err.message?.slice(0, 200),
-    )
+    console.error(`${LOG} "${label}" sub-task failed (non-fatal):`, err.message?.slice(0, 200))
     return undefined
   })
 
@@ -121,24 +125,19 @@ const safeQuery = async (sql, params = [], label = '') => {
 /* ═══════════════════════════════════════════════════════════════════════════
    VARCHAR TRUNCATION MAP
    Prevents "value too long for type character varying(N)" 500 errors.
-   Keys are DB column names; values are max character counts.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const VARCHAR_LIMITS = {
-  status:          30,
-  difficulty:      50,
-  price_currency:  10,
-  malaria_risk:    50,
-  safety_rating:   30,
-  category:       100,
-  fitness_level:  100,
+  status:         30,
+  difficulty:     50,
+  price_currency: 10,
+  malaria_risk:   50,
+  safety_rating:  30,
+  category:      100,
+  fitness_level: 100,
 }
 
-/**
- * Truncate a string value if the column has a known VARCHAR limit.
- * Also reads live schema limits via COLUMN_META.
- */
-let COLUMN_META = null   // populated lazily by getColumnMeta()
+let COLUMN_META = null
 
 const getColumnMeta = async () => {
   if (COLUMN_META) return COLUMN_META
@@ -151,9 +150,9 @@ const getColumnMeta = async () => {
     COLUMN_META = {}
     for (const r of rows) {
       COLUMN_META[r.column_name] = {
-        maxLen:    r.character_maximum_length,
-        dataType:  r.data_type?.toLowerCase(),
-        udtName:   r.udt_name?.toLowerCase(),
+        maxLen:   r.character_maximum_length,
+        dataType: r.data_type?.toLowerCase(),
+        udtName:  r.udt_name?.toLowerCase(),
       }
     }
   } catch {
@@ -205,9 +204,9 @@ const syncCountryDestCount = async (countryId) => {
 }
 
 const createUniqueSlug = async (name, excludeId = null) => {
-  const base = slugify(name)
-  let slug    = base
-  let counter = 1
+  const base  = slugify(name)
+  let   slug  = base
+  let   counter = 1
 
   while (true) {
     const rows = await safeQuery(
@@ -229,59 +228,58 @@ exports.ensureDestinationSchema = async () => {
   const run = (sql) =>
     query(sql).catch(e => console.warn(`${LOG} [Schema] skipped:`, e.message.slice(0, 120)))
 
-  /* ── Core destination column additions ───────────────────────────── */
   const colMigrations = [
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at       TIMESTAMPTZ`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS published_at      TIMESTAMPTZ`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by        INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS share_count       INTEGER DEFAULT 0`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wishlist_count    INTEGER DEFAULT 0`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS booking_count     INTEGER DEFAULT 0`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS view_count        INTEGER DEFAULT 0`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_display  TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_nights   INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_active         BOOLEAN DEFAULT true`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_featured       BOOLEAN DEFAULT false`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_popular        BOOLEAN DEFAULT false`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_new            BOOLEAN DEFAULT false`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_eco_friendly   BOOLEAN DEFAULT false`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at        TIMESTAMPTZ`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS published_at       TIMESTAMPTZ`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by         INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS share_count        INTEGER DEFAULT 0`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wishlist_count     INTEGER DEFAULT 0`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS booking_count      INTEGER DEFAULT 0`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS view_count         INTEGER DEFAULT 0`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_display   TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_nights    INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_active          BOOLEAN DEFAULT true`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_featured        BOOLEAN DEFAULT false`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_popular         BOOLEAN DEFAULT false`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_new             BOOLEAN DEFAULT false`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_eco_friendly    BOOLEAN DEFAULT false`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_family_friendly BOOLEAN DEFAULT false`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_sold_out       BOOLEAN DEFAULT false`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS status            TEXT DEFAULT 'draft'`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS overview          TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS what_to_expect    TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS getting_there     TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS local_tips        TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS safety_info       TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS tagline           TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS destination_type  TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS fitness_level     TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS nearest_city      TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS nearest_airport   TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_sold_out        BOOLEAN DEFAULT false`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS status             TEXT DEFAULT 'draft'`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS overview           TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS what_to_expect     TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS getting_there      TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS local_tips         TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS safety_info        TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS tagline            TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS destination_type   TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS fitness_level      TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS nearest_city       TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS nearest_airport    TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS distance_from_airport_km NUMERIC(8,2)`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS altitude_meters   NUMERIC(8,2)`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS address           TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS entrance_fee      TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS operating_hours   TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS image_urls        TEXT[]`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS hero_image        TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS thumbnail_url     TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS video_url         TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS virtual_tour_url  TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS highlights        TEXT[]`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS activities        TEXT[]`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wildlife          TEXT[]`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS meta_title        TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS meta_description  TEXT`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS min_group_size    INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS max_group_size    INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS min_age           INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_days     INTEGER`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS latitude          NUMERIC(10,7)`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS longitude         NUMERIC(10,7)`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS rating            NUMERIC(3,2) DEFAULT 0`,
-    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS review_count      INTEGER DEFAULT 0`,
-    // Widen any narrow VARCHAR columns that cause "value too long" errors
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS altitude_meters    NUMERIC(8,2)`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS address            TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS entrance_fee       TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS operating_hours    TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS image_urls         TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS hero_image         TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS thumbnail_url      TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS video_url          TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS virtual_tour_url   TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS highlights         TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS activities         TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wildlife           TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS meta_title         TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS meta_description   TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS min_group_size     INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS max_group_size     INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS min_age            INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS duration_days      INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS latitude           NUMERIC(10,7)`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS longitude          NUMERIC(10,7)`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS rating             NUMERIC(3,2) DEFAULT 0`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS review_count       INTEGER DEFAULT 0`,
+    // Widen narrow VARCHAR columns that cause "value too long" 500 errors
     `DO $$BEGIN
        IF EXISTS (SELECT 1 FROM information_schema.columns
                   WHERE table_name='destinations' AND column_name='status'
@@ -304,7 +302,7 @@ exports.ensureDestinationSchema = async () => {
 
   for (const sql of colMigrations) await run(sql)
 
-  /* ── Satellite tables ─────────────────────────────────────────────── */
+  /* ── Satellite tables ────────────────────────────────────────────── */
   await run(`
     CREATE TABLE IF NOT EXISTS destination_images (
       id             SERIAL PRIMARY KEY,
@@ -313,9 +311,9 @@ exports.ensureDestinationSchema = async () => {
       thumbnail_url  TEXT,
       caption        TEXT,
       alt_text       TEXT,
-      is_primary     BOOLEAN   DEFAULT false,
-      is_active      BOOLEAN   DEFAULT true,
-      sort_order     INTEGER   DEFAULT 0,
+      is_primary     BOOLEAN     DEFAULT false,
+      is_active      BOOLEAN     DEFAULT true,
+      sort_order     INTEGER     DEFAULT 0,
       uploaded_by    INTEGER,
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`)
@@ -333,8 +331,8 @@ exports.ensureDestinationSchema = async () => {
       accommodation  TEXT,
       distance_km    NUMERIC(8,2),
       image_url      TEXT,
-      sort_order     INTEGER   DEFAULT 0,
-      is_active      BOOLEAN   DEFAULT true,
+      sort_order     INTEGER     DEFAULT 0,
+      is_active      BOOLEAN     DEFAULT true,
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`)
 
@@ -345,9 +343,9 @@ exports.ensureDestinationSchema = async () => {
       question       TEXT    NOT NULL,
       answer         TEXT    NOT NULL,
       category       TEXT,
-      helpful_count  INTEGER   DEFAULT 0,
-      sort_order     INTEGER   DEFAULT 0,
-      is_active      BOOLEAN   DEFAULT true,
+      helpful_count  INTEGER     DEFAULT 0,
+      sort_order     INTEGER     DEFAULT 0,
+      is_active      BOOLEAN     DEFAULT true,
       created_at     TIMESTAMPTZ DEFAULT NOW()
     )`)
 
@@ -356,7 +354,7 @@ exports.ensureDestinationSchema = async () => {
       id               SERIAL PRIMARY KEY,
       destination_id   INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
       user_id          INTEGER,
-      reviewer_name    TEXT DEFAULT 'Anonymous',
+      reviewer_name    TEXT        DEFAULT 'Anonymous',
       reviewer_country TEXT,
       reviewer_avatar  TEXT,
       title            TEXT,
@@ -364,17 +362,16 @@ exports.ensureDestinationSchema = async () => {
       overall_rating   NUMERIC(3,2) NOT NULL CHECK (overall_rating BETWEEN 1 AND 5),
       trip_date        DATE,
       trip_type        TEXT,
-      images           TEXT[]  DEFAULT '{}'::TEXT[],
-      helpful_count    INTEGER   DEFAULT 0,
-      status           TEXT      DEFAULT 'pending',
-      is_verified      BOOLEAN   DEFAULT false,
-      is_featured      BOOLEAN   DEFAULT false,
-      is_active        BOOLEAN   DEFAULT true,
+      images           TEXT[]      DEFAULT '{}'::TEXT[],
+      helpful_count    INTEGER     DEFAULT 0,
+      status           TEXT        DEFAULT 'pending',
+      is_verified      BOOLEAN     DEFAULT false,
+      is_featured      BOOLEAN     DEFAULT false,
+      is_active        BOOLEAN     DEFAULT true,
       created_at       TIMESTAMPTZ DEFAULT NOW(),
       updated_at       TIMESTAMPTZ DEFAULT NOW()
     )`)
 
-  /* add any missing review cols for existing installs */
   await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS is_active  BOOLEAN DEFAULT true`)
   await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`)
 
@@ -475,7 +472,6 @@ exports.ensureDestinationSchema = async () => {
 
   for (const idx of indexes) await run(idx)
 
-  /* reset column meta cache */
   COLUMN_META = null
   await getColumnMeta()
 
@@ -484,11 +480,6 @@ exports.ensureDestinationSchema = async () => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SQL FRAGMENTS
-   
-   KEY OPTIMIZATION:
-   BASE_SELECT uses LEFT JOIN (not INNER JOIN) so destinations without a
-   country still appear. The list queries do NOT include a COUNT subquery
-   — destination_count is a separate call only when needed.
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const BASE_SELECT = `
@@ -507,15 +498,15 @@ const BASE_SELECT = `
 const REVIEW_AGG_SQL = `
   SELECT
     ROUND(AVG(overall_rating)::numeric, 2)                   AS avg_rating,
-    COUNT(*)                                                  AS total_reviews,
-    COUNT(*) FILTER (WHERE overall_rating >= 4.5)            AS five_star,
+    COUNT(*)::INTEGER                                         AS total_reviews,
+    COUNT(*) FILTER (WHERE overall_rating >= 4.5)::INTEGER   AS five_star,
     COUNT(*) FILTER (WHERE overall_rating >= 3.5
-                       AND overall_rating  < 4.5)            AS four_star,
+                       AND overall_rating  < 4.5)::INTEGER   AS four_star,
     COUNT(*) FILTER (WHERE overall_rating >= 2.5
-                       AND overall_rating  < 3.5)            AS three_star,
+                       AND overall_rating  < 3.5)::INTEGER   AS three_star,
     COUNT(*) FILTER (WHERE overall_rating >= 1.5
-                       AND overall_rating  < 2.5)            AS two_star,
-    COUNT(*) FILTER (WHERE overall_rating  < 1.5)            AS one_star
+                       AND overall_rating  < 2.5)::INTEGER   AS two_star,
+    COUNT(*) FILTER (WHERE overall_rating  < 1.5)::INTEGER   AS one_star
   FROM destination_reviews
   WHERE destination_id = $1 AND status = 'approved' AND is_active = true
 `
@@ -548,31 +539,31 @@ const serialize = (row) => {
     localTips:       row.local_tips,
     safetyInfo:      row.safety_info,
 
-    category:           row.category,
-    difficulty:         row.difficulty,
-    destinationType:    row.destination_type,
+    category:        row.category,
+    difficulty:      row.difficulty,
+    destinationType: row.destination_type,
 
     country: {
       id:        row.country_id,
-      slug:      row.country_slug   || null,
-      name:      row.country_name   || null,
-      flag:      row.country_flag   || null,
-      flagUrl:   row.country_flag_url || null,
+      slug:      row.country_slug      || null,
+      name:      row.country_name      || null,
+      flag:      row.country_flag      || null,
+      flagUrl:   row.country_flag_url  || null,
       continent: row.country_continent || null,
-      region:    row.country_region || null,
+      region:    row.country_region    || null,
     },
     countryId:   row.country_id,
     countrySlug: row.country_slug || null,
     countryName: row.country_name || null,
 
-    region:                  row.region,
-    nearestCity:             row.nearest_city,
-    nearestAirport:          row.nearest_airport,
-    distanceFromAirportKm:   toNum(row.distance_from_airport_km),
-    address:                 row.address,
-    latitude:                toNum(row.latitude),
-    longitude:               toNum(row.longitude),
-    altitudeMeters:          toNum(row.altitude_meters),
+    region:                row.region,
+    nearestCity:           row.nearest_city,
+    nearestAirport:        row.nearest_airport,
+    distanceFromAirportKm: toNum(row.distance_from_airport_km),
+    address:               row.address,
+    latitude:              toNum(row.latitude),
+    longitude:             toNum(row.longitude),
+    altitudeMeters:        toNum(row.altitude_meters),
     mapPosition: {
       lat: toNum(row.latitude),
       lng: toNum(row.longitude),
@@ -580,19 +571,19 @@ const serialize = (row) => {
 
     images,
     imageUrl:      mainImg,
-    heroImage:     row.hero_image     || mainImg,
-    thumbnailUrl:  row.thumbnail_url  || mainImg,
+    heroImage:     row.hero_image      || mainImg,
+    thumbnailUrl:  row.thumbnail_url   || mainImg,
     coverImageUrl: row.cover_image_url || mainImg,
     videoUrl:      row.video_url,
     virtualTourUrl:row.virtual_tour_url,
 
-    duration:      row.duration_display || fmtDuration(row.duration_days, row.duration_nights),
-    durationDays:  toNum(row.duration_days),
-    durationNights:toNum(row.duration_nights),
-    minGroupSize:  toNum(row.min_group_size, 1),
-    maxGroupSize:  toNum(row.max_group_size),
-    minAge:        toNum(row.min_age),
-    fitnessLevel:  row.fitness_level,
+    duration:       row.duration_display || fmtDuration(row.duration_days, row.duration_nights),
+    durationDays:   toNum(row.duration_days),
+    durationNights: toNum(row.duration_nights),
+    minGroupSize:   toNum(row.min_group_size, 1),
+    maxGroupSize:   toNum(row.max_group_size),
+    minAge:         toNum(row.min_age),
+    fitnessLevel:   row.fitness_level,
 
     rating:        toNum(row.rating, 0),
     reviewCount:   toNum(row.review_count, 0),
@@ -666,13 +657,13 @@ const serializeAggregate = (agg) => {
   const a = agg || {}
   return {
     avgRating:    toNum(a.avg_rating, 0),
-    totalReviews: parseInt(a.total_reviews) || 0,
+    totalReviews: parseInt(a.total_reviews, 10) || 0,
     distribution: {
-      fiveStar:  parseInt(a.five_star)  || 0,
-      fourStar:  parseInt(a.four_star)  || 0,
-      threeStar: parseInt(a.three_star) || 0,
-      twoStar:   parseInt(a.two_star)   || 0,
-      oneStar:   parseInt(a.one_star)   || 0,
+      fiveStar:  parseInt(a.five_star,  10) || 0,
+      fourStar:  parseInt(a.four_star,  10) || 0,
+      threeStar: parseInt(a.three_star, 10) || 0,
+      twoStar:   parseInt(a.two_star,   10) || 0,
+      oneStar:   parseInt(a.one_star,   10) || 0,
     },
   }
 }
@@ -683,12 +674,12 @@ const serializePracticalInfo = (row) => {
     id:            row.id,
     destinationId: row.destination_id,
     gettingThere: {
-      nearestAirport:      row.nearest_airport,
-      distanceFromAirport: row.distance_from_airport,
-      driveTimeFromCapital:row.drive_time_from_capital,
-      roadConditions:      row.road_conditions,
-      transportOptions:    toArr(row.transport_options),
-      borderCrossings:     row.border_crossings,
+      nearestAirport:       row.nearest_airport,
+      distanceFromAirport:  row.distance_from_airport,
+      driveTimeFromCapital: row.drive_time_from_capital,
+      roadConditions:       row.road_conditions,
+      transportOptions:     toArr(row.transport_options),
+      borderCrossings:      row.border_crossings,
     },
     healthAndSafety: {
       vaccinationsRequired:    toArr(row.vaccinations_required),
@@ -701,11 +692,11 @@ const serializePracticalInfo = (row) => {
       safetyNotes:             row.safety_notes,
     },
     permitsAndRegulations: {
-      permitsRequired:   toArr(row.permits_required),
-      permitCost:        row.permit_cost,
-      bookingLeadTime:   row.booking_lead_time,
-      visitorLimits:     row.visitor_limits,
-      regulations:       row.regulations,
+      permitsRequired:  toArr(row.permits_required),
+      permitCost:       row.permit_cost,
+      bookingLeadTime:  row.booking_lead_time,
+      visitorLimits:    row.visitor_limits,
+      regulations:      row.regulations,
     },
     climate: {
       avgTempLowC:      toNum(row.avg_temp_low_c),
@@ -735,10 +726,10 @@ const serializePracticalInfo = (row) => {
       plugTypes:          toArr(row.plug_types),
     },
     culture: {
-      currencyTips:    row.currency_tips,
-      tippingCulture:  row.tipping_culture,
-      localEtiquette:  toArr(row.local_etiquette),
-      photographyRules:row.photography_rules,
+      currencyTips:     row.currency_tips,
+      tippingCulture:   row.tipping_culture,
+      localEtiquette:   toArr(row.local_etiquette),
+      photographyRules: row.photography_rules,
     },
     updatedAt: row.updated_at,
   }
@@ -770,7 +761,6 @@ const buildFilters = async (filters) => {
   const params = []
   let   pi     = 1
 
-  /* status */
   if (filters.status) {
     conds.push(`d.status = $${pi++}`)
     params.push(filters.status)
@@ -778,7 +768,6 @@ const buildFilters = async (filters) => {
     conds.push(`d.status = 'published'`)
   }
 
-  /* country */
   if (filters.country || filters.country_id || filters.countrySlug) {
     const c = await resolveCountry(
       filters.country || filters.country_id || filters.countrySlug,
@@ -787,7 +776,7 @@ const buildFilters = async (filters) => {
       conds.push(`d.country_id = $${pi++}`)
       params.push(c.id)
     } else {
-      conds.push('1 = 0')   /* no results if country not found */
+      conds.push('1 = 0')
     }
   }
 
@@ -900,6 +889,11 @@ const buildSort = (sort) => SORT_MAP[sort] || SORT_MAP.featured
 exports.getAll = async (req, res, next) => {
   try {
     const { page = 1, limit = 12, sort = 'featured', ...filters } = req.query
+
+    const lim    = safeLimit(limit, 12)
+    const pg     = safePage(page, 1)
+    const offset = safeOffset(pg, lim)
+
     const { where, params, nextIdx } = await buildFilters(filters)
     const orderBy = buildSort(sort)
 
@@ -915,17 +909,24 @@ exports.getAll = async (req, res, next) => {
         `${BASE_SELECT} ${where}
          ORDER BY ${orderBy}
          LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
-        [...params, ...paginate(0, page, limit).limitOffset],
+        [...params, lim, offset],
       ),
     ])
 
     const total      = parseInt(countRes.rows[0].count, 10)
-    const pagination = paginate(total, page, limit)
+    const totalPages = Math.ceil(total / lim)
 
     return res.json({
       success: true,
       data:    dataRes.rows.map(serialize),
-      pagination,
+      pagination: {
+        total,
+        page:        pg,
+        limit:       lim,
+        total_pages: totalPages,
+        has_next:    pg < totalPages,
+        has_prev:    pg > 1,
+      },
     })
   } catch (err) {
     next(err)
@@ -935,6 +936,7 @@ exports.getAll = async (req, res, next) => {
 exports.getFeatured = async (req, res, next) => {
   try {
     const { limit = 8, country, continent } = req.query
+    const lim    = Math.min(parseInt(limit, 10) || 8, 50)
     const conds  = [`d.is_featured = true`, `d.is_active = true`, `d.status = 'published'`]
     const params = []
     let   pi     = 1
@@ -947,7 +949,7 @@ exports.getFeatured = async (req, res, next) => {
       conds.push(`c.continent ILIKE $${pi++}`)
       params.push(continent)
     }
-    params.push(Math.min(parseInt(limit, 10) || 8, 50))
+    params.push(lim)
 
     const rows = await safeQuery(
       `${BASE_SELECT}
@@ -967,6 +969,7 @@ exports.getFeatured = async (req, res, next) => {
 exports.getPopular = async (req, res, next) => {
   try {
     const { limit = 8, country } = req.query
+    const lim    = Math.min(parseInt(limit, 10) || 8, 50)
     const conds  = [`d.is_active = true`, `d.status = 'published'`]
     const params = []
     let   pi     = 1
@@ -975,7 +978,7 @@ exports.getPopular = async (req, res, next) => {
       const c = await resolveCountry(country)
       if (c) { conds.push(`d.country_id = $${pi++}`); params.push(c.id) }
     }
-    params.push(Math.min(parseInt(limit, 10) || 8, 50))
+    params.push(lim)
 
     const rows = await safeQuery(
       `${BASE_SELECT}
@@ -1015,8 +1018,12 @@ exports.getNew = async (req, res, next) => {
 
 exports.getByCountry = async (req, res, next) => {
   try {
-    const { countrySlug }                         = req.params
+    const { countrySlug }                                        = req.params
     const { page = 1, limit = 12, sort = 'featured', category } = req.query
+
+    const lim    = safeLimit(limit, 12)
+    const pg     = safePage(page, 1)
+    const offset = safeOffset(pg, lim)
 
     const country = await resolveCountry(countrySlug)
     if (!country) {
@@ -1046,17 +1053,24 @@ exports.getByCountry = async (req, res, next) => {
         `${BASE_SELECT} ${where}
          ORDER BY ${buildSort(sort)}
          LIMIT $${pi} OFFSET $${pi + 1}`,
-        [...params, ...paginate(0, page, limit).limitOffset],
+        [...params, lim, offset],
       ),
     ])
 
     const total      = parseInt(countRes.rows[0].count, 10)
-    const pagination = paginate(total, page, limit)
+    const totalPages = Math.ceil(total / lim)
 
     return res.json({
       success: true,
-      data: dataRes.rows.map(serialize),
-      pagination,
+      data:    dataRes.rows.map(serialize),
+      pagination: {
+        total,
+        page:        pg,
+        limit:       lim,
+        total_pages: totalPages,
+        has_next:    pg < totalPages,
+        has_prev:    pg > 1,
+      },
       country: {
         id:               country.id,
         slug:             country.slug,
@@ -1083,9 +1097,10 @@ exports.getCategories = async (req, res, next) => {
     }
 
     const rows = await safeQuery(
-      `SELECT d.category,
-              COUNT(*)::INTEGER                                AS count,
-              ROUND(AVG(d.rating) FILTER (WHERE d.rating > 0)::numeric, 2) AS avg_rating
+      `SELECT
+         d.category,
+         COUNT(*)::INTEGER                                                    AS count,
+         ROUND(AVG(d.rating) FILTER (WHERE d.rating > 0)::numeric, 2)       AS avg_rating
        FROM destinations d
        LEFT JOIN countries c ON c.id = d.country_id AND c.is_active = true
        WHERE ${conds.join(' AND ')}
@@ -1118,13 +1133,12 @@ exports.getDifficulties = async (req, res, next) => {
        WHERE is_active = true AND status = 'published' AND difficulty IS NOT NULL
        GROUP BY difficulty
        ORDER BY CASE difficulty
-         WHEN 'easy'        THEN 1 WHEN 'moderate'    THEN 2
-         WHEN 'challenging' THEN 3 WHEN 'difficult'   THEN 4
+         WHEN 'easy'        THEN 1 WHEN 'moderate'   THEN 2
+         WHEN 'challenging' THEN 3 WHEN 'difficult'  THEN 4
          WHEN 'expert'      THEN 5 ELSE 6 END`,
       [],
       'getDifficulties',
     )
-
     return res.json({
       success: true,
       data: rows.map(r => ({
@@ -1141,6 +1155,7 @@ exports.getDifficulties = async (req, res, next) => {
 exports.getMapData = async (req, res, next) => {
   try {
     const { country, category, bounds, limit = 500 } = req.query
+    const lim    = Math.min(parseInt(limit, 10) || 500, 1000)
     const conds  = [
       `d.is_active = true`,
       `d.status = 'published'`,
@@ -1168,13 +1183,14 @@ exports.getMapData = async (req, res, next) => {
         pi += 4
       }
     }
-    params.push(Math.min(parseInt(limit, 10) || 500, 1000))
+    params.push(lim)
 
     const rows = await safeQuery(
-      `SELECT d.id, d.name, d.slug, d.latitude, d.longitude,
-              d.category, d.difficulty, d.image_url, d.short_description,
-              d.rating, d.review_count, d.is_featured, d.is_popular,
-              c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
+      `SELECT
+         d.id, d.name, d.slug, d.latitude, d.longitude,
+         d.category, d.difficulty, d.image_url, d.short_description,
+         d.rating, d.review_count, d.is_featured, d.is_popular,
+         c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
        FROM destinations d
        LEFT JOIN countries c ON c.id = d.country_id AND c.is_active = true
        WHERE ${conds.join(' AND ')}
@@ -1200,7 +1216,11 @@ exports.getMapData = async (req, res, next) => {
         reviewCount:      toNum(r.review_count),
         isFeatured:       toBool(r.is_featured),
         isPopular:        toBool(r.is_popular),
-        country: { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
+        country: {
+          name: r.country_name,
+          slug: r.country_slug,
+          flag: r.country_flag,
+        },
       })),
     })
   } catch (err) {
@@ -1211,12 +1231,20 @@ exports.getMapData = async (req, res, next) => {
 exports.search = async (req, res, next) => {
   try {
     const { q, page = 1, limit = 12 } = req.query
+
     if (!q || q.length < 2) {
-      return res.json({ success: true, data: [], pagination: paginate(0, page, limit) })
+      return res.json({
+        success: true,
+        data:    [],
+        pagination: { total: 0, page: 1, limit: safeLimit(limit), total_pages: 0, has_next: false, has_prev: false },
+      })
     }
 
+    const lim    = safeLimit(limit, 12)
+    const pg     = safePage(page, 1)
+    const offset = safeOffset(pg, lim)
+
     const { where, params, nextIdx } = await buildFilters({ search: q })
-    const pg = paginate(0, page, limit)
 
     const [countRes, dataRes] = await Promise.all([
       query(
@@ -1231,18 +1259,25 @@ exports.search = async (req, res, next) => {
          ORDER BY CASE WHEN d.name ILIKE $${nextIdx + 2} THEN 0 ELSE 1 END,
                   d.rating DESC NULLS LAST
          LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`,
-        [...params, ...pg.limitOffset, `${q}%`],
+        [...params, lim, offset, `${q}%`],
       ),
     ])
 
     const total      = parseInt(countRes.rows[0].count, 10)
-    const pagination = paginate(total, page, limit)
+    const totalPages = Math.ceil(total / lim)
 
     return res.json({
       success: true,
       data:    dataRes.rows.map(serialize),
-      pagination,
-      query:   q,
+      pagination: {
+        total,
+        page:        pg,
+        limit:       lim,
+        total_pages: totalPages,
+        has_next:    pg < totalPages,
+        has_prev:    pg > 1,
+      },
+      query: q,
     })
   } catch (err) {
     next(err)
@@ -1256,8 +1291,9 @@ exports.getSuggestions = async (req, res, next) => {
 
     const lim  = Math.min(parseInt(limit, 10) || 10, 20)
     const rows = await safeQuery(
-      `SELECT d.id, d.name, d.slug, d.category, d.image_url, d.rating,
-              c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
+      `SELECT
+         d.id, d.name, d.slug, d.category, d.image_url, d.rating,
+         c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
        FROM destinations d
        LEFT JOIN countries c ON c.id = d.country_id AND c.is_active = true
        WHERE d.is_active = true AND d.status = 'published'
@@ -1272,14 +1308,14 @@ exports.getSuggestions = async (req, res, next) => {
     return res.json({
       success: true,
       data: rows.map(r => ({
-        id:        r.id,
-        name:      r.name,
-        slug:      r.slug,
-        category:  r.category,
-        imageUrl:  r.image_url,
-        rating:    toNum(r.rating),
-        country:   { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
-        type:      'destination',
+        id:       r.id,
+        name:     r.name,
+        slug:     r.slug,
+        category: r.category,
+        imageUrl: r.image_url,
+        rating:   toNum(r.rating),
+        country:  { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
+        type:     'destination',
       })),
     })
   } catch (err) {
@@ -1291,8 +1327,9 @@ exports.getTags = async (req, res, next) => {
   try {
     const lim  = Math.min(parseInt(req.query.limit, 10) || 50, 200)
     const rows = await safeQuery(
-      `SELECT dt.tag_name, dt.tag_slug, dt.tag_category,
-              COUNT(DISTINCT dt.destination_id)::INTEGER AS count
+      `SELECT
+         dt.tag_name, dt.tag_slug, dt.tag_category,
+         COUNT(DISTINCT dt.destination_id)::INTEGER AS count
        FROM destination_tags dt
        INNER JOIN destinations d ON dt.destination_id = d.id
          AND d.is_active = true AND d.status = 'published'
@@ -1302,7 +1339,6 @@ exports.getTags = async (req, res, next) => {
       [lim],
       'getTags',
     )
-
     return res.json({
       success: true,
       data: rows.map(r => ({
@@ -1319,17 +1355,17 @@ exports.getTags = async (req, res, next) => {
 
 exports.getStats = async (req, res, next) => {
   try {
-    const [statsRes, byCatRes, byCountryRes] = await Promise.all([
+    const [statsRows, byCatRows, byCountryRows] = await Promise.all([
       safeQuery(
         `SELECT
-           COUNT(*)::INTEGER                                              AS total,
-           COUNT(*) FILTER (WHERE status = 'published')::INTEGER         AS published,
-           COUNT(*) FILTER (WHERE is_featured = true)::INTEGER           AS featured,
-           COUNT(*) FILTER (WHERE is_popular  = true)::INTEGER           AS popular,
-           COUNT(DISTINCT country_id)::INTEGER                           AS countries,
-           ROUND(AVG(rating) FILTER (WHERE rating > 0)::numeric, 2)     AS avg_rating,
-           COALESCE(SUM(view_count),   0)::INTEGER                      AS total_views,
-           COALESCE(SUM(review_count), 0)::INTEGER                      AS total_reviews
+           COUNT(*)::INTEGER                                          AS total,
+           COUNT(*) FILTER (WHERE status = 'published')::INTEGER     AS published,
+           COUNT(*) FILTER (WHERE is_featured = true)::INTEGER       AS featured,
+           COUNT(*) FILTER (WHERE is_popular  = true)::INTEGER       AS popular,
+           COUNT(DISTINCT country_id)::INTEGER                       AS countries,
+           ROUND(AVG(rating) FILTER (WHERE rating > 0)::numeric, 2) AS avg_rating,
+           COALESCE(SUM(view_count),   0)::INTEGER                  AS total_views,
+           COALESCE(SUM(review_count), 0)::INTEGER                  AS total_reviews
          FROM destinations WHERE is_active = true`,
         [], 'stats:overview',
       ),
@@ -1351,22 +1387,22 @@ exports.getStats = async (req, res, next) => {
       ),
     ])
 
-    const s = statsRes[0] || {}
+    const s = statsRows[0] || {}
     return res.json({
       success: true,
       data: {
         overview: {
-          total:        s.total        || 0,
-          published:    s.published    || 0,
-          featured:     s.featured     || 0,
-          popular:      s.popular      || 0,
-          countries:    s.countries    || 0,
+          total:        s.total         || 0,
+          published:    s.published     || 0,
+          featured:     s.featured      || 0,
+          popular:      s.popular       || 0,
+          countries:    s.countries     || 0,
           avgRating:    toNum(s.avg_rating),
-          totalViews:   s.total_views  || 0,
+          totalViews:   s.total_views   || 0,
           totalReviews: s.total_reviews || 0,
         },
-        byCategory: byCatRes.map(r => ({ category: r.category, count: r.count })),
-        byCountry:  byCountryRes.map(r => ({ name: r.name, slug: r.slug, flag: r.flag, count: r.count })),
+        byCategory: byCatRows.map(r => ({ category: r.category, count: r.count })),
+        byCountry:  byCountryRows.map(r => ({ name: r.name, slug: r.slug, flag: r.flag, count: r.count })),
       },
     })
   } catch (err) {
@@ -1416,7 +1452,7 @@ exports.getOne = async (req, res, next) => {
 
     const tasks = []
 
-    /* ── gallery ── */
+    /* gallery */
     if (all || includes.includes('gallery') || includes.includes('images')) {
       tasks.push(safeTask('gallery', async () => {
         const r = await safeQuery(
@@ -1429,7 +1465,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── itinerary ── */
+    /* itinerary */
     if (all || includes.includes('itinerary')) {
       tasks.push(safeTask('itinerary', async () => {
         const r = await safeQuery(
@@ -1453,7 +1489,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── faqs ── */
+    /* faqs */
     if (all || includes.includes('faqs')) {
       tasks.push(safeTask('faqs', async () => {
         const r = await safeQuery(
@@ -1472,7 +1508,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── reviews + aggregate ── */
+    /* reviews + aggregate */
     if (all || includes.includes('reviews')) {
       tasks.push(safeTask('reviews', async () => {
         const [reviewRows, aggRows] = await Promise.all([
@@ -1492,7 +1528,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── tags ── */
+    /* tags */
     if (all || includes.includes('tags')) {
       tasks.push(safeTask('tags', async () => {
         const r = await safeQuery(
@@ -1510,7 +1546,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── practical info ── */
+    /* practical info */
     if (all || includes.includes('practical') || includes.includes('practical_info')) {
       tasks.push(safeTask('practical_info', async () => {
         const r = await safeQuery(
@@ -1521,7 +1557,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── how to get there ── */
+    /* how to get there */
     if (all || includes.includes('how_to_get_there') || includes.includes('getting_there')) {
       tasks.push(safeTask('how_to_get_there', async () => {
         const r = await safeQuery(
@@ -1543,24 +1579,24 @@ exports.getOne = async (req, res, next) => {
         )
         const x = r[0] || {}
         dest.howToGetThere = {
-          nearestAirport:      x.nearest_airport || x.dest_nearest_airport || null,
-          nearestCity:         x.dest_nearest_city || null,
-          distanceFromAirport: x.distance_from_airport || (x.distance_from_airport_km ? `${x.distance_from_airport_km} km` : null),
-          driveTimeFromCapital:x.drive_time_from_capital || null,
-          countryCapital:      x.country_capital || null,
-          roadConditions:      x.road_conditions || null,
-          transportOptions:    toArr(x.transport_options),
-          borderCrossings:     x.border_crossings || null,
-          generalInfo:         x.dest_getting_there || null,
-          mapPosition:         { lat: toNum(x.latitude), lng: toNum(x.longitude) },
-          address:             x.address || null,
-          countryName:         x.country_name || null,
-          callingCode:         x.calling_code || null,
+          nearestAirport:       x.nearest_airport || x.dest_nearest_airport || null,
+          nearestCity:          x.dest_nearest_city || null,
+          distanceFromAirport:  x.distance_from_airport || (x.distance_from_airport_km ? `${x.distance_from_airport_km} km` : null),
+          driveTimeFromCapital: x.drive_time_from_capital || null,
+          countryCapital:       x.country_capital || null,
+          roadConditions:       x.road_conditions || null,
+          transportOptions:     toArr(x.transport_options),
+          borderCrossings:      x.border_crossings || null,
+          generalInfo:          x.dest_getting_there || null,
+          mapPosition:          { lat: toNum(x.latitude), lng: toNum(x.longitude) },
+          address:              x.address || null,
+          countryName:          x.country_name || null,
+          callingCode:          x.calling_code || null,
         }
       }))
     }
 
-    /* ── tips ── */
+    /* tips */
     if (all || includes.includes('tips')) {
       tasks.push(safeTask('tips', async () => {
         const r = await safeQuery(
@@ -1578,7 +1614,7 @@ exports.getOne = async (req, res, next) => {
       }))
     }
 
-    /* ── related ── */
+    /* related */
     if (all || includes.includes('related')) {
       tasks.push(safeTask('related', async () => {
         const r = await safeQuery(
@@ -1605,7 +1641,7 @@ exports.getOne = async (req, res, next) => {
 
     await Promise.all(tasks)
 
-    /* fallback gallery from image_urls if no DB rows */
+    /* fallback gallery from image_urls array if no DB rows */
     if (!dest.gallery?.length && dest.images?.length) {
       dest.gallery = dest.images.map((url, i) => ({
         id:           `img-${i}`,
@@ -1709,7 +1745,7 @@ exports.addItineraryDay = async (req, res, next) => {
     const maxRows = await safeQuery(
       `SELECT COALESCE(MAX(day_number), 0)::INTEGER AS max
        FROM destination_itineraries WHERE destination_id = $1`,
-      [id], 'addItineraryDay:max',
+      [id],
     )
     const dayNum = parseInt(day_number, 10) || (maxRows[0]?.max || 0) + 1
 
@@ -1718,9 +1754,11 @@ exports.addItineraryDay = async (req, res, next) => {
        (destination_id, day_number, title, description,
         activities, highlights, meals, accommodation, distance_km, image_url)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [id, dayNum, title.trim(), description || null,
-       toArr(activities), toArr(highlights), toArr(meals),
-       accommodation || null, toNum(distance_km), image_url || null],
+      [
+        id, dayNum, title.trim(), description || null,
+        toArr(activities), toArr(highlights), toArr(meals),
+        accommodation || null, toNum(distance_km), image_url || null,
+      ],
     )
     return res.status(201).json({ success: true, data: rows[0] })
   } catch (err) { next(err) }
@@ -1730,15 +1768,19 @@ exports.updateItineraryDay = async (req, res, next) => {
   try {
     const { id, dayId } = req.params
     const fields        = { ...req.body }
+
     for (const f of ['activities','highlights','meals']) {
       if (fields[f] !== undefined) fields[f] = toArr(fields[f])
     }
+
     const keys = Object.keys(fields).filter(k => fields[k] !== undefined)
     if (!keys.length) {
       return res.status(400).json({ success: false, error: 'No fields to update' })
     }
-    const vals   = [...keys.map(k => fields[k]), dayId, id]
-    const sets   = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+
+    const vals = [...keys.map(k => fields[k]), dayId, id]
+    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+
     const { rows } = await query(
       `UPDATE destination_itineraries SET ${sets}
        WHERE id = $${vals.length - 1} AND destination_id = $${vals.length}
@@ -1870,7 +1912,7 @@ exports.upsertPracticalInfo = async (req, res, next) => {
         b.border_crossings            || null,
         toArr(b.vaccinations_required),
         toArr(b.vaccinations_recommended),
-        truncate('malaria_risk', b.malaria_risk || null),
+        truncate('malaria_risk',  b.malaria_risk  || null),
         b.water_safety                || null,
         b.medical_facilities          || null,
         b.emergency_contacts ? JSON.stringify(b.emergency_contacts) : '{}',
@@ -1907,7 +1949,11 @@ exports.upsertPracticalInfo = async (req, res, next) => {
       ],
     )
 
-    return res.json({ success: true, message: 'Practical info saved', data: serializePracticalInfo(rows[0]) })
+    return res.json({
+      success: true,
+      message: 'Practical info saved',
+      data:    serializePracticalInfo(rows[0]),
+    })
   } catch (err) {
     return handlePgError(err, res, next)
   }
@@ -1936,7 +1982,7 @@ exports.getDestinationTipsLinked = async (req, res, next) => {
 
 exports.linkTip = async (req, res, next) => {
   try {
-    const { id }                              = req.params
+    const { id }                                   = req.params
     const { tip_id, sort_order = 0, is_featured = false } = req.body
 
     if (!tip_id) {
@@ -2000,9 +2046,9 @@ exports.incrementView = async (req, res, next) => {
 
 exports.incrementWishlist = async (req, res, next) => {
   try {
-    const { id }           = req.params
+    const { id }             = req.params
     const { action = 'add' } = req.body
-    const inc              = action === 'remove' ? -1 : 1
+    const inc                = action === 'remove' ? -1 : 1
     const { rows } = await query(
       `UPDATE destinations
        SET wishlist_count = GREATEST(0, COALESCE(wishlist_count, 0) + $2)
@@ -2034,7 +2080,7 @@ exports.incrementShare = async (req, res, next) => {
 
 exports.getReviews = async (req, res, next) => {
   try {
-    const { id }                         = req.params
+    const { id }                              = req.params
     const { page = 1, limit = 10, sort = '-created' } = req.query
 
     const sortMap = {
@@ -2045,9 +2091,10 @@ exports.getReviews = async (req, res, next) => {
     }
     const orderBy = sortMap[sort] || sortMap['-created']
     const lim     = Math.min(parseInt(limit, 10) || 10, 50)
-    const offset  = (Math.max(parseInt(page, 10) || 1, 1) - 1) * lim
+    const pg      = Math.max(parseInt(page, 10) || 1, 1)
+    const offset  = (pg - 1) * lim
 
-    const [countRes, reviewRows, aggRows] = await Promise.all([
+    const [countRows, reviewRows, aggRows] = await Promise.all([
       safeQuery(
         `SELECT COUNT(*)::INTEGER AS count FROM destination_reviews
          WHERE destination_id = $1 AND status = 'approved' AND is_active = true`,
@@ -2063,13 +2110,20 @@ exports.getReviews = async (req, res, next) => {
       safeQuery(REVIEW_AGG_SQL, [id], 'reviews:agg'),
     ])
 
-    const total      = countRes[0]?.count || 0
-    const pagination = paginate(total, page, limit)
+    const total      = countRows[0]?.count || 0
+    const totalPages = Math.ceil(total / lim)
 
     return res.json({
-      success:   true,
-      data:      reviewRows.map(serializeReview),
-      pagination,
+      success: true,
+      data:    reviewRows.map(serializeReview),
+      pagination: {
+        total,
+        page:        pg,
+        limit:       lim,
+        total_pages: totalPages,
+        has_next:    pg < totalPages,
+        has_prev:    pg > 1,
+      },
       aggregate: serializeAggregate(aggRows[0]),
     })
   } catch (err) { next(err) }
@@ -2112,12 +2166,12 @@ exports.addReview = async (req, res, next) => {
       [
         id, req.user?.id || null,
         reviewer_name?.trim() || 'Anonymous',
-        reviewer_country || null,
-        title?.trim() || null,
+        reviewer_country      || null,
+        title?.trim()         || null,
         content.trim(),
         rating,
-        trip_date || null,
-        trip_type || null,
+        trip_date  || null,
+        trip_type  || null,
         images,
       ],
     )
@@ -2181,7 +2235,7 @@ exports.addImages = async (req, res, next) => {
        FROM destination_images WHERE destination_id = $1`,
       [id], 'addImages:maxOrder',
     )
-    let order    = maxRows[0]?.max || 0
+    let   order  = maxRows[0]?.max || 0
     const added  = []
     const urls   = []
 
@@ -2225,7 +2279,7 @@ exports.addImages = async (req, res, next) => {
 
 exports.updateImage = async (req, res, next) => {
   try {
-    const { id, imageId }                          = req.params
+    const { id, imageId }                              = req.params
     const { caption, alt_text, is_primary, sort_order } = req.body
 
     if (is_primary !== undefined && toBool(is_primary)) {
@@ -2378,7 +2432,7 @@ exports.getFaqs = async (req, res, next) => {
 
 exports.addFaq = async (req, res, next) => {
   try {
-    const { id }                       = req.params
+    const { id }                             = req.params
     const { question, answer, category, sort_order } = req.body
 
     if (!question?.trim() || !answer?.trim()) {
@@ -2404,8 +2458,9 @@ exports.updateFaq = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'No fields to update' })
     }
 
-    const vals   = [...keys.map(k => fields[k]), faqId, id]
-    const sets   = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+    const vals = [...keys.map(k => fields[k]), faqId, id]
+    const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+
     const { rows } = await query(
       `UPDATE destination_faqs SET ${sets}
        WHERE id = $${vals.length - 1} AND destination_id = $${vals.length}
@@ -2448,14 +2503,19 @@ exports.getDestinationTags = async (req, res, next) => {
     )
     return res.json({
       success: true,
-      data: rows.map(r => ({ id: r.id, name: r.tag_name, slug: r.tag_slug, category: r.tag_category })),
+      data: rows.map(r => ({
+        id:       r.id,
+        name:     r.tag_name,
+        slug:     r.tag_slug,
+        category: r.tag_category,
+      })),
     })
   } catch (err) { next(err) }
 }
 
 exports.addDestinationTag = async (req, res, next) => {
   try {
-    const { id }                    = req.params
+    const { id }                     = req.params
     const { tag_name, tag_category } = req.body
 
     if (!tag_name?.trim()) {
@@ -2513,7 +2573,6 @@ exports.create = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Invalid country_id' })
     }
 
-    /* pre-warm column meta so truncate() works */
     await getColumnMeta()
 
     const slug = await createUniqueSlug(data.name.trim())
@@ -2522,7 +2581,7 @@ exports.create = async (req, res, next) => {
     let   imageUrls   = toArr(data.image_urls)
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
     if (!imageUrls.length && data.image_url) imageUrls = [data.image_url]
-    const mainImg     = imageUrls[0] || null
+    const mainImg = imageUrls[0] || null
 
     const status      = truncate('status', data.status || 'draft')
     const publishedAt = status === 'published' ? new Date() : null
@@ -2552,32 +2611,32 @@ exports.create = async (req, res, next) => {
         country.id,
         data.name.trim(),
         slug,
-        data.tagline             || null,
-        data.short_description   || null,
-        data.description         || null,
-        data.overview            || null,
-        data.what_to_expect      || null,
-        data.best_time_to_visit  || country.best_time_to_visit || null,
-        data.getting_there       || null,
-        data.local_tips          || null,
-        data.safety_info         || null,
-        truncate('category',  data.category  || 'safari'),
-        truncate('difficulty', data.difficulty || 'moderate'),
-        data.destination_type    || null,
+        data.tagline            || null,
+        data.short_description  || null,
+        data.description        || null,
+        data.overview           || null,
+        data.what_to_expect     || null,
+        data.best_time_to_visit || country.best_time_to_visit || null,
+        data.getting_there      || null,
+        data.local_tips         || null,
+        data.safety_info        || null,
+        truncate('category',    data.category   || 'safari'),
+        truncate('difficulty',  data.difficulty || 'moderate'),
+        data.destination_type   || null,
         toNum(data.latitude),
         toNum(data.longitude),
         toNum(data.altitude_meters),
-        data.address             || null,
-        data.region              || country.region || null,
-        data.nearest_city        || country.capital || null,
-        data.nearest_airport     || null,
+        data.address            || null,
+        data.region             || country.region  || null,
+        data.nearest_city       || country.capital || null,
+        data.nearest_airport    || null,
         toNum(data.distance_from_airport_km),
         mainImg,
         imageUrls,
-        data.hero_image          || mainImg,
-        data.thumbnail_url       || mainImg,
-        data.video_url           || null,
-        data.virtual_tour_url    || null,
+        data.hero_image         || mainImg,
+        data.thumbnail_url      || mainImg,
+        data.video_url          || null,
+        data.virtual_tour_url   || null,
         toNum(data.duration_days),
         toNum(data.duration_nights),
         fmtDuration(toNum(data.duration_days), toNum(data.duration_nights)),
@@ -2588,25 +2647,29 @@ exports.create = async (req, res, next) => {
         toArr(data.highlights),
         toArr(data.activities),
         toArr(data.wildlife),
-        data.entrance_fee        || null,
-        data.operating_hours     || null,
+        data.entrance_fee       || null,
+        data.operating_hours    || null,
         status,
         toBool(data.is_featured),
         toBool(data.is_popular),
         toBool(data.is_new),
         toBool(data.is_eco_friendly),
         toBool(data.is_family_friendly),
-        data.meta_title          || data.name.trim(),
-        data.meta_description    || data.short_description || null,
+        data.meta_title         || data.name.trim(),
+        data.meta_description   || data.short_description || null,
         publishedAt,
         featuredAt,
-        req.user?.id             || null,
+        req.user?.id            || null,
       ],
     )
 
     await syncCountryDestCount(country.id)
 
-    const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
+    const full = await safeQuery(
+      `${BASE_SELECT} WHERE d.id = $1`,
+      [rows[0].id], 'create:full',
+    )
+
     return res.status(201).json({
       success: true,
       message: 'Destination created',
@@ -2621,8 +2684,8 @@ exports.create = async (req, res, next) => {
 
 exports.update = async (req, res, next) => {
   try {
-    const { id }   = req.params
-    const data     = req.body || {}
+    const { id }  = req.params
+    const data    = req.body || {}
 
     const existRows = await safeQuery(
       'SELECT * FROM destinations WHERE id = $1',
@@ -2637,14 +2700,12 @@ exports.update = async (req, res, next) => {
     const current = existRows[0]
     const fields  = { ...data }
 
-    /* strip non-updatable */
     delete fields.id
     delete fields.created_at
-    delete fields.slug          /* slug only changes with name */
+    delete fields.slug
     delete fields.price
     delete fields.prices
 
-    /* name change → new slug */
     if (fields.name && fields.name.trim() !== current.name) {
       fields.name = fields.name.trim()
       fields.slug = await createUniqueSlug(fields.name, id)
@@ -2652,8 +2713,10 @@ exports.update = async (req, res, next) => {
       delete fields.name
     }
 
-    /* country change */
-    if (fields.country_id && parseInt(fields.country_id, 10) !== parseInt(current.country_id, 10)) {
+    if (
+      fields.country_id &&
+      parseInt(fields.country_id, 10) !== parseInt(current.country_id, 10)
+    ) {
       const newCountry = await resolveCountry(fields.country_id)
       if (!newCountry) {
         return res.status(400).json({ success: false, error: 'Invalid country_id' })
@@ -2661,9 +2724,8 @@ exports.update = async (req, res, next) => {
       fields.country_id = newCountry.id
     }
 
-    /* image handling */
     if (req.file) {
-      const url = getUploadedFileUrl(req.file)
+      const url         = getUploadedFileUrl(req.file)
       fields.image_url  = url
       const existing    = toArr(data.image_urls || current.image_urls)
       fields.image_urls = [url, ...existing.filter(u => u !== url)]
@@ -2672,22 +2734,20 @@ exports.update = async (req, res, next) => {
       if (fields.image_urls.length) fields.image_url = fields.image_urls[0]
     }
 
-    /* array fields */
     for (const f of ['highlights','activities','wildlife']) {
       if (fields[f] !== undefined) fields[f] = toArr(fields[f])
     }
 
-    /* duration display */
     if (fields.duration_days !== undefined || fields.duration_nights !== undefined) {
       const d = toNum(fields.duration_days   ?? current.duration_days)
       const n = toNum(fields.duration_nights ?? current.duration_nights)
       fields.duration_display = fmtDuration(d, n)
     }
 
-    /* status / feature timestamps */
     if (fields.status === 'published' && current.status !== 'published') {
       fields.published_at = new Date()
     }
+
     if (fields.is_featured === true || fields.is_featured === 'true') {
       fields.is_featured = true
       if (!current.is_featured) fields.featured_at = new Date()
@@ -2696,12 +2756,10 @@ exports.update = async (req, res, next) => {
       fields.featured_at = null
     }
 
-    /* truncate varchar fields */
     for (const col of Object.keys(VARCHAR_LIMITS)) {
       if (fields[col] !== undefined) fields[col] = truncate(col, fields[col])
     }
 
-    /* remove undefined */
     for (const k of Object.keys(fields)) {
       if (fields[k] === undefined) delete fields[k]
     }
@@ -2719,13 +2777,19 @@ exports.update = async (req, res, next) => {
       vals,
     )
 
-    /* sync country dest counts on country change */
-    if (fields.country_id && parseInt(fields.country_id, 10) !== parseInt(current.country_id, 10)) {
+    if (
+      fields.country_id &&
+      parseInt(fields.country_id, 10) !== parseInt(current.country_id, 10)
+    ) {
       await syncCountryDestCount(current.country_id)
       await syncCountryDestCount(fields.country_id)
     }
 
-    const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [id], 'update:full')
+    const full = await safeQuery(
+      `${BASE_SELECT} WHERE d.id = $1`,
+      [id], 'update:full',
+    )
+
     return res.json({
       success: true,
       message: 'Destination updated',
@@ -2740,8 +2804,8 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const { id }            = req.params
-    const permanent         = toBool(req.query.permanent)
+    const { id }    = req.params
+    const permanent = toBool(req.query.permanent)
 
     const existRows = await safeQuery(
       'SELECT id, name, slug, country_id FROM destinations WHERE id = $1',
@@ -2819,7 +2883,6 @@ exports.bulkUpdate = async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'No valid fields to update' })
     }
 
-    /* timestamps */
     if (fields.is_featured === true || fields.is_featured === 'true') {
       fields.is_featured = true
       fields.featured_at = new Date()
@@ -2830,19 +2893,18 @@ exports.bulkUpdate = async (req, res, next) => {
     if (fields.status === 'published') fields.published_at = new Date()
     fields.updated_at = new Date()
 
-    /* truncate */
     for (const col of Object.keys(VARCHAR_LIMITS)) {
       if (fields[col] !== undefined) fields[col] = truncate(col, fields[col])
     }
 
-    const keys       = Object.keys(fields)
-    const safeIds    = ids.map(x => parseInt(x, 10)).filter(Number.isFinite)
-    const placeholders = safeIds.map((_, i) => `$${keys.length + i + 1}`).join(', ')
-    const sets       = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
+    const keys         = Object.keys(fields)
+    const safeIds      = ids.map(x => parseInt(x, 10)).filter(Number.isFinite)
+    const idPlaceholders = safeIds.map((_, i) => `$${keys.length + i + 1}`).join(', ')
+    const sets         = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')
 
     const { rows } = await query(
       `UPDATE destinations SET ${sets}
-       WHERE id IN (${placeholders})
+       WHERE id IN (${idPlaceholders})
        RETURNING id, name, slug, status, is_active, is_featured`,
       [...keys.map(k => fields[k]), ...safeIds],
     )
