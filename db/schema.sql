@@ -317,6 +317,68 @@ CREATE TABLE destination_tags (
   created_at      TIMESTAMP DEFAULT NOW()
 );
 
+-- Destination Practical Info
+DROP TABLE IF EXISTS destination_practical_info CASCADE;
+CREATE TABLE destination_practical_info (
+  id                       SERIAL PRIMARY KEY,
+  destination_id           INTEGER NOT NULL UNIQUE REFERENCES destinations(id) ON DELETE CASCADE,
+  nearest_airport          TEXT,
+  distance_from_airport    TEXT,
+  drive_time_from_capital  TEXT,
+  road_conditions          TEXT,
+  transport_options        TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  border_crossings         TEXT,
+  vaccinations_required    TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  vaccinations_recommended TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  malaria_risk             TEXT,
+  water_safety             TEXT,
+  medical_facilities       TEXT,
+  emergency_contacts       JSONB   DEFAULT '{}'::JSONB,
+  safety_rating            TEXT,
+  safety_notes             TEXT,
+  permits_required         TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  permit_cost              TEXT,
+  booking_lead_time        TEXT,
+  visitor_limits           TEXT,
+  regulations              TEXT,
+  avg_temp_low_c           NUMERIC(4,1),
+  avg_temp_high_c          NUMERIC(4,1),
+  rainfall_mm_annual       NUMERIC(8,2),
+  humidity_percent         INTEGER,
+  uv_index_peak            INTEGER,
+  best_months              TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  avoid_months             TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  climate_notes            TEXT,
+  packing_essentials       TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  clothing_tips            TEXT,
+  gear_recommendations     TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  budget_range_usd         TEXT,
+  entrance_fee_usd         TEXT,
+  guide_cost_usd           TEXT,
+  meal_cost_range          TEXT,
+  cell_coverage            TEXT,
+  wifi_available           BOOLEAN DEFAULT false,
+  electricity_voltage      TEXT,
+  plug_types               TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  currency_tips            TEXT,
+  tipping_culture          TEXT,
+  local_etiquette          TEXT[]  DEFAULT ARRAY[]::TEXT[],
+  photography_rules        TEXT,
+  updated_at               TIMESTAMP DEFAULT NOW()
+);
+
+-- Destination Tips
+DROP TABLE IF EXISTS destination_tips CASCADE;
+CREATE TABLE destination_tips (
+  id             SERIAL PRIMARY KEY,
+  destination_id INTEGER NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+  tip_id         INTEGER NOT NULL,
+  sort_order     INTEGER DEFAULT 0,
+  is_featured    BOOLEAN DEFAULT false,
+  created_at     TIMESTAMP DEFAULT NOW(),
+  UNIQUE(destination_id, tip_id)
+);
+
 -- 5. Posts (Blog)
 DROP TABLE IF EXISTS posts CASCADE;
 CREATE TABLE posts (
