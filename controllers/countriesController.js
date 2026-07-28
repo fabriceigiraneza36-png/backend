@@ -299,9 +299,12 @@ const prepareValue = (col, val) => {
   }
 
   /* ── Numeric ────────────────────────────────────────────────────────── */
+  if (typeInfo.data_type === 'integer' || typeInfo.data_type === 'bigint') {
+    const n = Number(val)
+    return Number.isFinite(n) ? Math.trunc(n) : null
+  }
+
   if (
-    typeInfo.data_type === 'integer'  ||
-    typeInfo.data_type === 'bigint'   ||
     typeInfo.data_type === 'numeric'  ||
     typeInfo.data_type === 'real'     ||
     typeInfo.data_type === 'double precision'
