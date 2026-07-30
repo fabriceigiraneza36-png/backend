@@ -765,7 +765,7 @@ exports.getAll = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} getAll failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -912,7 +912,7 @@ exports.getOne = async (req, res, next) => {
     return res.json({ success: true, data: transformed })
   } catch (err) {
     logger.error(`${LOG_PREFIX} getOne failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -945,7 +945,7 @@ exports.getFeatured = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} getFeatured failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -981,7 +981,7 @@ exports.getByContinent = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} getByContinent failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1052,7 +1052,7 @@ exports.getStats = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} getStats failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1151,7 +1151,7 @@ exports.create = async (req, res, next) => {
       })
     }
 
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1245,7 +1245,7 @@ exports.update = async (req, res, next) => {
       })
     }
 
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1280,7 +1280,7 @@ exports.toggleActive = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} toggleActive failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1315,7 +1315,7 @@ exports.toggleFeatured = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} toggleFeatured failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1430,7 +1430,7 @@ exports.remove = async (req, res, next) => {
       code:    err.code,
       detail:  err.detail,
     })
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }
 
@@ -1511,6 +1511,6 @@ exports.bulkDelete = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} bulkDelete failed:`, err)
-    next(err)
+    return res.status(500).json({ success: false, error: err.message })
   }
 }

@@ -4,7 +4,6 @@ const router = express.Router()
 const { query: db } = require('../config/db')
 const { optionalAuth } = require('../middleware/auth')
 const logger = require('../utils/logger')
-const { sendBookingReceivedEmail, sendAdminBookingNotification } = require('../utils/bookingEmails')
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const generateBookingRef = () => {
@@ -190,41 +189,13 @@ router.post('/', optionalAuth, async (req, res) => {
         travelDate, endDate,
         adults, children, travelersCount,
         totalPrice, specialReqs, 'pending', userId,
-      ]
-    )
+       ]
+     )
 
-    const booking = result.rows[0]
-    logger.info(`Booking created: ${bookingNumber}`)
+     const booking = result.rows[0]
+     logger.info(`Booking created: ${bookingNumber}`)
 
-    /* ── Send emails (non-blocking — don't fail the request if email fails) ── */
-    const emailData = {
-      ...booking,
-      email: booking.guest_email,
-      full_name: booking.guest_name,
-      phone: booking.guest_phone,
-      booking_number: booking.booking_number,
-      destination_name: body.destinationName || booking.destination_name || null,
-      country_name: body.country || booking.country || null,
-      country: body.country || booking.country || null,
-      travel_date: booking.travel_date,
-      end_date: booking.end_date,
-      number_of_adults: booking.number_of_adults,
-      number_of_children: booking.number_of_children,
-      travelers_count: booking.travelers_count,
-      group_type: body.groupType,
-      preferred_contact: body.preferredContactMethod,
-      special_requests: booking.special_requests,
-      flexible_dates: body.flexibleDates,
-      flexible_months: body.flexibleMonths || [],
-      start_date: booking.travel_date,
-    }
-
-    Promise.all([
-      sendBookingReceivedEmail(emailData),
-      sendAdminBookingNotification(emailData).catch(() => {}),
-    ]).catch(err => logger.error('[Booking] Email send error:', err.message))
-
-    return res.status(201).json({
+     return res.status(201).json({
       success: true,
       message: 'Booking request submitted successfully',
       data: {
