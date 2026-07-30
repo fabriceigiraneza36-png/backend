@@ -76,17 +76,25 @@ ensureBookingsTable()
 const validateBooking = (body) => {
   const errors = []
 
-  if (!body.guest_name || String(body.guest_name).trim().length < 2) {
-    errors.push('guest_name is required (min 2 chars)')
+  if (!body.guest_name && !body.full_name && !body.name) {
+    errors.push('Full name is required (min 2 characters)')
+  }
+  const nameStr = String(body.guest_name || body.full_name || body.name || '').trim()
+  if (nameStr.length < 2) {
+    errors.push('Full name must be at least 2 characters')
   }
 
-  if (!body.guest_email || String(body.guest_email).trim().length < 5) {
-    errors.push('guest_email is required')
+  if (!body.guest_email && !body.email) {
+    errors.push('Email is required')
+  }
+  const emailStr = String(body.guest_email || body.email || '').trim().toLowerCase()
+  if (emailStr.length < 5) {
+    errors.push('A valid email is required')
   }
 
   const emailRx = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-  if (body.guest_email && !emailRx.test(String(body.guest_email).trim())) {
-    errors.push('guest_email must be a valid email address')
+  if (emailStr && !emailRx.test(emailStr)) {
+    errors.push('Please enter a valid email address')
   }
 
   const adults = parseInt(body.number_of_adults || body.adults || 1)
@@ -94,10 +102,11 @@ const validateBooking = (body) => {
     errors.push('number_of_adults must be at least 1')
   }
 
-  if (body.travel_date) {
-    const d = new Date(body.travel_date)
+  const travelDate = body.travel_date || body.startDate || null
+  if (travelDate) {
+    const d = new Date(travelDate)
     if (isNaN(d.getTime())) {
-      errors.push('travel_date must be a valid date')
+      errors.push('Travel date must be a valid date')
     }
   }
 
