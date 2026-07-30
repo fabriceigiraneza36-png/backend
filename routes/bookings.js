@@ -209,7 +209,8 @@ router.post('/', optionalAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       message: 'Internal server error. Please try again.',
-      error: process.env.NODE_ENV === 'development' ? err.message : undefined,
+      error: err.message,
+      detail: err.detail || undefined,
     })
   }
 })
