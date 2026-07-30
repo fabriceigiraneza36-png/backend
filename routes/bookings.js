@@ -4,6 +4,7 @@ const router = express.Router()
 const { query: db } = require('../config/db')
 const { optionalAuth } = require('../middleware/auth')
 const logger = require('../utils/logger')
+const { sendBookingReceivedEmail, sendAdminBookingNotification } = require('../utils/bookingEmails')
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const generateBookingRef = () => {
@@ -120,22 +121,28 @@ router.post('/', optionalAuth, async (req, res) => {
     }
 
     // Normalize fields — accept both naming conventions from frontend
-    const guestName    = String(body.guest_name).trim()
-    const guestEmail   = String(body.guest_email).trim().toLowerCase()
-    const guestPhone   = String(body.guest_phone || '').trim() || null
-    const adults       = Math.max(1, parseInt(body.number_of_adults || body.adults || 1))
-    const children     = Math.max(0, parseInt(body.number_of_children || body.children || 0))
+    // Frontend sends: email, full_name, phone, destinationId, countryId,
+    //   startDate, endDate, adults, children, groupType, specialRequests,
+    //   preferredContactMethod, newsletterOptIn, agreeToTerms, flexibleDates, flexibleMonths
+    // Backend columns: guest_email, guest_name, guest_phone, destination_id, etc.
+    const guestName      = String(body.guest_name || body.full_name || body.name || '').trim()
+    const guestEmail     = String(body.guest_email || body.email || '').trim().toLowerCase()
+    const guestPhone     = String(body.guest_phone || body.phone || '').trim() || null
+    const adults         = Math.max(1, parseInt(body.number_of_adults || body.adults || 1))
+    const children       = Math.max(0, parseInt(body.number_of_children || body.children || 0))
     const travelersCount = parseInt(body.travelers_count || (adults + children)) || adults
-    const packageId    = body.package_id ? parseInt(body.package_id) : null
-    const packageTitle = body.package_title ? String(body.package_title).trim() : null
-    const packagePrice = body.package_price ? parseFloat(body.package_price) : null
-    const currency     = String(body.currency || 'USD').trim().toUpperCase()
-    const totalPrice   = body.total_price ? parseFloat(body.total_price) : null
-    const travelDate   = body.travel_date || null
-    const endDate      = body.end_date || null
-    const specialReqs  = body.special_requests ? String(body.special_requests).trim() : null
-    const bookingType  = String(body.booking_type || 'package').trim()
-    const userId       = req.user?.id || null
+    const packageId      = body.package_id ? parseInt(body.package_id) : null
+    const packageTitle   = body.package_title ? String(body.package_title).trim() : null
+    const packagePrice   = body.package_price ? parseFloat(body.package_price) : null
+    const currency       = String(body.currency || 'USD').trim().toUpperCase()
+    const totalPrice     = body.total_price ? parseFloat(body.total_price) : null
+    const travelDate     = body.travel_date || body.startDate || null
+    const endDate        = body.end_date || body.endDate || null
+    const specialReqs    = body.special_requests || body.specialRequests ? String(body.special_requests || body.specialRequests).trim() : null
+    const bookingType    = String(body.booking_type || 'destination').trim()
+    const userId         = req.user?.id || null
+    const destinationId  = body.destinationId ? parseInt(body.destinationId) : null
+    const countryId      = body.countryId ? parseInt(body.countryId) : null
 
     // Generate unique booking number
     let bookingNumber = generateBookingRef()
@@ -179,6 +186,34 @@ router.post('/', optionalAuth, async (req, res) => {
 
     const booking = result.rows[0]
     logger.info(`Booking created: ${bookingNumber}`)
+
+    /* ── Send emails (non-blocking — don't fail the request if email fails) ── */
+    const emailData = {
+      ...booking,
+      email: booking.guest_email,
+      full_name: booking.guest_name,
+      phone: booking.guest_phone,
+      booking_number: booking.booking_number,
+      destination_name: body.destinationName || booking.destination_name || null,
+      country_name: body.country || booking.country || null,
+      country: body.country || booking.country || null,
+      travel_date: booking.travel_date,
+      end_date: booking.end_date,
+      number_of_adults: booking.number_of_adults,
+      number_of_children: booking.number_of_children,
+      travelers_count: booking.travelers_count,
+      group_type: body.groupType,
+      preferred_contact: body.preferredContactMethod,
+      special_requests: booking.special_requests,
+      flexible_dates: body.flexibleDates,
+      flexible_months: body.flexibleMonths || [],
+      start_date: booking.travel_date,
+    }
+
+    Promise.all([
+      sendBookingReceivedEmail(emailData),
+      sendAdminBookingNotification(emailData).catch(() => {}),
+    ]).catch(err => logger.error('[Booking] Email send error:', err.message))
 
     return res.status(201).json({
       success: true,
