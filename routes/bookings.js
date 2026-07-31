@@ -4,7 +4,6 @@ const router = express.Router()
 const { query: db } = require('../config/db')
 const { optionalAuth } = require('../middleware/auth')
 const logger = require('../utils/logger')
-const { emitToAdmin } = require('../utils/socketHelper') // Assuming this exists or we'll create it
 const { verifyEmail, resendVerification } = require('../controllers/bookingsController')
 
 // ── helpers ──────────────────────────────────────────────────────────────────
