@@ -359,7 +359,8 @@ const notifyUserBookingEvent = async ({
 const pingAdminNewRequest = (booking) => {
   try {
     createNotificationInternal({
-      targetScope: "admin",
+      targetScope: "role",
+      targetRole: "admin",
       type: "booking_created",
       category: "booking",
       title: "🔔 New booking request",

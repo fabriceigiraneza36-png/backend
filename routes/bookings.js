@@ -5,6 +5,7 @@ const { query: db } = require('../config/db')
 const { optionalAuth } = require('../middleware/auth')
 const logger = require('../utils/logger')
 const { emitToAdmin } = require('../utils/socketHelper') // Assuming this exists or we'll create it
+const { verifyEmail, resendVerification } = require('../controllers/bookingsController')
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const generateBookingRef = () => {
@@ -297,19 +298,25 @@ router.patch('/:id/status', async (req, res) => {
 
 // ── DELETE /api/bookings/:id ──────────────────────────────────────────────────
 router.delete('/:id', async (req, res) => {
-  try {
-    const result = await db(
-      'DELETE FROM bookings WHERE id = $1 RETURNING id',
-      [req.params.id]
-    )
-    if (!result.rows.length) {
-      return res.status(404).json({ success: false, message: 'Booking not found' })
-    }
-    return res.json({ success: true, message: 'Booking deleted' })
-  } catch (err) {
-    logger.error('Delete booking error:', err)
-    return res.status(500).json({ success: false, message: err.message })
-  }
+   try {
+     const result = await db(
+       'DELETE FROM bookings WHERE id = $1 RETURNING id',
+       [req.params.id]
+     )
+     if (!result.rows.length) {
+       return res.status(404).json({ success: false, message: 'Booking not found' })
+     }
+     return res.json({ success: true, message: 'Booking deleted' })
+   } catch (err) {
+     logger.error('Delete booking error:', err)
+     return res.status(500).json({ success: false, message: err.message })
+   }
 })
+
+// GET /api/bookings/verify-email/:token
+router.get('/verify-email/:token', verifyEmail)
+
+// POST /api/bookings/resend-verification/:id
+router.post('/resend-verification/:id', resendVerification)
 
 module.exports = router

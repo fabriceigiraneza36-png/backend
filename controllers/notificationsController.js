@@ -223,22 +223,23 @@ const flushAdminBatch = async (key) => {
   const message  = template.message(listNames(users), count);
 
   try {
-    const notif = await insertNotification({
-      senderType:  "system",
-      senderName:  "Altuvera",
-      type,
-      category,
-      title,
-      message,
-      targetScope: "admin",
-      priority:    "high",
-      metadata:    {
-        activity:   key,
-        count,
-        userIds:    users.map((u) => u.id).filter(Boolean),
-        compiled:   true,
-      },
-    });
+const notif = await insertNotification({
+       senderType:  "system",
+       senderName:  "Altuvera",
+       type,
+       category,
+       title,
+       message,
+       targetScope: "role",
+       targetRole: "admin",
+       priority:    "high",
+       metadata:    {
+         activity:   key,
+         count,
+         userIds:    users.map((u) => u.id).filter(Boolean),
+         compiled:   true,
+       },
+     });
 
     emitNotification(null, { ...notif, target_scope: "admin" });
 
@@ -489,7 +490,7 @@ const broadcastNotification = async ({
   });
   emitNotification(null, notif);
 
-  if (pushUtility && targetScope === "admin") {
+  if (pushUtility && (targetScope === "admin" || (targetScope === "role" && targetRole === "admin"))) {
     ;(async () => {
       try {
         const { rows } = await query(
