@@ -21,56 +21,6 @@ const safeParse = (val, fallback = null) => {
   try { return JSON.parse(val) } catch { return fallback }
 }
 
-// ── Ensure table exists ───────────────────────────────────────────────────────
-const ensureBookingsTable = async () => {
-  try {
-    await db(`
-      CREATE TABLE IF NOT EXISTS bookings (
-        id                SERIAL PRIMARY KEY,
-        booking_number    VARCHAR(20) UNIQUE NOT NULL,
-        booking_type      VARCHAR(50) DEFAULT 'package',
-        
-        -- Package reference
-        package_id        INTEGER REFERENCES packages(id) ON DELETE SET NULL,
-        package_title     TEXT,
-        package_price     NUMERIC(12,2),
-        currency          VARCHAR(10) DEFAULT 'USD',
-        
-        -- Guest info
-        guest_name        TEXT NOT NULL,
-        guest_email       TEXT NOT NULL,
-        guest_phone       TEXT,
-        
-        -- Travel details
-        travel_date       DATE,
-        end_date          DATE,
-        number_of_adults  INTEGER DEFAULT 1,
-        number_of_children INTEGER DEFAULT 0,
-        travelers_count   INTEGER DEFAULT 1,
-        
-        -- Pricing
-        total_price       NUMERIC(12,2),
-        
-        -- Extra
-        special_requests  TEXT,
-        status            VARCHAR(30) DEFAULT 'pending',
-        notes             TEXT,
-        
-        -- User link (optional)
-        user_id           INTEGER REFERENCES users(id) ON DELETE SET NULL,
-        
-        created_at        TIMESTAMPTZ DEFAULT NOW(),
-        updated_at        TIMESTAMPTZ DEFAULT NOW()
-      )
-    `)
-    logger.info('Bookings table ready')
-  } catch (err) {
-    logger.error('Failed to ensure bookings table:', err.message)
-  }
-}
-
-ensureBookingsTable()
-
 // ── Validation ────────────────────────────────────────────────────────────────
 const validateBooking = (body) => {
   const errors = []
@@ -138,19 +88,12 @@ router.post('/', optionalAuth, async (req, res) => {
     const guestPhone     = String(body.guest_phone || body.phone || '').trim() || null
     const adults         = Math.max(1, parseInt(body.number_of_adults || body.adults || 1))
     const children       = Math.max(0, parseInt(body.number_of_children || body.children || 0))
-    const travelersCount = parseInt(body.travelers_count || (adults + children)) || adults
-    const packageId      = body.package_id ? parseInt(body.package_id) : null
-    const packageTitle   = body.package_title ? String(body.package_title).trim() : null
-    const packagePrice   = body.package_price ? parseFloat(body.package_price) : null
-    const currency       = String(body.currency || 'USD').trim().toUpperCase()
-    const totalPrice     = body.total_price ? parseFloat(body.total_price) : null
+    const numberOfTravelers = adults + children
     const travelDate     = body.travel_date || body.startDate || null
     const endDate        = body.end_date || body.endDate || null
     const specialReqs    = body.special_requests || body.specialRequests ? String(body.special_requests || body.specialRequests).trim() : null
-    const bookingType    = String(body.booking_type || 'destination').trim()
-    const userId         = req.user?.id || null
     const destinationId  = body.destinationId ? parseInt(body.destinationId) : null
-    const countryId      = body.countryId ? parseInt(body.countryId) : null
+    const userId         = req.user?.id || null // Note: user_id column not in bookings table, but we keep for reference if needed elsewhere
 
     // Generate unique booking number
     let bookingNumber = generateBookingRef()
@@ -170,32 +113,35 @@ router.post('/', optionalAuth, async (req, res) => {
     // Insert
     const result = await db(
       `INSERT INTO bookings (
-        booking_number, booking_type,
-        package_id, package_title, package_price, currency,
-        guest_name, guest_email, guest_phone,
-        travel_date, end_date,
-        number_of_adults, number_of_children, travelers_count,
-        total_price, special_requests, status, user_id
+        booking_number, destination_id, service_id, full_name, email, phone, whatsapp, nationality,
+        travel_date, return_date, number_of_travelers, accommodation_type, special_requests, status, admin_notes
       ) VALUES (
-        $1, $2, $3, $4, $5, $6,
-        $7, $8, $9,
-        $10, $11, $12, $13, $14,
-        $15, $16, $17, $18
+        $1, $2, $3, $4, $5, $6, $7, $8,
+        $9, $10, $11, $12, $13, $14, $15
       ) RETURNING *`,
       [
-        bookingNumber, bookingType,
-        packageId, packageTitle, packagePrice, currency,
-        guestName, guestEmail, guestPhone,
-        travelDate, endDate,
-        adults, children, travelersCount,
-        totalPrice, specialReqs, 'pending', userId,
-       ]
-     )
+        bookingNumber,
+        destinationId,
+        null, // service_id
+        guestName,
+        guestEmail,
+        guestPhone,
+        null, // whatsapp
+        null, // nationality
+        travelDate || null,
+        endDate || null,
+        numberOfTravelers,
+        null, // accommodation_type
+        specialReqs,
+        'pending',
+        null // admin_notes
+      ]
+    )
 
-     const booking = result.rows[0]
-     logger.info(`Booking created: ${bookingNumber}`)
+    const booking = result.rows[0]
+    logger.info(`Booking created: ${bookingNumber}`)
 
-     return res.status(201).json({
+    return res.status(201).json({
       success: true,
       message: 'Booking request submitted successfully',
       data: {
@@ -248,13 +194,13 @@ router.get('/', async (req, res) => {
       db(`SELECT COUNT(*) FROM bookings b ${whereClause}`, params),
       db(
         `SELECT b.*,
-          p.title AS pkg_title_ref,
-          p.cover_image_url AS pkg_image
-        FROM bookings b
-        LEFT JOIN packages p ON p.id = b.package_id
-        ${whereClause}
-        ORDER BY b.created_at DESC
-        LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
+           p.title AS pkg_title_ref,
+           p.cover_image_url AS pkg_image
+         FROM bookings b
+         LEFT JOIN packages p ON p.id = b.package_id
+         ${whereClause}
+         ORDER BY b.created_at DESC
+         LIMIT $${paramIdx} OFFSET $${paramIdx + 1}`,
         [...params, limit, offset]
       ),
     ])
