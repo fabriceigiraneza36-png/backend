@@ -59,6 +59,7 @@ const pgErrorMessage = (err) => {
     case '23505': return `Duplicate value: ${err.detail || err.message}`
     case '23503': return `Referenced record does not exist: ${err.detail || err.message}`
     case '22001': return `Value too long for field: ${err.detail || err.message}`
+    case '22003': return `Numeric value out of range: ${err.detail || err.message}`
     case '22P02': return `Invalid input format: ${err.detail || err.message}`
     case '23502': return `Required field missing: ${err.detail || err.message}`
     case '42703': return `Unknown column: ${err.detail || err.message}`
@@ -204,17 +205,19 @@ let _columnTypeMap    = null   // Record<string, { data_type, udt_name, char_max
 const getWritableColumns = async () => {
   if (_verifiedColumns) return _verifiedColumns
 
-  try {
-    const { rows } = await query(`
-      SELECT
-        column_name,
-        data_type,
-        udt_name,
-        character_maximum_length
-      FROM information_schema.columns
-      WHERE table_name   = 'countries'
-        AND table_schema = 'public'
-    `)
+try {
+      const { rows } = await query(`
+        SELECT
+          column_name,
+          data_type,
+          udt_name,
+          character_maximum_length,
+          numeric_precision,
+          numeric_scale
+        FROM information_schema.columns
+        WHERE table_name   = 'countries'
+          AND table_schema = 'public'
+      `)
 
     const existing   = new Set(rows.map(r => r.column_name))
     _columnTypeMap   = {}
@@ -224,6 +227,8 @@ const getWritableColumns = async () => {
         data_type:         r.data_type.toLowerCase(),
         udt_name:          r.udt_name.toLowerCase(),
         char_max_length:   r.character_maximum_length,
+        numeric_precision: r.numeric_precision,
+        numeric_scale:     r.numeric_scale,
       }
     }
 
