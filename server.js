@@ -347,35 +347,45 @@ const ensurePackagesSchema = async () => {
 const ensureCountriesSchema = async () => {
   try {
     await query(`
-      CREATE TABLE IF NOT EXISTS countries (
-        id               SERIAL PRIMARY KEY,
-        name             VARCHAR(150)  NOT NULL,
-        slug             VARCHAR(150)  UNIQUE,
-        code             VARCHAR(10)   UNIQUE,
-        capital          VARCHAR(150),
-        region           VARCHAR(100),
-        continent        VARCHAR(100),
-        flag_url         TEXT,
-        image_url        TEXT,
-        cover_image_url  TEXT,
-        description      TEXT,
-        highlights       JSONB         DEFAULT '[]'::JSONB,
-        facts            JSONB         DEFAULT '{}'::JSONB,
-        tags             TEXT[]        DEFAULT ARRAY[]::TEXT[],
-        currency         VARCHAR(50),
-        language         VARCHAR(100),
-        timezone         VARCHAR(100),
-        visa_info        TEXT,
-        best_time        VARCHAR(255),
-        is_active        BOOLEAN       NOT NULL DEFAULT TRUE,
-        is_featured      BOOLEAN       NOT NULL DEFAULT FALSE,
-        sort_order       INTEGER       DEFAULT 0,
-        view_count       INTEGER       DEFAULT 0,
-        meta_title       VARCHAR(255),
-        meta_description TEXT,
-        created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-        updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-      )
+CREATE TABLE IF NOT EXISTS countries (
+         id               BIGSERIAL PRIMARY KEY,
+         name             VARCHAR(150)  NOT NULL,
+         slug             VARCHAR(150)  UNIQUE,
+         code             VARCHAR(10)   UNIQUE,
+         capital          VARCHAR(150),
+         region           VARCHAR(100),
+         continent        VARCHAR(100),
+         flag_url         TEXT,
+         image_url        TEXT,
+         cover_image_url  TEXT,
+         description      TEXT,
+         highlights       JSONB         DEFAULT '[]'::JSONB,
+         facts            JSONB         DEFAULT '{}'::JSONB,
+         tags             TEXT[]        DEFAULT ARRAY[]::TEXT[],
+         currency         VARCHAR(50),
+         language         VARCHAR(100),
+         timezone         VARCHAR(100),
+         visa_info        TEXT,
+         best_time        VARCHAR(255),
+         is_active        BOOLEAN       NOT NULL DEFAULT TRUE,
+         is_featured      BOOLEAN       NOT NULL DEFAULT FALSE,
+         sort_order       INTEGER       DEFAULT 0,
+         view_count       INTEGER       DEFAULT 0,
+         meta_title       VARCHAR(255),
+         meta_description TEXT,
+         created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+         updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+       )
+       -- Ensure id is bigint for existing tables
+       DO $$
+       BEGIN
+          IF EXISTS (SELECT 1 FROM information_schema.columns 
+                     WHERE table_name='countries' AND column_name='id' 
+                     AND data_type = 'integer') THEN
+              ALTER TABLE countries ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
+              ALTER SEQUENCE countries_id_seq AS BIGINT;
+          END IF;
+       END $$;
     `)
 
     const indexes = [
