@@ -304,14 +304,56 @@ const prepareValue = (col, val) => {
   }
 
   /* ── Numeric ────────────────────────────────────────────────────────── */
+  // Handle integer types
   if (typeInfo.data_type === 'integer' || typeInfo.data_type === 'bigint') {
     const n = Number(val)
-    return Number.isFinite(n) ? Math.trunc(n) : null
+    if (!Number.isFinite(n)) return null
+    return Math.trunc(n)
   }
 
+  // Handle numeric/decimal types with precision and scale
   if (
-    typeInfo.data_type === 'numeric'  ||
-    typeInfo.data_type === 'real'     ||
+    typeInfo.data_type === 'numeric' ||
+    typeInfo.data_type === 'decimal'
+  ) {
+    const precision = Number(typeInfo.numeric_precision)
+    const scale     = Number(typeInfo.numeric_scale)
+    if (!Number.isFinite(precision) || !Number.isFinite(scale)) {
+      // fallback if metadata missing
+      const n = Number(val)
+      return Number.isFinite(n) ? n : null
+    }
+    const s = String(val).trim()
+    if (s === '') return null
+    // Handle sign
+    const signMatch = s.match(/^([+-]?)(.*)$/)
+    const sign = signMatch[1] || ''
+    const abs  = signMatch[2]
+    // Split integer and fractional parts
+    const [intPart, fracPart = ''] = abs.split('.')
+    // Remove leading zeros from intPart for length count (but keep at least one digit if all zeros)
+    const intDigits = intPart.replace(/^0+(?=\d)/, '') || '0'
+    const fracDigits = fracPart
+    // Truncate fractional part to scale if needed
+    let trimmedFrac = fracDigits
+    if (fracDigits.length > scale) {
+      trimmedFrac = fracDigits.slice(0, scale) // simply truncate; could round
+      logger.warn(`${LOG_PREFIX} Truncating fractional part of "${col}" from ${fracDigits.length} to ${scale} digits`)
+    }
+    // If integer part exceeds (precision - scale), reject to avoid overflow
+    const maxIntLen = precision - scale
+    if (intDigits.length > maxIntLen) {
+      logger.warn(`${LOG_PREFIX} Integer part of "${col}" exceeds allowed length (${intDigits.length} > ${maxIntLen}); setting to null`)
+      return null
+    }
+    // Reconstruct
+    const result = sign + intDigits + (scale > 0 ? '.' + trimmedFrac.padEnd(scale, '0') : '')
+    return result
+  }
+
+  // Handle floating point real/double precision (just pass through if finite)
+  if (
+    typeInfo.data_type === 'real' ||
     typeInfo.data_type === 'double precision'
   ) {
     const n = Number(val)
