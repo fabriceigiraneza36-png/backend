@@ -20,9 +20,9 @@ const {
   transformCountryCard,
 } = require('../utils/countryTransformer')
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    CONSTANTS & HELPERS
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 const LOG_PREFIX = '[Countries]'
 
@@ -85,9 +85,9 @@ const safeQuery = async (sql, params = [], { throwOnError = false, label = '' } 
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    FIELD TYPE REGISTRY
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 /**
  * JSONB columns - always JSON.stringify before passing to pg
@@ -136,9 +136,9 @@ const VARCHAR_LIMITS = {
   driving_side:     20,
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    WRITABLE COLUMNS
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 const WRITABLE_COLUMNS = [
   // Identity
@@ -248,9 +248,9 @@ const invalidateColumnCache = () => {
   _columnTypeMap   = null
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    VALUE SERIALISER
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 /**
  * Serialize a value for a Postgres parameter based on column type info.
@@ -335,15 +335,15 @@ const prepareValue = (col, val) => {
   return val
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    SQL FRAGMENTS
    
    KEY OPTIMIZATION:
-   Instead of LEFT JOIN destinations on every list query (very slow),
+   Instead of LEFT JOIN destinations on every list/query (very slow),
    we use a correlated subquery only when needed, or a separate
    COUNT query. For list views we skip destination_count entirely
    and fetch it on-demand.
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 /**
  * Optimized SELECT for list views - NO JOIN to destinations.
@@ -399,9 +399,9 @@ const DEST_CARD_SELECT = `
   LIMIT 50
 `
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    SCHEMA BOOTSTRAP
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 exports.ensureCountriesSchema = async () => {
   try {
@@ -560,6 +560,21 @@ exports.ensureCountriesSchema = async () => {
          END IF;
        END$$`,
 
+      // Fix urban_population data type - was DECIMAL(5,2) which is too small
+      `DO $$
+       BEGIN
+         IF EXISTS (
+           SELECT 1 FROM information_schema.columns
+           WHERE table_name = 'countries'
+             AND column_name = 'urban_population'
+             AND data_type = 'numeric'
+             AND numeric_precision = 5
+             AND numeric_scale = 2
+         ) THEN
+           ALTER TABLE countries ALTER COLUMN urban_population TYPE BIGINT USING urban_population::BIGINT;
+         END IF;
+       END$$`,
+
       // Add missing columns
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym             TEXT`,
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS motto               TEXT`,
@@ -652,12 +667,12 @@ exports.ensureCountriesSchema = async () => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    GET ALL   GET /api/countries
    
    OPTIMIZED: No JOIN to destinations. Returns destination_count only
    when explicitly requested via ?include_counts=true
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getAll = async (req, res, next) => {
   try {
@@ -727,10 +742,10 @@ exports.getAll = async (req, res, next) => {
      */
     const selectSql = (include_counts === 'true' || include_counts === true)
       ? `SELECT c.*,
-           (SELECT COUNT(*)::INTEGER FROM destinations d
-            WHERE d.country_id = c.id AND d.is_active = true
-           ) AS destination_count
-         FROM countries c`
+            (SELECT COUNT(*)::INTEGER FROM destinations d
+             WHERE d.country_id = c.id AND d.is_active = true
+            ) AS destination_count
+          FROM countries c`
       : COUNTRY_LIST_SELECT
 
     const [countRes, dataRes] = await Promise.all([
@@ -769,9 +784,9 @@ exports.getAll = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    GET ONE   GET /api/countries/:slug
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getOne = async (req, res, next) => {
   try {
@@ -916,9 +931,9 @@ exports.getOne = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    GET FEATURED   GET /api/countries/featured
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 exports.getFeatured = async (req, res, next) => {
   try {
@@ -926,14 +941,14 @@ exports.getFeatured = async (req, res, next) => {
 
     const rows = await safeQuery(
       `SELECT c.*,
-         (SELECT COUNT(*)::INTEGER FROM destinations d
-          WHERE d.country_id = c.id AND d.is_active = true
-         ) AS destination_count
-       FROM countries c
-       WHERE c.is_active   = true
-         AND c.is_featured = true
-       ORDER BY c.name ASC
-       LIMIT $1`,
+          (SELECT COUNT(*)::INTEGER FROM destinations d
+           WHERE d.country_id = c.id AND d.is_active = true
+          ) AS destination_count
+        FROM countries c
+        WHERE c.is_active   = true
+          AND c.is_featured = true
+        ORDER BY c.name ASC
+        LIMIT $1`,
       [limit],
       { label: 'getFeatured' },
     )
@@ -949,9 +964,9 @@ exports.getFeatured = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    GET BY CONTINENT   GET /api/countries/continent/:continent
-═══════════════════════════════════════════════════════════════════════════ */
+═════════════════════════════════════════════════════════════════════════════ */
 
 exports.getByContinent = async (req, res, next) => {
   try {
@@ -962,13 +977,13 @@ exports.getByContinent = async (req, res, next) => {
 
     const rows = await safeQuery(
       `SELECT c.*,
-         (SELECT COUNT(*)::INTEGER FROM destinations d
-          WHERE d.country_id = c.id AND d.is_active = true
-         ) AS destination_count
-       FROM countries c
-       WHERE c.is_active   = true
-         AND c.continent ILIKE $1
-       ORDER BY c.name ASC`,
+          (SELECT COUNT(*)::INTEGER FROM destinations d
+           WHERE d.country_id = c.id AND d.is_active = true
+          ) AS destination_count
+        FROM countries c
+        WHERE c.is_active   = true
+          AND c.continent ILIKE $1
+        ORDER BY c.name ASC`,
       [`%${continent}%`],
       { label: 'getByContinent' },
     )
@@ -985,53 +1000,53 @@ exports.getByContinent = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    GET STATS   GET /api/countries/stats
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.getStats = async (req, res, next) => {
   try {
     const [overview, byCont, topCountries] = await Promise.all([
       safeQuery(
         `SELECT
-           COUNT(*)::INTEGER                                    AS total_countries,
-           COUNT(*) FILTER (WHERE is_active   = true)::INTEGER AS active_countries,
-           COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured_countries,
-           COUNT(DISTINCT continent)::INTEGER                   AS continents
-         FROM countries`,
+            COUNT(*)::INTEGER                                    AS total_countries,
+            COUNT(*) FILTER (WHERE is_active   = true)::INTEGER AS active_countries,
+            COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured_countries,
+            COUNT(DISTINCT continent)::INTEGER                   AS continents
+          FROM countries`,
         [],
         { label: 'stats:overview' },
       ),
       safeQuery(
         `SELECT
-           continent,
-           COUNT(*)::INTEGER AS count
-         FROM countries
-         WHERE continent IS NOT NULL
-         GROUP BY continent
-         ORDER BY count DESC`,
+            continent,
+            COUNT(*)::INTEGER AS count
+          FROM countries
+          WHERE continent IS NOT NULL
+          GROUP BY continent
+          ORDER BY count DESC`,
         [],
         { label: 'stats:continent' },
       ),
       safeQuery(
         `SELECT
-           c.id,
-           c.name,
-           c.slug,
-           c.flag_url,
-           c.flag,
-           (SELECT COUNT(*)::INTEGER FROM destinations d
-            WHERE d.country_id = c.id AND d.is_active = true
-           ) AS destination_count,
-           (SELECT COUNT(DISTINCT b.id)::INTEGER
-            FROM bookings b
-            JOIN destinations d ON b.destination_id = d.id
-            WHERE d.country_id = c.id
-           ) AS booking_count
-         FROM countries c
-         WHERE c.is_active = true
-         ORDER BY booking_count DESC, destination_count DESC
-         LIMIT 10`,
+            c.id,
+            c.name,
+            c.slug,
+            c.flag_url,
+            c.flag,
+            (SELECT COUNT(*)::INTEGER FROM destinations d
+             WHERE d.country_id = c.id AND d.is_active = true
+            ) AS destination_count,
+            (SELECT COUNT(DISTINCT b.id)::INTEGER
+             FROM bookings b
+             JOIN destinations d ON b.destination_id = d.id
+             WHERE d.country_id = c.id
+            ) AS booking_count
+          FROM countries c
+          WHERE c.is_active = true
+          ORDER BY booking_count DESC, destination_count DESC
+          LIMIT 10`,
         [],
         { label: 'stats:top' },
       ),
@@ -1056,9 +1071,9 @@ exports.getStats = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    CREATE   POST /api/countries
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.create = async (req, res, next) => {
   try {
@@ -1100,9 +1115,11 @@ exports.create = async (req, res, next) => {
     const colNames = ['name', 'slug']
     const values   = [name, slug]
 
-    for (const col of columns) {
-      if (col === 'name' || col === 'slug') continue
+    for (const col of columns) of(col === 'name' || col === 'slug') continue
       if (body[col] === undefined)          continue
+
+      const prepared = WRITABLE_COLUMNS.filter(c => c !== 'name' && c !== 'slug')) {
+      if (body[col] === undefined) continue
 
       const prepared = prepareValue(col, body[col])
       if (prepared === null || prepared === undefined) continue
@@ -1155,9 +1172,9 @@ exports.create = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════════
    UPDATE   PUT | PATCH /api/countries/:id
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.update = async (req, res, next) => {
   try {
@@ -1249,9 +1266,9 @@ exports.update = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    TOGGLE ACTIVE   PATCH /api/countries/:id/toggle-active
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.toggleActive = async (req, res, next) => {
   try {
@@ -1284,9 +1301,9 @@ exports.toggleActive = async (req, res, next) => {
   }
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
+/* ═══════════════════════════════════════════════════════════════════════════════
    TOGGLE FEATURED   PATCH /api/countries/:id/toggle-featured
-═══════════════════════════════════════════════════════════════════════════ */
+══════════════════════════════════════════════════════════════════════════════ */
 
 exports.toggleFeatured = async (req, res, next) => {
   try {
@@ -1315,202 +1332,6 @@ exports.toggleFeatured = async (req, res, next) => {
     })
   } catch (err) {
     logger.error(`${LOG_PREFIX} toggleFeatured failed:`, err)
-    return res.status(500).json({ success: false, error: err.message })
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   DELETE   DELETE /api/countries/:id
-═══════════════════════════════════════════════════════════════════════════ */
-
-exports.remove = async (req, res, next) => {
-  try {
-    const id = safeInt(req.params.id, 0, 1)
-    if (!id) {
-      return res.status(400).json({ success: false, error: 'Invalid country ID' })
-    }
-
-    /* ── Existence check ─────────────────────────────────────────────── */
-    const existRows = await safeQuery(
-      'SELECT id, name FROM countries WHERE id = $1',
-      [id],
-      { label: 'remove:exist' },
-    )
-    if (!existRows[0]) {
-      return res.status(404).json({ success: false, error: 'Country not found' })
-    }
-    const { name: countryName } = existRows[0]
-
-    /* ── Count linked destinations ───────────────────────────────────── */
-    const linkedRows = await safeQuery(
-      'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
-      [id],
-      { label: 'remove:destCount' },
-    )
-    const destCount = parseInt(linkedRows[0]?.count ?? 0, 10)
-
-    /* ── Resolve force flag ──────────────────────────────────────────── */
-    const force =
-      req.query.force === 'true'                              ||
-      req.body?.force === true                                ||
-      String(req.body?.force || '').toLowerCase() === 'true'
-
-    /* ── Guard ───────────────────────────────────────────────────────── */
-    if (destCount > 0 && !force) {
-      return res.status(409).json({
-        success:           false,
-        code:              'HAS_DESTINATIONS',
-        error:             `"${countryName}" has ${destCount} destination(s). ` +
-                           `Send force=true to delete the country and all its destinations.`,
-        destination_count: destCount,
-        country_name:      countryName,
-        can_force:         true,
-      })
-    }
-
-    /* ── Cascade ─────────────────────────────────────────────────────── */
-    let removedBookings     = 0
-    let removedDestinations = 0
-
-    if (destCount > 0 && force) {
-      const destIds = (
-        await safeQuery(
-          'SELECT id FROM destinations WHERE country_id = $1',
-          [id],
-          { label: 'remove:destIds' },
-        )
-      ).map(r => r.id)
-
-      if (destIds.length) {
-        try {
-          const delB = await query(
-            'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[]) RETURNING id',
-            [destIds],
-          )
-          removedBookings = delB.rows.length
-        } catch (err) {
-          logger.warn(`${LOG_PREFIX} Cascade bookings delete skipped:`, err.message)
-        }
-
-        const delD = await query(
-          'DELETE FROM destinations WHERE country_id = $1 RETURNING id',
-          [id],
-        )
-        removedDestinations = delD.rows.length
-      }
-    }
-
-    /* ── Delete ──────────────────────────────────────────────────────── */
-    const { rows } = await query(
-      'DELETE FROM countries WHERE id = $1 RETURNING id, name',
-      [id],
-    )
-
-    if (!rows[0]) {
-      return res.status(404).json({ success: false, error: 'Country not found' })
-    }
-
-    const parts = [`Country "${rows[0].name}" deleted`]
-    if (removedDestinations) parts.push(`${removedDestinations} destination(s) removed`)
-    if (removedBookings)     parts.push(`${removedBookings} booking(s) removed`)
-
-    return res.json({
-      success: true,
-      message: parts.join(' · '),
-      data: {
-        id:                   rows[0].id,
-        name:                 rows[0].name,
-        removed_destinations: removedDestinations,
-        removed_bookings:     removedBookings,
-      },
-    })
-  } catch (err) {
-    logger.error(`${LOG_PREFIX} remove FAILED:`, {
-      message: err.message,
-      code:    err.code,
-      detail:  err.detail,
-    })
-    return res.status(500).json({ success: false, error: err.message })
-  }
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   BULK DELETE   DELETE /api/countries   body: { ids, force? }
-═══════════════════════════════════════════════════════════════════════════ */
-
-exports.bulkDelete = async (req, res, next) => {
-  try {
-    const { ids, force = false } = req.body
-
-    if (!Array.isArray(ids) || !ids.length) {
-      return res.status(400).json({ success: false, error: 'ids array is required' })
-    }
-
-    const validIds = ids
-      .map(id => parseInt(id, 10))
-      .filter(id => Number.isFinite(id) && id > 0)
-
-    if (!validIds.length) {
-      return res.status(400).json({ success: false, error: 'No valid IDs provided' })
-    }
-
-    const forceFlag = force === true || String(force).toLowerCase() === 'true'
-    const deleted   = []
-    const skipped   = []
-
-    for (const id of validIds) {
-      try {
-        const linked = await safeQuery(
-          'SELECT COUNT(*)::INTEGER AS count FROM destinations WHERE country_id = $1',
-          [id],
-          { label: `bulkDelete:${id}:count` },
-        )
-        const count = parseInt(linked[0]?.count ?? 0, 10)
-
-        if (count > 0 && !forceFlag) {
-          skipped.push({ id, reason: `has ${count} destination(s)` })
-          continue
-        }
-
-        if (count > 0 && forceFlag) {
-          const destIds = (
-            await safeQuery(
-              'SELECT id FROM destinations WHERE country_id = $1',
-              [id],
-              { label: `bulkDelete:${id}:destIds` },
-            )
-          ).map(r => r.id)
-
-          if (destIds.length) {
-            await query(
-              'DELETE FROM bookings WHERE destination_id = ANY($1::INTEGER[])',
-              [destIds],
-            ).catch(err =>
-              logger.warn(`${LOG_PREFIX} bulkDelete bookings id=${id}:`, err.message),
-            )
-            await query('DELETE FROM destinations WHERE country_id = $1', [id])
-          }
-        }
-
-        const { rows } = await query(
-          'DELETE FROM countries WHERE id = $1 RETURNING id, name',
-          [id],
-        )
-        if (rows[0]) deleted.push(rows[0].id)
-        else         skipped.push({ id, reason: 'not found' })
-      } catch (err) {
-        logger.error(`${LOG_PREFIX} bulkDelete id=${id}:`, err.message)
-        skipped.push({ id, reason: err.message })
-      }
-    }
-
-    return res.json({
-      success: true,
-      message: `${deleted.length} deleted, ${skipped.length} skipped`,
-      data:    { deleted, skipped },
-    })
-  } catch (err) {
-    logger.error(`${LOG_PREFIX} bulkDelete failed:`, err)
     return res.status(500).json({ success: false, error: err.message })
   }
 }

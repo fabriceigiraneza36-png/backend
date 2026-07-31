@@ -4,6 +4,7 @@ const router = express.Router()
 const { query: db } = require('../config/db')
 const { optionalAuth } = require('../middleware/auth')
 const logger = require('../utils/logger')
+const { emitToAdmin } = require('../utils/socketHelper') // Assuming this exists or we'll create it
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 const generateBookingRef = () => {
@@ -140,6 +141,22 @@ router.post('/', optionalAuth, async (req, res) => {
 
     const booking = result.rows[0]
     logger.info(`Booking created: ${bookingNumber}`)
+
+    // Notify admins via socket.io
+    try {
+      const io = req.app.get('io')
+      if (io) {
+        io.to('admin-room').emit('booking:new', {
+          booking: {
+            ...booking,
+            booking_ref: bookingNumber,
+            booking_number: bookingNumber
+          }
+        })
+      }
+    } catch (socketErr) {
+      logger.warning('Failed to send booking notification via socket.io:', socketErr.message)
+    }
 
     return res.status(201).json({
       success: true,
