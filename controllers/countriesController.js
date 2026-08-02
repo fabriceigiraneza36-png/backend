@@ -304,11 +304,37 @@ const prepareValue = (col, val) => {
   }
 
   /* ── Numeric ────────────────────────────────────────────────────────── */
-  // Handle integer types
+  // Handle integer and bigint types with string-based validation to prevent overflow
   if (typeInfo.data_type === 'integer' || typeInfo.data_type === 'bigint') {
-    const n = Number(val)
-    if (!Number.isFinite(n)) return null
-    return Math.trunc(n)
+    const s = String(val).trim()
+    if (s === '') return null
+    const match = s.match(/^([+-]?)(\d*)(?:\.(\d*))?$/)
+    if (!match) return null // Reject non-decimal formats (e.g. scientific notation)
+    const [, sign, intPart, fracPart] = match
+    let digits = intPart.replace(/^0+(?=\d)/, '') || '0' // Remove leading zeros
+    
+    if (typeInfo.data_type === 'integer') {
+      const maxDigits = 10
+      const maxPos = '2147483647'
+      const maxNeg = '2147483648' // |min int|
+      if (digits.length > maxDigits) return null
+      if (digits.length === maxDigits) {
+        const maxStr = sign === '-' ? maxNeg : maxPos
+        if (digits > maxStr) return null
+      }
+      return Number(sign + digits) // Safe to convert to Number (≤10 digits)
+    } else if (typeInfo.data_type === 'bigint') {
+      const maxDigits = 19
+      const maxPos = '9223372036854775807'
+      const maxNeg = '9223372036854775808' // |min bigint|
+      if (digits.length > maxDigits) return null
+      if (digits.length === maxDigits) {
+        const maxStr = sign === '-' ? maxNeg : maxPos
+        if (digits > maxStr) return null
+      }
+      // Return as string to preserve precision for bigint
+      return (sign === '-' ? '-' : '') + digits
+    }
   }
 
   // Handle numeric/decimal types with precision and scale
