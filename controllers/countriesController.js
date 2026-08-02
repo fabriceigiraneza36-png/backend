@@ -526,9 +526,9 @@ exports.ensureCountriesSchema = async () => {
         cover_image_url       TEXT,
         hero_image            TEXT,
 
-        -- Coordinates
-        latitude              NUMERIC(10, 7),
-        longitude             NUMERIC(10, 7),
+-- Coordinates
+         latitude              NUMERIC(15, 8),
+         longitude             NUMERIC(15, 8),
 
         -- Numeric stats
         population            BIGINT,
@@ -633,20 +633,47 @@ exports.ensureCountriesSchema = async () => {
          END IF;
        END$$`,
 
-      // Fix urban_population data type - was DECIMAL(5,2) which is too small
-      `DO $$
-       BEGIN
-         IF EXISTS (
-           SELECT 1 FROM information_schema.columns
-           WHERE table_name = 'countries'
-             AND column_name = 'urban_population'
-             AND data_type = 'numeric'
-             AND numeric_precision = 5
-             AND numeric_scale = 2
-         ) THEN
-           ALTER TABLE countries ALTER COLUMN urban_population TYPE BIGINT USING urban_population::BIGINT;
-         END IF;
-       END$$`,
+// Fix urban_population data type - was DECIMAL(5,2) which is too small
+       `DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_name = 'countries'
+              AND column_name = 'urban_population'
+              AND data_type = 'numeric'
+              AND numeric_precision = 5
+              AND numeric_scale = 2
+          ) THEN
+            ALTER TABLE countries ALTER COLUMN urban_population TYPE BIGINT USING urban_population::BIGINT;
+          END IF;
+        END$$`,
+
+        // Ensure latitude/longitude have sufficient precision
+        `DO $$
+         BEGIN
+           IF EXISTS (
+             SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'countries'
+               AND column_name = 'latitude'
+               AND data_type = 'numeric'
+               AND (numeric_precision < 15 OR numeric_scale < 8)
+           ) THEN
+             ALTER TABLE countries ALTER COLUMN latitude TYPE NUMERIC(15,8);
+           END IF;
+         END$$`,
+
+        `DO $$
+         BEGIN
+           IF EXISTS (
+             SELECT 1 FROM information_schema.columns
+             WHERE table_name = 'countries'
+               AND column_name = 'longitude'
+               AND data_type = 'numeric'
+               AND (numeric_precision < 15 OR numeric_scale < 8)
+           ) THEN
+             ALTER TABLE countries ALTER COLUMN longitude TYPE NUMERIC(15,8);
+           END IF;
+         END$$`,
 
       // Add missing columns
       `ALTER TABLE countries ADD COLUMN IF NOT EXISTS demonym             TEXT`,
