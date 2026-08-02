@@ -336,11 +336,12 @@ const notifyUserBookingEvent = async ({
   priority = "normal",
 }) => {
   try {
+    const bookingType = booking.booking_type || 'booking';
     return await createNotificationInternal({
       userId: user?.id || null,
       userEmail: user?.email || null,
       type: "booking_created",
-      category: "booking",
+      category: bookingType,
       title,
       message,
       actionUrl: actionUrl || "/my-bookings",
@@ -358,17 +359,22 @@ const notifyUserBookingEvent = async ({
 
 const pingAdminNewRequest = (booking) => {
   try {
+    // Determine category based on booking type, fallback to 'booking'
+    const bookingType = booking?.booking_type || 'custom';
+    const validCategories = ['destination', 'service', 'package', 'custom'];
+    const category = validCategories.includes(bookingType) ? bookingType : 'booking';
+    
     createNotificationInternal({
       targetScope: "role",
       targetRole: "admin",
       type: "booking_created",
-      category: "booking",
+      category: category,
       title: "🔔 New booking request",
       message: `Booking ${booking?.booking_number || ""} from ${booking?.full_name || "a traveller"}.`,
       actionUrl: "/bookings",
       actionLabel: "Review",
       priority: "high",
-      metadata: { bookingNumber: booking?.booking_number || null },
+      metadata: { bookingNumber: booking?.booking_number || null, bookingType },
     }).catch(() => {});
   } catch {
     // non-fatal
