@@ -1184,22 +1184,20 @@ exports.create = async (req, res, next) => {
       })
     }
 
-    /* ── Build INSERT ────────────────────────────────────────────────── */
-    const colNames = ['name', 'slug']
-    const values   = [name, slug]
+/* ── Build INSERT ────────────────────────────────────────────────── */
+     const colNames = ['name', 'slug']
+     const values   = [name, slug]
 
-    for (const col of columns) of(col === 'name' || col === 'slug') continue
-      if (body[col] === undefined)          continue
+for (const col of columns) {
+       if (col === 'name' || col === 'slug') continue
+       if (body[col] === undefined) continue
 
-      const prepared = WRITABLE_COLUMNS.filter(c => c !== 'name' && c !== 'slug')) {
-      if (body[col] === undefined) continue
+       const prepared = prepareValue(col, body[col])
+       if (prepared === null || prepared === undefined) continue
 
-      const prepared = prepareValue(col, body[col])
-      if (prepared === null || prepared === undefined) continue
-
-      colNames.push(col)
-      values.push(prepared)
-    }
+       colNames.push(col)
+       values.push(prepared)
+     }
 
     /* timestamps */
     colNames.push('created_at', 'updated_at')
