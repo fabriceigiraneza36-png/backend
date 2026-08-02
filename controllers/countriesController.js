@@ -1189,25 +1189,33 @@ exports.create = async (req, res, next) => {
       })
     }
 
-    const slug = String(body.slug || '').trim() || toSlug(name)
-    if (!slug) {
+    // Generate base slug from name if not provided
+    const baseSlug = String(body.slug || '').trim() || toSlug(name)
+    if (!baseSlug) {
       return res.status(400).json({
         success: false,
         error:   'Could not generate a valid slug from the provided name',
       })
     }
 
-    /* ── Slug uniqueness ─────────────────────────────────────────────── */
-    const existing = await safeQuery(
-      'SELECT id FROM countries WHERE slug = $1',
-      [slug],
-      { label: 'create:slugCheck' },
-    )
-    if (existing[0]) {
-      return res.status(409).json({
+    // Find an available slug (handle collisions by appending -2, -3, etc.)
+    let slug = baseSlug
+    let counter = 0
+    const maxAttempts = 100
+    while (counter < maxAttempts) {
+      const existing = await safeQuery(
+        'SELECT id FROM countries WHERE slug = $1',
+        [slug],
+        { label: 'create:slugCheck' },
+      )
+      if (!existing[0]) break
+      counter++
+      slug = `${baseSlug}-${counter}`
+    }
+    if (counter >= maxAttempts) {
+      return res.status(500).json({
         success: false,
-        code:    'SLUG_CONFLICT',
-        error:   `A country with slug "${slug}" already exists`,
+        error:   'Unable to generate a unique slug after multiple attempts',
       })
     }
 
