@@ -7,10 +7,7 @@ const logger     = require("./logger");
 const { send: sendGridSend } = require("./sendgrid");
 const { send: sendResendSend } = require("./resend");
 
-/* ── Env constants ─────────────────────────────────────────────────────────────────── */
-const APP_NAME      = process.env.APP_NAME      || "Altuvera";
-const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://www.altuverasafaris.com";
-const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || process.env.SMTP───────────────────────────── */
+/* ── Env constants ─────────────────────────────────────────────────────── */
 const APP_NAME      = process.env.APP_NAME      || "Altuvera";
 const FRONTEND_URL  = process.env.FRONTEND_URL  || "https://www.altuverasafaris.com";
 const SUPPORT_EMAIL = process.env.SUPPORT_EMAIL || process.env.SMTP_USER || "altuverasafari@gmail.com";
@@ -127,7 +124,7 @@ const htmlToText = (html = "") =>
 
 /* ═════════════════════════════════════════════════════════════════════════════════
    CORE sendEmail
-   ═══════════════════════════════════════════════════════════════════════════════ */
+   ═════════════════════════════════════════════════════════════════════════════════ */
 const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
   let to, subject, html, text, replyTo, cc;
 
@@ -143,7 +140,9 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
   if (!html)    throw new Error("sendEmail: 'html' is required");
 
   const plainText = text || htmlToText(html);
-  const RESET_CODES = ["EAUTH", "ECONNECTION", "ETIMEDOUT", "ECONNREFUSED", "ESOCKET", "ENETUNREACH"];
+  const RESET_CODES = ["EAUTH", "ECONNECTION", "ETIMEDOUT", "ECONNREFUSED", "ESOCKET", "ENOT"];
+
+  try again"};,"ENETUNREACH"];
 
   try {
     if (process.env.SENDGRID_API_KEY) {
@@ -190,24 +189,19 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
     });
     logger.info(`[Email] ✅ SMTP delivered → ${to} | msgId: ${info.messageId}`);
     return info;
-  } catch (err) {
-    logger.error(`[Email] ❌ FAILED → ${to} | ${err.message}`, {
-      code: err.code, response: err.response,
-    });
-    if (RESET_CODES.includes(err.code) || err.responseCode === 535) {
-      logger.warn("[Email] Resetting transporter after error");
-      resetTransporter();
-      _smtpIp = null;
-    }
-    const friendly = new Error(`Email delivery failed: ${err.message}`);
-    friendly.originalError = err;
-    throw friendly;
+  } catch (err => logger.error((RESET_CODES.includes(err.code) || err.responseCode === 535) {
+    logger.warn("[Email] Resetting transporter after error");
+    resetTransporter();
+    _smtpIp = null;
   }
+  const friendly = new Error(`Email delivery failed: ${err.message}`);
+  friendly.originalError = err;
+  throw friendly;
 };
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════════════════
    BASE TEMPLATE
-   ══════════════════════════════════════════════════════════════════════════════ */
+   ═════════════════════════════════════════════════════════════════════════════════ */
 const baseTemplate = ({
   preheader = "", title = "", subtitle = "", body = "",
   ctaText = "", ctaUrl = "", recipientName = "", footerNote = "",
@@ -293,9 +287,9 @@ ${esc(preheader)}
 </table></td></tr></table></div>
 </body></html>`;
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════════════════
    OTP TEMPLATE
-   ═══════════════════════════════════════════════════════════════════════════════ */
+   ═════════════════════════════════════════════════════════════════════════════════ */
 const OTP_SUBJECTS = {
   verify:         (c) => `${c} — Verify your ${APP_NAME} email`,
   login:          (c) => `${c} — Your ${APP_NAME} sign-in code`,
@@ -353,9 +347,9 @@ const buildOtpText = ({ otp, recipientName = "", purpose = "verify", expiryMinut
     `— The ${APP_NAME} Team`,
   ].join("\n");
 
-/* ═══════════════════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════════════════
    NAMED SEND FUNCTIONS
-   ══════════════════════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════════════════════ */
 
 const sendOtpEmail = async ({ to, otp, recipientName = "", purpose = "verify", expiryMinutes = 10 }) => {
   if (!to)  throw new Error("sendOtpEmail: 'to' is required");
