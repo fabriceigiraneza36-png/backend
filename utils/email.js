@@ -122,9 +122,9 @@ const htmlToText = (html = "") =>
   html.replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ")
       .replace(/\s{2,}/g, " ").trim().slice(0, 4000);
 
-/* ═════════════════════════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════════════════
    CORE sendEmail
-   ═════════════════════════════════════════════════════════════════════════════════ */
+   ══════════════════════════════════════════════════════════════════════════════════════ */
 const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
   let to, subject, html, text, replyTo, cc;
 
@@ -140,9 +140,7 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
   if (!html)    throw new Error("sendEmail: 'html' is required");
 
   const plainText = text || htmlToText(html);
-  const RESET_CODES = ["EAUTH", "ECONNECTION", "ETIMEDOUT", "ECONNREFUSED", "ESOCKET", "ENOT"];
-
-  try again"};,"ENETUNREACH"];
+  const RESET_CODES = ["EAUTH", "ECONNECTION", "ETIMEDOUT", "ECONNREFUSED", "ESOCKET", "ENETUNREACH"];
 
   try {
     if (process.env.SENDGRID_API_KEY) {
@@ -189,19 +187,24 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
     });
     logger.info(`[Email] ✅ SMTP delivered → ${to} | msgId: ${info.messageId}`);
     return info;
-  } catch (err => logger.error((RESET_CODES.includes(err.code) || err.responseCode === 535) {
-    logger.warn("[Email] Resetting transporter after error");
-    resetTransporter();
-    _smtpIp = null;
+  } catch (err) {
+    logger.error(`[Email] ❌ FAILED → ${to} | ${err.message}`, {
+      code: err.code, response: err.response,
+    });
+    if (RESET_CODES.includes(err.code) || err.responseCode === 535) {
+      logger.warn("[Email] Resetting transporter after error");
+      resetTransporter();
+      _smtpIp = null;
+    }
+    const friendly = new Error(`Email delivery failed: ${err.message}`);
+    friendly.originalError = err;
+    throw friendly;
   }
-  const friendly = new Error(`Email delivery failed: ${err.message}`);
-  friendly.originalError = err;
-  throw friendly;
 };
 
-/* ═════════════════════════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════════════════
    BASE TEMPLATE
-   ═════════════════════════════════════════════════════════════════════════════════ */
+   ════════════════════════════════════════════════════════════════════════════════════ */
 const baseTemplate = ({
   preheader = "", title = "", subtitle = "", body = "",
   ctaText = "", ctaUrl = "", recipientName = "", footerNote = "",
@@ -287,9 +290,9 @@ ${esc(preheader)}
 </table></td></tr></table></div>
 </body></html>`;
 
-/* ═════════════════════════════════════════════════════════════════════════════════
+/* ═════════════════════════════════════════════════════════════════════════════════════
    OTP TEMPLATE
-   ═════════════════════════════════════════════════════════════════════════════════ */
+   ═══════════════════════════════════════════════════════════════════════════════════ */
 const OTP_SUBJECTS = {
   verify:         (c) => `${c} — Verify your ${APP_NAME} email`,
   login:          (c) => `${c} — Your ${APP_NAME} sign-in code`,
@@ -347,10 +350,9 @@ const buildOtpText = ({ otp, recipientName = "", purpose = "verify", expiryMinut
     `— The ${APP_NAME} Team`,
   ].join("\n");
 
-/* ═════════════════════════════════════════════════════════════════════════════════
+/* ══════════════════════════════════════════════════════════════════════════════════
    NAMED SEND FUNCTIONS
-   ════════════════════════════════════════════════════════════════════════════════ */
-
+   ═══════════════════════════════════════════════════════════════════════════════════ */
 const sendOtpEmail = async ({ to, otp, recipientName = "", purpose = "verify", expiryMinutes = 10 }) => {
   if (!to)  throw new Error("sendOtpEmail: 'to' is required");
   if (!otp) throw new Error("sendOtpEmail: 'otp' is required");
