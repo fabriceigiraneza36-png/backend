@@ -1,3 +1,4 @@
+// utils/resend.js
 /**
  * utils/resend.js
  * Resend email API wrapper (HTTPS - works on Render/cloud platforms)
@@ -99,7 +100,7 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
       messageId: data?.id,
     };
   } catch (err) {
-    if (originalError) throw err;
+    if (err.originalError) throw err;
     logger.error('❌ Resend unexpected error', {
       to,
       subject,
