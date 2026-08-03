@@ -1,6 +1,6 @@
 /**
  * utils/resend.js
- * Resend email API wrapper (HTTPS — works on Render/cloud platforms)
+ * Resend email API wrapper (HTTPS - works on Render/cloud platforms)
  * No phone number required. Just add RESEND_API_KEY to your env.
  */
 
@@ -8,6 +8,20 @@ const { Resend } = require('resend');
 const logger = require('./logger');
 
 let _client = null;
+
+/**
+ * Extract email address from "Name <email@domain.com>" format or return as-is if already just an email
+ */
+const extractEmailAddress = (emailString) => {
+  if (!emailString) return '';
+  // Match email address in angle brackets
+  const match = emailString.match(/<([^>]+)>/);
+  if (match) {
+    return match[1];
+  }
+  // If no angle brackets, assume it's already just an email address
+  return emailString.trim();
+};
 
 function getClient() {
   if (_client) return _client;
@@ -35,12 +49,18 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
     throw new Error('RESEND_API_KEY not configured');
   }
 
-  const fromEmail =
+  // Extract email address from potentially formatted string
+  const fromEmail = extractEmailAddress(
+    // Use provided from, or construct from RESEND_FROM_DOMAIN, or fallback to defaults
     from ||
+    (process.env.RESEND_FROM_DOMAIN
+      ? `noreply@${process.env.RESEND_FROM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
+      : null) ||
     process.env.SMTP_FROM ||
     process.env.SMTP_USER ||
     process.env.ADMIN_EMAIL ||
-    'noreply@altuvera.com';
+    'noreply@altuvera.com'
+  );
 
   const payload = {
     from: fromEmail,
@@ -79,7 +99,7 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
       messageId: data?.id,
     };
   } catch (err) {
-    if (err.originalError) throw err;
+    if (originalError) throw err;
     logger.error('❌ Resend unexpected error', {
       to,
       subject,

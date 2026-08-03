@@ -50,8 +50,8 @@ const stripHtml = (h = "") =>
 
 const esc = (s = "") =>
   String(s)
-    .replace(/&/g, "&amp;").replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+    .replace(/&/g, "&").replace(/</g, "<")
+    .replace(/>/g, ">").replace(/"/g, """).replace(/'/g, "'");
 
 const fmtDate = (d) => {
   if (!d) return "—";
@@ -72,6 +72,42 @@ const fmtDateTime = (d) => {
   } catch { return String(d); }
 };
 
+const daysUntil = (d) => {
+  if (!d) return null;
+  try {
+    const diff = new Date(d).setHours(0,0,0,0) - new Date().setHours(0,0,0,0);
+    return Math.ceil(diff / 86_400_000);
+  } catch { return null; }
+};
+
+const humanCountdown = (d) => {
+  const days = daysUntil(d);
+  if (days === null) return "—";
+  if (days <= 0) return "today";
+  if (days === 1) return "tomorrow";
+  if (days < 7) return `in ${days} day${days !== 1 ? "s" : ""}`;
+  const weeks = Math.floor(days / 7);
+  const remDays = days % 7;
+  if (days < 30) {
+    return remDays > 0
+      ? `in ${weeks} week${weeks !== 1 ? "s" : ""} and ${remDays} day${remDays !== 1 ? "s" : ""}`
+      : `in ${weeks} week${weeks !== 1 ? "s" : ""}`;
+  }
+  const months = Math.floor(days / 30);
+  const remMons = days - months * 30;
+  if (days < 365) {
+    return remMons > 0
+      ? `in ${months} month${months !== 1 ? "s" : ""} and ${remMons} month${remMons !== 1 ? "s" : ""}`
+      : `in ${months} month${months !== 1 ? "s" : ""}`;
+  }
+  const years = Math.floor(days / 365);
+  const remYears = days - years * 365;
+  const remMonths = Math.floor(remYears / 30);
+  return remMonths > 0
+    ? `in ${years} year${years !== 1 ? "s" : ""} and ${remMonths} month${remMonths !== 1 ? "s" : ""}`
+    : `in ${years} year${years !== 1 ? "s" : ""}`;
+};
+
 const badgeCls = (s) => ({
   pending:   "b-pending",
   confirmed: "b-confirmed",
@@ -81,40 +117,9 @@ const badgeCls = (s) => ({
   refunded:  "b-refunded",
 })[s] || "b-pending";
 
-function humanCountdown(targetDate) {
-  const now  = new Date();
-  now.setHours(0, 0, 0, 0);
-  const then = new Date(targetDate);
-  then.setHours(0, 0, 0, 0);
-  const diffMs   = then - now;
-  const diffDays = Math.round(diffMs / (1000 * 60 * 60 * 24));
-  if (diffDays <= 0)  return "today";
-  if (diffDays === 1) return "tomorrow";
-  if (diffDays < 7)   return `in ${diffDays} day${diffDays !== 1 ? "s" : ""}`;
-  const weeks = Math.floor(diffDays / 7);
-  const days  = diffDays % 7;
-  if (diffDays < 30) {
-    return days > 0
-      ? `in ${weeks} week${weeks !== 1 ? "s" : ""} and ${days} day${days !== 1 ? "s" : ""}`
-      : `in ${weeks} week${weeks !== 1 ? "s" : ""}`;
-  }
-  const months  = Math.floor(diffDays / 30);
-  const remDays = diffDays - months * 30;
-  if (diffDays < 365) {
-    return remDays > 0
-      ? `in ${months} month${months !== 1 ? "s" : ""} and ${remDays} day${remDays !== 1 ? "s" : ""}`
-      : `in ${months} month${months !== 1 ? "s" : ""}`;
-  }
-  const years   = Math.floor(diffDays / 365);
-  const remMons = Math.floor((diffDays % 365) / 30);
-  return remMons > 0
-    ? `in ${years} year${years !== 1 ? "s" : ""} and ${remMons} month${remMons !== 1 ? "s" : ""}`
-    : `in ${years} year${years !== 1 ? "s" : ""}`;
-}
-
-/* ══════════════════════════════════════════════════════════════════════════════
-   CORE sendEmail
-══════════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════════════════
+    CORE sendEmail
+═══════════════════════════════════════════════════════════════════════════════ */
 async function sendEmail({ to, subject, html, text, replyTo }) {
   if (!to || !subject || (!html && !text))
     throw new Error("sendEmail: to, subject, html/text required");
@@ -165,13 +170,13 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
   return { success: true, provider: "console", messageId: `console-${Date.now()}` };
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   GLOBAL CSS  (shared across all templates)
-══════════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════════════════
+    GLOBAL CSS  (shared across all templates)
+════════════════════════════════════════════════════════════════════════════════ */
 const GLOBAL_CSS = `
 *{box-sizing:border-box;margin:0;padding:0}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,'Helvetica Neue',Arial,sans-serif;
-     background:#f0fdf4;color:#0f172a;line-height:1.65;-webkit-text-size-adjust:100%}
+      background:#f0fdf4;color:#0f172a;line-height:1.65;-webkit-text-size-adjust:100%}
 img{border:0;display:block;max-width:100%;height:auto}
 a{color:#059669;text-decoration:none}
 
@@ -184,13 +189,13 @@ a{color:#059669;text-decoration:none}
 
 /* header */
 .hdr{background:linear-gradient(140deg,#022c22 0%,#064e3b 50%,#047857 100%);
-     padding:32px 28px 26px;text-align:center;position:relative;overflow:hidden}
+      padding:32px 28px 26px;text-align:center;position:relative;overflow:hidden}
 .hdr-glow{position:absolute;top:-60px;left:50%;transform:translateX(-50%);
-          width:260px;height:260px;border-radius:50%;
-          background:radial-gradient(circle,rgba(52,211,153,.18) 0%,transparent 70%);
-          pointer-events:none}
+           width:260px;height:260px;border-radius:50%;
+           background:radial-gradient(circle,rgba(52,211,153,.18) 0%,transparent 70%);
+           pointer-events:none}
 .brand{font-size:13px;font-weight:700;color:rgba(255,255,255,.55);
-       letter-spacing:.18em;text-transform:uppercase;margin-bottom:10px}
+        letter-spacing:.18em;text-transform:uppercase;margin-bottom:10px}
 .logo-txt{font-size:26px;font-weight:900;color:#fff;letter-spacing:-.025em;line-height:1}
 .logo-txt em{color:#34d399;font-style:normal}
 .tagline{font-size:12px;color:rgba(255,255,255,.45);margin-top:6px;letter-spacing:.04em}
@@ -206,19 +211,19 @@ a{color:#059669;text-decoration:none}
 
 /* info box */
 .box{background:#f0fdf4;border-radius:14px;padding:18px 22px;
-     border:1px solid #a7f3d0;margin:18px 0}
+      border:1px solid #a7f3d0;margin:18px 0}
 .box-title{font-size:10.5px;font-weight:800;color:#065f46;
-           text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;
-           display:flex;align-items:center;gap:6px}
+            text-transform:uppercase;letter-spacing:.1em;margin-bottom:12px;
+            display:flex;align-items:center;gap:6px}
 .row{display:flex;justify-content:space-between;align-items:flex-start;
-     padding:7px 0;border-bottom:1px solid rgba(167,243,208,.4);font-size:13.5px;gap:10px}
+      padding:7px 0;border-bottom:1px solid #a7f3d0;line-height:1.5}
 .row:last-child{border:none;padding-bottom:0}
 .lbl{color:#64748b;font-weight:500;white-space:nowrap;flex-shrink:0;min-width:120px}
 .val{color:#0f172a;font-weight:600;text-align:right;word-break:break-word;flex:1}
 
 /* badges */
 .bd{display:inline-block;padding:3px 11px;border-radius:999px;
-    font-size:11px;font-weight:700;letter-spacing:.04em;vertical-align:middle}
+     font-size:11px;font-weight:700;letter-spacing:.04em;vertical-align:middle}
 .b-pending  {background:#fef3c7;color:#92400e;border:1px solid #fde68a}
 .b-confirmed{background:#dcfce7;color:#166534;border:1px solid #86efac}
 .b-cancelled{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
@@ -229,8 +234,8 @@ a{color:#059669;text-decoration:none}
 /* buttons */
 .btn-row{text-align:center;margin:26px 0 10px}
 .btn{display:inline-block;padding:14px 30px;border-radius:14px;font-weight:700;
-     font-size:14px;letter-spacing:.01em;margin:4px 5px;line-height:1;
-     border:2px solid transparent}
+      font-size:14px;letter-spacing:.01em;margin:4px 5px;line-height:1;
+      border:2px solid transparent}
 .btn-g{background:linear-gradient(135deg,#10b981 0%,#059669 100%);color:#fff!important;
        box-shadow:0 6px 20px rgba(5,150,105,.35)}
 .btn-o{background:#f0fdf4;color:#059669!important;border-color:#a7f3d0}
@@ -250,8 +255,8 @@ a{color:#059669;text-decoration:none}
           border:1px solid #bfdbfe;margin:14px 0}
 .info-box p{font-size:13px;color:#1e40af;margin:0;line-height:1.6}
 .success-alert{background:linear-gradient(135deg,#ecfdf5,#d1fae5);
-               border-radius:12px;padding:16px 20px;border:1px solid #6ee7b7;
-               margin:14px 0;text-align:center}
+                border-radius:12px;padding:16px 20px;border:1px solid #6ee7b7;
+                margin:14px 0;text-align:center}
 
 /* stat pills */
 .stats{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0}
@@ -262,18 +267,18 @@ a{color:#059669;text-decoration:none}
 
 /* countdown */
 .cd{text-align:center;padding:30px 20px;
-    background:linear-gradient(140deg,#022c22,#064e3b 55%,#047857);
-    border-radius:18px;margin:22px 0;position:relative;overflow:hidden}
+     background:linear-gradient(140deg,#022c22,#064e3b 55%,#047857);
+     border-radius:18px;margin:22px 0;position:relative;overflow:hidden}
 .cd-glow{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
-         width:300px;height:300px;border-radius:50%;
-         background:radial-gradient(circle,rgba(52,211,153,.15) 0%,transparent 70%)}
+          width:300px;height:300px;border-radius:50%;
+          background:radial-gradient(circle,rgba(52,211,153,.15) 0%,transparent 70%)}
 .cd-val{font-size:52px;font-weight:900;color:#34d399;
-        font-family:'Courier New',Courier,monospace;letter-spacing:.02em;
-        line-height:1;position:relative}
+         font-family:'Courier New',Courier,monospace;letter-spacing:.02em;
+         line-height:1;position:relative}
 .cd-unit{font-size:11px;color:rgba(255,255,255,.45);text-transform:uppercase;
-         letter-spacing:.15em;margin-top:5px;position:relative}
+          letter-spacing:.15em;margin-top:5px;position:relative}
 .cd-dest{font-size:16px;color:#fff;margin-top:14px;font-weight:700;
-         position:relative;line-height:1.4}
+          position:relative;line-height:1.4}
 .cd-date{font-size:12px;color:rgba(255,255,255,.5);margin-top:5px;position:relative}
 
 /* tips list */
@@ -288,18 +293,18 @@ a{color:#059669;text-decoration:none}
 
 /* footer */
 .ftr{padding:22px 28px;text-align:center;background:#f8fafc;
-     border-top:1px solid #e2e8f0}
+      border-top:1px solid #e2e8f0}
 .ftr p{font-size:11.5px;color:#94a3b8;line-height:1.8;margin-bottom:2px}
 .ftr a{color:#059669;font-weight:600}
 
 /* steps */
 .steps{counter-reset:step;margin:18px 0}
 .step{display:flex;align-items:flex-start;gap:12px;padding:10px 0;
-      border-bottom:1px dashed #e2e8f0;font-size:13px;color:#374151}
+       border-bottom:1px dashed #e2e8f0;font-size:13px;color:#374151}
 .step:last-child{border:none}
 .step-n{width:24px;height:24px;border-radius:50%;background:linear-gradient(135deg,#10b981,#059669);
-        color:#fff;font-weight:800;font-size:11px;display:flex;align-items:center;
-        justify-content:center;flex-shrink:0;margin-top:1px}
+         color:#fff;font-weight:800;font-size:11px;display:flex;align-items:center;
+         justify-content:center;flex-shrink:0;margin-top:1px}
 
 /* highlights bar */
 .hlt-bar{background:linear-gradient(135deg,#ecfdf5,#d1fae5);
@@ -328,9 +333,9 @@ a{color:#059669;text-decoration:none}
 }
 `;
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   BASE HTML SHELL
-══════════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════════════════
+    BASE HTML SHELL
+════════════════════════════════════════════════════════════════════════════════ */
 function shell({ title, preheader = "", body, footer = "", extraCss = "" }) {
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -363,27 +368,27 @@ function shell({ title, preheader = "", body, footer = "", extraCss = "" }) {
   <div class="ftr">
     ${footer ? `<p style="margin-bottom:10px;color:#64748b;font-size:12px">${footer}</p>` : ""}
     <p>
-      <a href="${CFG.appUrl}">Website</a> &nbsp;·&nbsp;
-      <a href="${CFG.appUrl}/destinations">Destinations</a> &nbsp;·&nbsp;
-      <a href="mailto:${CFG.supportEmail}">Support</a> &nbsp;·&nbsp;
+      <a href="${cfg.appUrl}">Website</a> &nbsp;·&nbsp;
+      <a href="${cfg.appUrl}/destinations">Destinations</a> &nbsp;·&nbsp;
+      <a href="mailto:${cfg.supportEmail}">Support</a> &nbsp;·&nbsp;
       <a href="https://wa.me/250785751391">WhatsApp</a>
     </p>
     <p style="margin-top:8px">© ${new Date().getFullYear()} Altuvera Travel · All rights reserved</p>
     <p style="margin-top:4px">
-      <a href="${CFG.appUrl}" style="color:#cbd5e1;font-weight:400">
+      <a href="${cfg.appUrl}" style="color:#cbd5e1;font-weight:400">
         www.altuverasafaris.com
       </a>
     </p>
+  </p>
   </div>
 
 </div></div>
-</div>
 </body></html>`;
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   1.  sendBookingVerificationLink
-══════════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════════════════
+    1.  sendBookingVerificationLink
+════════════════════════════════════════════════════════════════════════════════ */
 async function sendBookingVerificationLink(booking, verificationToken) {
   const {
     email,
@@ -399,8 +404,12 @@ async function sendBookingVerificationLink(booking, verificationToken) {
     console.warn("[Email] sendBookingVerificationLink: no email");
     return { success: false, reason: "no_email" };
   }
+  if (!verificationToken) {
+    console.warn("[Email] sendBookingVerificationLink: no token");
+    return { success: false, reason: "no_token" };
+  }
 
-  const verifyUrl = `${CFG.backendUrl}/api/bookings/verify-email/${verificationToken}`;
+  const verifyUrl = `${cfg.backendUrl}/api/bookings/verify-email/${verificationToken}`;
 
   const extraCss = `
     .verify-hero{background:linear-gradient(135deg,#ecfdf5 0%,#d1fae5 100%);
@@ -410,11 +419,11 @@ async function sendBookingVerificationLink(booking, verificationToken) {
     .verify-ttl{font-size:20px;font-weight:800;color:#022c22;margin-bottom:4px}
     .verify-sub{font-size:13px;color:#047857;line-height:1.5}
     .timer-pill{display:inline-flex;align-items:center;gap:6px;padding:6px 14px;
-                background:#fff;border-radius:999px;border:1px solid #fde68a;
-                font-size:12px;color:#92400e;font-weight:700;margin-top:14px}
+                 background:#fff;border-radius:999px;border:1px solid #fde68a;
+                 font-size:12px;color:#92400e;font-weight:700;margin-top:14px}
     .url-box{background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;
-             padding:12px 16px;margin:16px 0;word-break:break-all;
-             font-size:11.5px;color:#64748b;font-family:'Courier New',monospace;line-height:1.5}
+              padding:12px 16px;margin:16px 0;word-break:break-all;
+              font-size:11.5px;color:#64748b;font-family:'Courier New',monospace;line-height:1.5}
   `;
 
   const html = shell({
@@ -494,7 +503,7 @@ async function sendBookingVerificationLink(booking, verificationToken) {
           Have questions? Our safari team is ready to help:
         </p>
         <a href="https://wa.me/250785751391" class="btn btn-o">💬 WhatsApp Us</a>
-        <a href="mailto:${CFG.supportEmail}" class="btn btn-o">✉️ Email Support</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">✉️ Email Support</a>
       </div>`,
 
     footer: "This verification link is valid for 24 hours from the time your booking was submitted.",
@@ -522,44 +531,23 @@ async function sendBookingVerificationLink(booking, verificationToken) {
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   2.  sendAdminBookingNotification
-══════════════════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════════
+    2.  sendAdminBookingNotification
+════════════════════════════════════════════════════════════════════════════════ */
 async function sendAdminBookingNotification(booking) {
-  const adminEmail = CFG.adminEmail;
+  const adminEmail = cfg.adminEmail;
   if (!adminEmail) {
     console.warn("[Email] sendAdminBookingNotification: ADMIN_EMAIL not set");
     return { success: false, reason: "no_admin_email" };
   }
 
-  const {
-    booking_number      = booking.id || "N/A",
-    full_name           = "Unknown",
-    email               = "—",
-    phone               = "—",
-    whatsapp,
-    nationality,
-    country,
-    booking_type        = "custom",
-    destination_name,
-    service_name,
-    package_name,
-    travel_date,
-    return_date,
-    flexible_dates,
-    number_of_travelers = 1,
-    number_of_adults,
-    number_of_children,
-    accommodation_type,
-    dietary_requirements,
-    special_requests,
-    source              = "website",
-    status              = "pending",
-    created_at,
-  } = booking;
-
-  const trip = destination_name || service_name || package_name || "Custom Request";
-  const wa   = whatsapp ? whatsapp.replace(/\D/g, "") : null;
+  const dest = tripName(booking);
+  const name = safe(booking.full_name);
+  const email = safe(booking.email);
+  const phone = safe(booking.phone);
+  const wa = phone !== "—" ? phone.replace(/\D/g, "") : null;
+  const adminUrl = `${cfg.frontendUrl}/admin/bookings`;
+  const travelers = Number(booking.number_of_travelers) || 1;
 
   const extraCss = `
     .admin-alert{background:linear-gradient(135deg,#022c22,#064e3b);
@@ -570,14 +558,14 @@ async function sendAdminBookingNotification(booking) {
     .alert-ttl{font-size:17px;font-weight:800;color:#34d399;margin-bottom:3px}
     .alert-sub{font-size:12.5px;color:rgba(255,255,255,.6);line-height:1.4}
     .quick-action{background:#f0fdf4;border-radius:14px;padding:16px 18px;
-                  border:1px solid #a7f3d0;margin-top:20px}
+                   border:1px solid #a7f3d0;margin-top:20px}
     .qa-ttl{font-size:10px;font-weight:800;color:#065f46;
-            text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+             text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
   `;
 
   const html = shell({
     title:     `🔔 New Verified Booking: ${booking_number}`,
-    preheader: `Email verified! New booking from ${full_name} for ${trip}. Action required.`,
+    preheader: `Email verified! New booking from ${full_name} for ${dest}. Action required.`,
     extraCss,
     body: `
       <!-- Alert banner -->
@@ -586,7 +574,7 @@ async function sendAdminBookingNotification(booking) {
         <div class="alert-content">
           <div class="alert-ttl">New Verified Booking</div>
           <div class="alert-sub">
-            Customer email verified · Awaiting your review &amp; approval
+            Customer email verified · Awaiting your review & approval
           </div>
         </div>
       </div>
@@ -692,7 +680,7 @@ async function sendAdminBookingNotification(booking) {
       <div class="quick-action">
         <div class="qa-ttl">⚡ Quick Actions</div>
         <div class="btn-row" style="margin:0">
-          <a href="${CFG.appUrl}/admin/bookings" class="btn btn-g">Open Admin Panel →</a>
+          <a href="${cfg.frontendUrl}/admin/bookings" class="btn btn-g">Open Admin Panel →</a>
           <a href="mailto:${esc(email)}?subject=Re: Your Booking ${esc(String(booking_number))}" class="btn btn-o">✉️ Reply to Customer</a>
           ${wa ? `<a href="https://wa.me/${wa}" class="btn btn-o" style="background:#f0fff4;border-color:#86efac;color:#166534!important">💬 WhatsApp</a>` : ""}
         </div>
@@ -702,14 +690,14 @@ async function sendAdminBookingNotification(booking) {
   return sendEmail({
     to:      adminEmail,
     replyTo: email,
-    subject: `🔔 New Verified Booking #${booking_number} — ${full_name} → ${trip}`,
+    subject: `🔔 New Verified Booking #${booking_number} — ${full_name} → ${dest}`,
     html,
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   3.  sendBookingConfirmation  — Full confetti celebration card
-══════════════════════════════════════════════════════════════════════════════ */
+/* ════════════════════════════════════════════════════════════════════════════════
+    3.  sendBookingConfirmation  — Full confetti celebration card
+════════════════════════════════════════════════════════════════════════════════ */
 async function sendBookingConfirmation(booking) {
   const {
     email,
@@ -738,7 +726,7 @@ async function sendBookingConfirmation(booking) {
 
   const extraCss = `
     /* ── confetti keyframes ─────────────────────────────────────────────── */
-    @keyframes fall1{0%{transform:translateY(-20px) rotate(0deg);opacity:1}
+    @keyfalls fall1{0%{transform:translateY(-20px) rotate(0deg);opacity:1}
                      100%{transform:translateY(520px) rotate(720deg);opacity:0}}
     @keyframes fall2{0%{transform:translateY(-20px) rotate(0deg);opacity:1}
                      100%{transform:translateY(520px) rotate(-540deg);opacity:0}}
@@ -748,21 +736,21 @@ async function sendBookingConfirmation(booking) {
 
     .confetti-wrap{position:relative;overflow:hidden;height:0}
     .confetti-piece{position:absolute;top:0;width:10px;height:10px;
-                    border-radius:2px;opacity:0;animation-fill-mode:both}
+                     border-radius:2px;opacity:0;animation-fill-mode:both}
 
     /* hero */
     .hero-img-wrap{position:relative;border-radius:16px;overflow:hidden;margin:0 0 24px;height:220px}
     .hero-img{width:100%;height:220px;object-fit:cover;display:block}
     .hero-overlay{position:absolute;inset:0;
-                  background:linear-gradient(to bottom,rgba(2,44,34,.1) 0%,rgba(2,44,34,.72) 100%);
-                  display:flex;flex-direction:column;align-items:center;
-                  justify-content:flex-end;padding:22px;text-align:center}
+                   background:linear-gradient(to bottom,rgba(2,44,34,.1) 0%,rgba(2,44,34,.72) 100%);
+                   display:flex;flex-direction:column;align-items:center;
+                   justify-content:flex-end;padding:22px;text-align:center}
     .hero-badge{display:inline-flex;align-items:center;gap:6px;
-                background:rgba(52,211,153,.2);border:1px solid rgba(52,211,153,.5);
-                border-radius:999px;padding:5px 14px;font-size:11px;
-                color:#6ee7b7;font-weight:700;letter-spacing:.06em;margin-bottom:10px}
+                 background:rgba(52,211,153,.2);border:1px solid rgba(52,211,153,.5);
+                 border-radius:999px;padding:5px 14px;font-size:11px;
+                 color:#6ee7b7;font-weight:700;letter-spacing:.06em;margin-bottom:10px}
     .hero-title{font-size:22px;font-weight:900;color:#fff;
-                text-shadow:0 2px 8px rgba(0,0,0,.4);line-height:1.2;margin-bottom:4px}
+                 text-shadow:0 2px 8px rgba(0,0,0,.4);line-height:1.2;margin-bottom:4px}
     .hero-sub{font-size:13px;color:rgba(255,255,255,.75)}
 
     /* celebration strip */
@@ -770,38 +758,38 @@ async function sendBookingConfirmation(booking) {
                  border-radius:18px;padding:28px 22px;margin:0 0 24px;
                  text-align:center;position:relative;overflow:hidden}
     .cel-glow{position:absolute;top:50%;left:50%;
-              transform:translate(-50%,-50%);width:280px;height:280px;
-              border-radius:50%;
-              background:radial-gradient(circle,rgba(52,211,153,.2) 0%,transparent 70%)}
+               transform:translate(-50%,-50%);width:280px;height:280px;
+               border-radius:50%;
+               background:radial-gradient(circle,rgba(52,211,153,.2) 0%,transparent 70%)}
     .cel-emoji{font-size:52px;margin-bottom:12px;position:relative;
-               animation:bounce 1s ease infinite alternate}
+                animation:bounce 1s ease infinite alternate}
     @keyframes bounce{from{transform:translateY(0)}to{transform:translateY(-8px)}}
     .cel-h{font-size:22px;font-weight:900;color:#fff;margin-bottom:6px;
-           position:relative;letter-spacing:-.01em}
+            position:relative;letter-spacing:-.01em}
     .cel-h em{color:#34d399;font-style:normal}
     .cel-p{font-size:13.5px;color:rgba(255,255,255,.7);line-height:1.6;
-           position:relative;max-width:360px;margin:0 auto}
+            position:relative;max-width:360px;margin:0 auto}
     .cel-ref{display:inline-block;margin-top:16px;padding:10px 20px;
-             background:rgba(255,255,255,.1);border-radius:12px;
-             border:1px solid rgba(52,211,153,.35);position:relative}
+              background:rgba(255,255,255,.1);border-radius:12px;
+              border:1px solid rgba(52,211,153,.35);position:relative}
     .cel-ref-lbl{font-size:10px;color:rgba(255,255,255,.5);
-                 text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
+                  text-transform:uppercase;letter-spacing:.1em;margin-bottom:4px}
     .cel-ref-val{font-family:'Courier New',monospace;font-size:18px;
-                 font-weight:900;color:#34d399;letter-spacing:.12em}
+                  font-weight:900;color:#34d399;letter-spacing:.12em}
 
     /* next steps */
     .next-steps{background:linear-gradient(135deg,#ecfdf5,#d1fae5);
-                border-radius:14px;padding:20px 22px;border:1px solid #6ee7b7;margin:20px 0}
+                 border-radius:14px;padding:20px 22px;border:1px solid #6ee7b7;margin:20px 0}
     .ns-ttl{font-size:11px;font-weight:800;color:#065f46;
-            text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px}
+             text-transform:uppercase;letter-spacing:.1em;margin-bottom:14px}
     .ns-item{display:flex;align-items:flex-start;gap:12px;
-             padding:9px 0;border-bottom:1px dashed rgba(167,243,208,.5);
-             font-size:13px;color:#065f46;line-height:1.5}
+              padding:9px 0;border-bottom:1px dashed rgba(167,243,208,.5);
+              font-size:13px;color:#065f46;line-height:1.5}
     .ns-item:last-child{border:none;padding-bottom:0}
     .ns-n{width:26px;height:26px;border-radius:50%;
-          background:linear-gradient(135deg,#10b981,#059669);
-          color:#fff;font-size:11px;font-weight:800;
-          display:flex;align-items:center;justify-content:center;flex-shrink:0}
+           background:linear-gradient(135deg,#10b981,#059669);
+           color:#fff;font-size:11px;font-weight:800;
+           display:flex;align-items:center;justify-content:center;flex-shrink:0}
   `;
 
   /* ── Build confetti pieces (inline — email-safe via absolute positioning) ── */
@@ -929,11 +917,11 @@ async function sendBookingConfirmation(booking) {
 
       <!-- ░░ CTA BUTTONS ░░ -->
       <div class="btn-row">
-        <a href="${CFG.appUrl}/my-bookings" class="btn btn-g" style="font-size:14px;padding:15px 32px">
+        <a href="${cfg.frontendUrl}/my-bookings" class="btn btn-g" style="font-size:14px;padding:15px 32px">
           🌿 View My Booking
         </a>
-        <a href="${CFG.appUrl}/destinations" class="btn btn-o">Explore More</a>
-        <a href="mailto:${CFG.supportEmail}" class="btn btn-o">Contact Us</a>
+        <a href="${cfg.frontendUrl}/destinations" class="btn btn-o">Explore More</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">Contact Us</a>
       </div>
 
       <div class="div"></div>
@@ -959,34 +947,21 @@ async function sendBookingConfirmation(booking) {
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   4.  sendBookingStatusUpdate
-══════════════════════════════════════════════════════════════════════════════ */
-async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
-  const {
-    email,
-    full_name      = "Valued Guest",
-    booking_number = booking.id || "N/A",
-    destination_name = booking.service_name || booking.package_name || "Your Trip",
-    travel_date,
-  } = booking;
-
-  if (!email) return { success: false, reason: "no_email" };
-
-  const labels = {
-    pending:   "⏳ Pending",
-    confirmed: "✅ Confirmed",
-    "on-hold": "⏸ On Hold",
-    completed: "🏁 Completed",
-    cancelled: "❌ Cancelled",
-    refunded:  "💳 Refunded",
-  };
+/* ═════════════════════════════════════════════════════════════════════════════════
+    4.  sendBookingStatusUpdate
+═════════════════════════════════════════════════════════════════════════════════ */
+async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason = "") {
+  if (!booking?.email) return { success: false, reason: "no_email" };
+  const dest = tripName(booking);
+  const st = STATUS[toStatus] || STATUS.pending;
+  const fromLabel = STATUS[fromStatus]?.label || safe(fromStatus);
 
   const messages = {
-    pending:   "Your booking is back under review. Our team will be in touch shortly with next steps.",
-    confirmed: "Wonderful news! Your booking has been confirmed. Africa is waiting for you — start packing! 🦁",
+    pending:   "Your booking is being reviewed. We'll be in touch shortly with next steps.",
+    confirmed: "Wonderful news! Your booking has been confirmed. Get ready for an incredible adventure!",
     "on-hold": "Your booking has been placed on hold. Our team will contact you within 24 hours with details.",
-    completed: "Your safari is complete! We hope every moment was magical. We'd love to see you again. 🌟",
+    completed: "Your safari is complete. We hope every moment was magical. We'd love to see you again. 🌟",
+    cancelled: "Your booking has been cancelled. We're sorry to see you go, but Africa will be here when you're ready.",
     refunded:  "Your refund has been processed. Please allow 5–10 business days to appear in your account.",
   };
 
@@ -997,11 +972,12 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
 
   const extraCss = `
     .status-hero{border-radius:16px;padding:26px 22px;text-align:center;
-                 margin:0 0 22px;border:1px solid #e2e8f0}
+                  margin:0 0 22px;border:1px solid #e2e8f0}
     .status-arrow{display:flex;align-items:center;justify-content:center;
-                  gap:12px;flex-wrap:wrap;margin:12px 0}
+                  gap:12px;flex-wrap:wrap;margin:12}
+    .s-chip{display:inline-flex;align-items 0}
     .s-chip{display:inline-flex;align-items:center;gap:5px;padding:6px 14px;
-            border-radius:999px;font-size:12.5px;font-weight:700;border:1px solid}
+             border-radius:999px;font-size:12.5px;font-weight:700;border:1px solid}
     .arrow-icon{font-size:20px;color:#94a3b8}
   `;
 
@@ -1012,10 +988,10 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
     body: `
       <div class="status-hero"
            style="background:${newStatus === "confirmed" ? "linear-gradient(135deg,#ecfdf5,#d1fae5)" :
-                               newStatus === "on-hold"   ? "linear-gradient(135deg,#fdf4ff,#fce7f3)" :
-                               newStatus === "completed" ? "linear-gradient(135deg,#eff6ff,#dbeafe)" :
-                               "linear-gradient(135deg,#f8fafc,#f1f5f9)"};
-                border-color:${newStatus === "confirmed" ? "#6ee7b7" : newStatus === "on-hold" ? "#f9a8d4" : "#e2e8f0"}">
+                           newStatus === "on-hold"   ? "linear-gradient(135deg,#fdf4ff,#fce7f3)" :
+                           newStatus === "completed" ? "linear-gradient(135deg,#eff6ff,#dbeafe)" :
+                           "linear-gradient(135deg,#f8fafc,#f1f5f9)"};
+                 border-color:${newStatus === "confirmed" ? "#6ee7b7" : newStatus === "on-hold" ? "#f9a8d4" : "#e2e8f0"}">
         <div style="font-size:44px;margin-bottom:10px">${icons[newStatus] || "🔄"}</div>
         <h2 style="font-size:20px;font-weight:800;color:#022c22;margin-bottom:6px">
           Booking Status Updated
@@ -1061,41 +1037,35 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason) {
       </div>` : ""}
 
       <div class="btn-row">
-        <a href="${CFG.appUrl}/my-bookings" class="btn btn-g">View My Booking</a>
-        <a href="mailto:${CFG.supportEmail}" class="btn btn-o">Get Help</a>
+        <a href="${cfg.frontendUrl}/my-bookings" class="btn btn-g">View My Booking</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">Get Help</a>
         <a href="https://wa.me/250785751391" class="btn btn-o">💬 WhatsApp</a>
       </div>`,
   });
 
   return sendEmail({
-    to:      email,
+    to:      booking.email,
     subject: `🔄 Booking Update: ${booking_number} is now "${newStatus}" | Altuvera Travel`,
     html,
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   5.  sendBookingCancellation
-══════════════════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════════
+    5.  sendBookingCancellation
+═════════════════════════════════════════════════════════════════════════════════ */
 async function sendBookingCancellation(booking, reason) {
-  const {
-    email,
-    full_name      = "Valued Guest",
-    booking_number = booking.id || "N/A",
-    destination_name = booking.service_name || booking.package_name || "Your Trip",
-    country_name,
-    travel_date,
-  } = booking;
-
-  if (!email) return { success: false, reason: "no_email" };
+  if (!booking?.email) return { success: false, reason: "no_email" };
+  const dest = tripName(booking);
+  const country_name = safe(booking.country_name);
+  const travel_date = safe(booking.travel_date);
 
   const extraCss = `
     .cancel-hero{background:linear-gradient(135deg,#fff1f2,#fee2e2);
                  border-radius:16px;padding:26px 22px;text-align:center;
                  border:1px solid #fca5a5;margin:0 0 22px}
     .rebooking{background:linear-gradient(135deg,#ecfdf5,#d1fae5);
-               border-radius:14px;padding:18px 20px;border:1px solid #6ee7b7;
-               text-align:center;margin:20px 0}
+                border-radius:14px;padding:18px 20px;border:1px solid #6ee7b7;
+                text-align:center;margin:20px 0}
     .rb-ttl{font-size:14px;font-weight:700;color:#065f46;margin-bottom:6px}
     .rb-sub{font-size:13px;color:#047857;margin-bottom:14px;line-height:1.5}
   `;
@@ -1124,299 +1094,399 @@ async function sendBookingCancellation(booking, reason) {
         </div>
         <div class="row">
           <span class="lbl">Status</span>
-          <span class="val"><span class="bd b-cancelled">✗ Cancelled</span></span>
+          <span class="val"><span class="bd b-cancelled">❌ Cancelled</span></span>
         </div>
         <div class="row">
           <span class="lbl">Destination</span>
-          <span class="val">${esc(destination_name)}${country_name ? `, ${esc(country_name)}` : ""}</span>
+          <span class="val">🌍 ${esc(destination_name)}${country_name ? `, ${esc(country_name)}` : ""}</span>
         </div>
-        ${travel_date ? `<div class="row"><span class="lbl">Was Planned For</span><span class="val">📅 ${fmtDate(travel_date)}</span></div>` : ""}
-        ${reason ? `<div class="row"><span class="lbl">Reason</span><span class="val">${esc(reason)}</span></div>` : ""}
+        ${travel_date ? `<div class="row"><span class="lbl">Travel Date</span><span class="val">📅 ${fmtDate(travel_date)}</span></div>` : ""}
       </div>
 
-      <div class="info-box">
-        <p>
-          💳 <strong>Refund Policy:</strong> If a payment was made,
-          your refund will be processed within <strong>5–10 business days</strong>.
-          Contact us if you have any questions.
-        </p>
-      </div>
+      ${reason ? `
+      <div class="warn">
+        <p>📝 <strong>Cancellation Reason:</strong><br/>${esc(reason)}</p>
+      </div>` : ""}
 
-      <div class="div"></div>
-
-      <!-- Encourage rebooking -->
       <div class="rebooking">
-        <div class="rb-ttl">🌍 Africa Will Always Be Here For You</div>
-        <div class="rb-sub">
-          Whenever you're ready, we'd love to plan your next unforgettable adventure.
-          Browse our destinations and find your perfect safari.
-        </div>
-        <a href="${CFG.appUrl}/destinations" class="btn btn-g">Browse Destinations</a>
+        <div class="rb-ttl">Ready to Rebook?</div>
+        <p class="rb-sub">
+          Africa is waiting for you. When you're ready to plan your next adventure,
+          we're here to help make it unforgettable.
+        </p>
+        <a href="${cfg.frontendUrl}/destinations" class="btn btn-g">Explore Destinations</a>
       </div>
 
-      <div class="btn-row" style="margin-top:16px">
-        <a href="mailto:${CFG.supportEmail}" class="btn btn-o">✉️ Contact Us</a>
+      <div class="btn-row">
+        <a href="${cfg.frontendUrl}/my-bookings" class="btn btn-g">View My Booking</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">Get Help</a>
         <a href="https://wa.me/250785751391" class="btn btn-o">💬 WhatsApp</a>
       </div>`,
   });
 
   return sendEmail({
-    to:      email,
-    subject: `❌ Booking Cancelled: ${booking_number} | Altuvera Travel`,
+    to:      booking.email,
+    subject: `Cancelled — ${esc(String(booking_number))} | Altuvera Travel`,
     html,
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   6.  sendTripCountdownEmail
-══════════════════════════════════════════════════════════════════════════════ */
+/* ═════════════════════════════════════════════════════════════════════════════════
+    6.  sendTripCountdownEmail
+═════════════════════════════════════════════════════════════════════════════════ */
 async function sendTripCountdownEmail(booking) {
-  const {
-    email,
-    full_name           = "Explorer",
-    booking_number      = booking.id || "N/A",
-    destination_name,
-    service_name,
-    package_name,
-    country_name,
-    travel_date,
-    number_of_travelers = 1,
-  } = booking;
+  if (!booking?.email || !booking?.travel_date) return { success: false, reason: "no_email_or_travel_date" };
+  const days = daysUntil(booking.travel_date);
+  if (days === null || days < 0) return { success: false, reason: "past_date" };
 
-  if (!email || !travel_date) return { success: false, reason: "no_email_or_date" };
+  const MILESTONES = [60, 30, 14, 7, 3, 1, 0];
+  if (!MILESTONES.includes(days)) return { success: false, reason: "not_a_milestone" };
 
-  const trip     = destination_name || service_name || package_name || "Your Trip";
-  const tDate    = new Date(travel_date);
-  const now      = new Date();
-  now.setHours(0, 0, 0, 0);
-  tDate.setHours(0, 0, 0, 0);
-  const diffDays = Math.round((tDate - now) / (1000 * 60 * 60 * 24));
+  const dest = tripName(booking);
 
-  if (diffDays < 0) return { success: false, reason: "trip_in_past" };
+  const CONTENT = {
+    0: {
+      urgency: "Today is the day!",
+      title: "Your adventure starts today",
+      sub: "This is it — safe travels and enjoy every magical moment.",
+      tips: [
+        "Double-check passport, tickets, and travel documents",
+        "Pack your bags — don't forget chargers, adapters, and essential meds",
+        "Confirm pickup time and location with your coordinator",
+        "Get a good night's rest — tomorrow begins your journey",
+      ],
+    },
+    1: {
+      urgency: "Tomorrow is the day!",
+      title: "Your adventure starts tomorrow",
+      sub: "Almost time to go! Final preparations underway.",
+      tips: [
+        "Confirm pickup time and location with your coordinator",
+        "Pack your bags — don't forget chargers, adapters, and essential meds",
+        "Leave important documents and valuables in a safe place",
+        "Get an early night — big day tomorrow!",
+      ],
+    },
+    2: {
+      urgency: "In 2 days",
+      title: "Getting ready for your adventure",
+      sub: "Final countdown — time to double-check everything.",
+      tips: [
+        "Reconfirm flight details and airport transfers",
+        "Pack toiletries and medications in your carry-on",
+        "Check weather forecast and pack accordingly",
+        "Stay hydrated and get plenty of rest",
+      ],
+    },
+    3: {
+      urgency: "In 3 days",
+      title: "Almost time to go!",
+      sub: "Final preparations — your adventure awaits!",
+      tips: [
+        "Double-check your itinerary and activity schedule",
+        "Ensure you have all necessary visas and entry documents",
+        "Notify your bank of international travel plans",
+        "Do a final pack — lay everything out and check it twice",
+      ],
+    },
+    7: {
+      urgency: "One week to go!",
+      title: "One week until your adventure",
+      sub: "Time to finalize packing and confirm details.",
+      tips: [
+        "Confirm travel insurance details and emergency contacts",
+        "Review your itinerary and make any last-minute changes",
+        "Start thinking about what you want to see and do each day",
+        "Begin light packing — lay out items you know you'll need",
+      ],
+    },
+    14: {
+      urgency: "Two weeks to go!",
+      title: "Two weeks until your adventure",
+      sub: "Planning phase — time to get organized and excited!",
+      tips: [
+        "Book any additional activities or experiences you want",
+        "Check passport expiration (must be valid for 6+ months after return)",
+        "Research local customs and basic phrases in the local language",
+        "Start a packing list and gather items you'll need",
+      ],
+    },
+    30: {
+      urgency: "One month to go!",
+      title: "One month until your adventure",
+      sub: "Exciting times — your journey is coming together!",
+      tips: [
+        "Schedule any required medical check-ups or vaccinations",
+        "Confirm flight details and make note of baggage allowances",
+        "Look into local transportation options at your destination",
+        "Begin researching what to pack based on climate and activities",
+      ],
+    },
+    60: {
+      urgency: "Two months to go!",
+      title: "Two months until your adventure",
+      sub: "Planning has begun — your African adventure awaits!",
+      tips: [
+        "Research visa requirements and start application process if needed",
+        "Look into travel insurance options and purchase coverage",
+        "Begin thinking about your ideal itinerary and must-see sights",
+        "Set up a dedicated savings account for your trip expenses",
+      ],
+    },
+  };
 
-  const countdown = humanCountdown(tDate);
-
-  let headline, emoji, subline, tips = [], urgency = "low";
-
-  if (diffDays === 0) {
-    headline = "Today Is The Day!";
-    emoji    = "🎉";
-    urgency  = "critical";
-    subline  = "Your African adventure begins TODAY. Safe travels and enjoy every magical moment!";
-    tips = [
-      "Double-check passport, visa, and all travel documents",
-      "Arrive at the airport at least 3 hours early for international flights",
-      "Charge all devices — you'll want to capture every moment",
-      "Download offline maps and translation apps",
-      "Most importantly: savour every single second. Africa will take your breath away 🦁",
-    ];
-  } else if (diffDays === 1) {
-    headline = "Tomorrow Is The Big Day!";
-    emoji    = "✈️";
-    urgency  = "high";
-    subline  = "You leave tomorrow! Time for your final checks and to let the excitement take over.";
-    tips = [
-      "Lay out everything you need tonight — don't leave packing to the morning",
-      "Confirm your airport transfer and accommodation check-in time",
-      "Share your full itinerary with family or emergency contact",
-      "Get a good night's sleep — the adventure of a lifetime awaits!",
-    ];
-  } else if (diffDays <= 7) {
-    headline = `Only ${diffDays} Days To Go!`;
-    emoji    = "🌟";
-    urgency  = "high";
-    subline  = `Your ${trip} adventure is almost here. This is the week to finalize everything!`;
-    tips = [
-      "Complete your packing — check your list twice",
-      "Verify all visa and vaccination documentation is ready",
-      "Download offline maps for your destination",
-      "Notify your bank and phone provider of international travel",
-      "Read up on local customs, wildlife, and what to expect",
-    ];
-  } else if (diffDays <= 30) {
-    headline = `Your Safari Is ${countdown}`;
-    emoji    = "🦁";
-    urgency  = "medium";
-    subline  = `Less than a month away! Here's how to make the most of your final preparations.`;
-    tips = [
-      "Book any remaining internal transfers or domestic flights",
-      "Purchase any gear you still need — binoculars, layers, sun protection",
-      "Research the wildlife and ecosystems you'll be experiencing",
-      "Arrange foreign currency or confirm your card works abroad",
-    ];
-  } else if (diffDays <= 90) {
-    headline = `Your Adventure Awaits — ${countdown}`;
-    emoji    = "🌍";
-    urgency  = "low";
-    subline  = `You're getting closer every day! Here are things to take care of in the coming weeks.`;
-    tips = [
-      "Confirm all accommodation and activity bookings are secured",
-      "Arrange comprehensive travel insurance if not already done",
-      "Apply for any required visas — allow plenty of processing time",
-      "Start researching local customs, language basics, and tipping etiquette",
-    ];
-  } else {
-    headline = `The Countdown Has Begun — ${countdown}`;
-    emoji    = "🗺️";
-    urgency  = "low";
-    subline  = `Your ${trip} adventure is on the horizon. Here's how to plan ahead for an unforgettable experience.`;
-    tips = [
-      "Mark your travel dates prominently in your calendar",
-      "Set a savings goal for personal expenses, tips, and souvenirs",
-      "Start a packing list — it's never too early",
-      "Follow Altuvera Travel for destination inspiration and travel tips",
-    ];
-  }
-
-  const urgencyBg = {
-    critical: "linear-gradient(140deg,#064e3b,#065f46,#059669)",
-    high:     "linear-gradient(140deg,#022c22,#064e3b,#047857)",
-    medium:   "linear-gradient(140deg,#022c22,#064e3b,#065f46)",
-    low:      "linear-gradient(140deg,#0f172a,#022c22,#064e3b)",
-  }[urgency];
+  const content = CONTENT[days];
 
   const extraCss = `
-    .cd-card{border-radius:20px;padding:32px 24px;text-align:center;
-             margin:0 0 24px;position:relative;overflow:hidden;
-             background:${urgencyBg}}
-    .cd-card-glow{position:absolute;top:50%;left:50%;
-                  transform:translate(-50%,-50%);width:320px;height:320px;
-                  border-radius:50%;
-                  background:radial-gradient(circle,rgba(52,211,153,.2) 0%,transparent 70%)}
-    .cd-emoji{font-size:46px;margin-bottom:12px;position:relative;
-              display:inline-block;animation:wobble 2s ease-in-out infinite}
-    @keyframes wobble{0%,100%{transform:rotate(-3deg)}50%{transform:rotate(3deg)}}
-    .cd-headline{font-size:22px;font-weight:900;color:#fff;margin-bottom:8px;
-                 position:relative;letter-spacing:-.015em}
-    .cd-sub{font-size:13px;color:rgba(255,255,255,.65);margin-bottom:20px;
-            position:relative;line-height:1.6;max-width:380px;margin-left:auto;margin-right:auto}
-    .cd-counter{background:rgba(255,255,255,.08);border:1px solid rgba(52,211,153,.3);
-                border-radius:16px;padding:16px 22px;display:inline-block;
-                position:relative;margin-bottom:16px}
-    .cd-num{font-size:54px;font-weight:900;color:#34d399;
-            font-family:'Courier New',Courier,monospace;line-height:1}
-    .cd-lbl{font-size:10px;color:rgba(255,255,255,.45);text-transform:uppercase;
-            letter-spacing:.15em;margin-top:4px}
-    .cd-meta{font-size:13px;color:rgba(255,255,255,.6);position:relative}
-    .cd-meta strong{color:rgba(255,255,255,.9)}
+    .countdown{background:linear-gradient(135deg,#022c22,#047857);
+               border-radius:18px;padding:30px 20px;text-align:center;
+               position:relative;overflow:hidden;margin:24px 0}
+    .countdown-glow{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+                    width:280px;height:280px;border-radius:50%;
+                    background:radial-gradient(circle,rgba(52,211,153,.15) 0%,transparent 70%)}
+    .countdown-value{font-size:48px;font-weight:900;color:#34d399;
+                     font-family:'Courier New',Courier,monospace;letter-spacing:.02em;
+                     line-height:1;position:relative}
+    .countdown-unit{font-size:12px;color:rgba(255,255,255,.45);text-transform:uppercase;
+                     letter-spacing:.15em;margin-top:5px;position:relative}
+    .countdown-dest{font-size:16px;color:#fff;margin-top:14px;font-weight:700;
+                     position:relative;line-height:1.4}
+    .countdown-date{font-size:12px;color:rgba(255,255,255,.5);margin-top:5px;position:relative}
+    .destination-image{width:100%;height:200px;object-fit:cover;border-radius:12px;
+                       margin:0 0 16px;}
+    .info-box{background:#ecfdf5;border-radius:12px;padding:16px 20px;
+               border:1px solid #6ee7b7;margin:16px 0}
+    .info-box-title{font-size:11px;font-weight:800;color:#065f46;
+                     text-transform:uppercase;letter-spacing:.1em;margin-bottom:10px}
+    .info-box-list{font-size:13px;color:#065f46;line-height:1.6;margin:0}
+    .info-box-item{display:flex;align-items:flex-start;gap:8px;padding:6px 0;
+                    border-bottom:1px dashed rgba(167,243,208,.5);}
+    .info-box-item:last-child{border:none;padding-bottom:0}
+    .bullet{width:6px;height:6px;border-radius:50%;background:#10b981;
+             flex-shrink:0;margin-top:8px}
+    .cta-row{text-align:center;margin:24px 0}
   `;
 
   const html = shell({
-    title:     `${emoji} ${headline} — ${trip} | Altuvera Travel`,
-    preheader: `${countdown} until your ${trip} adventure! ${subline}`,
+    title:     `⏳ ${content.title} — ${dest} | Altuvera Travel`,
+    preheader: `${content.urgency} Your ${dest} adventure is ${days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`}.`,
     extraCss,
     body: `
-      <!-- Countdown card -->
-      <div class="cd-card">
-        <div class="cd-card-glow"></div>
-        <div class="cd-emoji">${emoji}</div>
-        <div class="cd-headline">${esc(headline)}</div>
-        <p class="cd-sub">${esc(subline)}</p>
-        <div class="cd-counter">
-          <div class="cd-num">${esc(countdown)}</div>
-          <div class="cd-lbl">Until departure</div>
+      <!-- Header -->
+      <div style="text-align:center;margin:0 0 24px;">
+        <h1 style="font-size:24px;font-weight:800;color:#022c22;margin-bottom:8px">
+          ${content.title}
+        </h1>
+        <p style="font-size:14px;color:#047857;line-height:1.5;margin-bottom:16px">
+          ${content.sub}
+        </p>
+      </div>
+
+      <!-- Countdown -->
+      <div class="countdown">
+        <div class="countdown-glow"></div>
+        <div class="countdown-value">${esc(days)}</div>
+        <div class="countdown-unit">day${days !== 1 ? "s" : ""} to go</div>
+        <div class="countdown-dest">✈️ ${esc(dest)}</div>
+        <div class="countdown-date">
+          Departing ${fmtDate(travel_date)}
         </div>
-        <br/>
-        <div class="cd-meta">
-          ✈️ <strong>${esc(trip)}${country_name ? ` · ${esc(country_name)}` : ""}</strong><br/>
-          <span style="font-size:12px;margin-top:4px;display:inline-block">${fmtDate(travel_date)}</span>
+      </div>
+
+      <!-- Destination image -->
+      ${destination_image ? `
+      <img src="${destination_image}" alt="${esc(dest)}" class="destination-image"/>` : ""}
+
+      <!-- Info box -->
+      <div class="info-box">
+        <div class="info-box-title">🧳 Packing Tips & Reminders</div>
+        <div class="info-box-list">
+          ${content.tips.map(tip => `
+          <div class="info-box-item">
+            <div class="bullet"></div>
+            <span>${esc(tip)}</span>
+          </div>`).join("")}
         </div>
+      </div>
+
+      <!-- CTA -->
+      <div class="cta-row">
+        <a href="${cfg.frontendUrl}/my-bookings" class="btn btn-g">View My Booking</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">Get Help</a>
+        <a href="https://wa.me/250785751391" class="btn btn-o">💬 WhatsApp</a>
+      </div>
+
+      <div class="div"></div>
+
+      <!-- Footer -->
+      <p style="font-size:12px;color:#64748b;text-align:center">
+        Keep an eye on your inbox — we'll send updates as your adventure approaches!
+      </p>`,
+  });
+
+  return sendEmail({
+    to:      booking.email,
+    subject: `⏳ ${content.title} — ${dest} | Altuvera Travel`,
+    html,
+  });
+}
+
+/* ═════════════════════════════════════════════════════════════════════════════════
+    7.  sendBookingReceivedEmail — Sent after email verification
+════════════════════════════════════════════════════════════════════════════════ */
+async function sendBookingReceivedEmail(booking) {
+  if (!booking?.email) return { success: false, reason: "no_email" };
+  const dest = tripName(booking);
+
+  const extraCss = `
+    .received-hero{background:linear-gradient(135deg,#ecfdf5,#d1fae5);
+                   border-radius:16px;padding:26px 22px;text-align:center;
+                   border:1px solid #6ee7b7;margin:0 0 22px}
+    .received-icon{font-size:52px;margin-bottom:10px}
+    .received-ttl{font-size:20px;font-weight:800;color:#022c22;margin-bottom:4px}
+    .received-sub{font-size:13px;color:#047857;line-height:1.5}
+    .info-tbl{width:100%;border-collapse:separate;border-spacing:0;
+               background:#f8fafc;border-radius:14px;overflow:hidden;}
+    .info-tbl td{padding:11px 18px;font-family:'Inter',sans-serif;font-size:13.5px;
+                 border-bottom:1px solid #e2e8f0;vertical-align:top;}
+    .info-tbl tr:last-child td{border-bottom:none;}
+    .info-tbl .lbl{font-size:10.5px;font-weight:700;color:#64748b;
+                     text-transform:uppercase;letter-spacing:.08em;white-space:nowrap;width:130px;}
+    .info-tbl .val{font-weight:600;color:#0f172a;}
+    .info-tbl .highlight{color:#047857;font-weight:800;font-family:'Inter',sans-serif;}
+    .step{display:flex;align-items:flex-start;gap:12px;padding:9px 0;
+          border-bottom:1px dashed rgba(167,243,208,.5);
+          font-size:13px;color:#065f46;line-height:1.5}
+    .step:last-child{border:none;padding-bottom:0}
+    .step-n{width:26px;height:26px;border-radius:50%;
+             background:linear-gradient(135deg,#10b981,#059669);
+             color:#fff;font-size:11px;font-weight:800;
+             display:flex;align-items:center;justify-content:center;flex-shrink:0}
+    .notice{background:#fffbeb;border-radius:12px;padding:14px 18px;
+             border:1px solid #fde68a;margin:14px 0}
+    .notice p{font-size:13px;color:#92400e;margin:0;line-height:1.6}
+    .cta-row{text-align:center;margin:24px 0}
+  `;
+
+  const html = shell({
+    title:     `📬 Booking Received — ${booking_number} | Altuvera Travel`,
+    preheader: `Booking received for ${dest} — we'll contact you within 24 hours.`,
+    extraCss,
+    body: `
+      <!-- Header -->
+      <div style="text-align:center;margin:0 0 24px;">
+        <h1 style="font-size:24px;font-weight:800;color:#022c22;margin-bottom:8px">
+          Booking Received
+        </h1>
+        <p style="font-size:14px;color:#047857;line-height:1.5;margin-bottom:16px">
+          We've received your booking request for ${dest} and are reviewing it.
+          Our team will contact you within 24 hours to discuss details and next steps.
+        </p>
       </div>
 
       <!-- Booking snapshot -->
       <div class="box">
-        <div class="box-title">📋 Your Trip Details</div>
+        <div class="box-title">📋 Your Booking Request</div>
         <div class="row">
           <span class="lbl">Booking Ref</span>
-          <span class="val" style="font-family:'Courier New',monospace;color:#059669">${esc(String(booking_number))}</span>
+          <span class="val" style="font-family:'Courier New',monospace;color:#059669;font-size:14px">
+            ${esc(String(booking_number))}
+          </span>
         </div>
         <div class="row">
           <span class="lbl">Destination</span>
-          <span class="val">🌍 ${esc(trip)}${country_name ? `, ${esc(country_name)}` : ""}</span>
+          <span class="val">🌍 ${esc(destination_name)}${country_name ? `, ${esc(country_name)}` : ""}</span>
         </div>
+        ${travel_date ? `
         <div class="row">
-          <span class="lbl">Departure</span>
+          <span class="lbl">Travel Date</span>
           <span class="val">📅 ${fmtDate(travel_date)}</span>
-        </div>
+        </div>` : ""}
         <div class="row">
           <span class="lbl">Travelers</span>
           <span class="val">👥 ${esc(String(number_of_travelers))} ${Number(number_of_travelers) === 1 ? "person" : "people"}</span>
         </div>
         <div class="row">
           <span class="lbl">Status</span>
-          <span class="val"><span class="bd b-confirmed">✓ Confirmed</span></span>
+          <span class="val"><span class="bd b-pending">⏳ Awaiting Review</span></span>
         </div>
       </div>
 
-      ${tips.length ? `
-      <!-- Tips -->
-      <div class="next-steps" style="background:linear-gradient(135deg,#ecfdf5,#d1fae5);border-color:#6ee7b7">
-        <div class="ns-ttl" style="color:#065f46">💡 Preparation Tips for ${esc(full_name)}</div>
-        ${tips.map((t, i) => `
-        <div class="ns-item">
-          <div class="ns-n">${i + 1}</div>
-          <div>${esc(t)}</div>
+      <!-- Next steps -->
+      <div style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
+                  font-weight:700;color:#065f46;text-transform:uppercase;letter-spacing:.12em;">
+        What Happens Next
+      </div>
+      <div class="step-list">
+        ${[
+          ["Our team reviews availability for your dates", "1"],
+          ["A dedicated coordinator contacts you within <strong>24 hours</strong>", "2"],
+          ["We design your personalised itinerary", "3"],
+          ["You receive a custom quote — <strong>no payment required yet</strong>", "4"],
+          ["Once approved, we confirm your booking", "5"],
+        ].map(([text, n]) => `
+        <div class="step">
+          <div class="step-n">${n}</div>
+          <div>${text}</div>
         </div>`).join("")}
-      </div>` : ""}
-
-      <div class="div"></div>
-
-      <div class="btn-row">
-        <a href="${CFG.appUrl}/my-bookings" class="btn btn-g">🌿 View My Booking</a>
-        <a href="mailto:${CFG.supportEmail}" class="btn btn-o">Contact My Coordinator</a>
       </div>
 
-      <p style="text-align:center;font-size:12px;color:#94a3b8;margin-top:20px;line-height:1.7">
-        You'll receive daily countdown updates leading up to your departure. 🌿<br/>
-        <a href="mailto:${CFG.supportEmail}?subject=Unsubscribe countdown ${esc(String(booking_number))}"
-           style="color:#94a3b8">Unsubscribe from countdowns</a>
-      </p>`,
+      <!-- WhatsApp support -->
+      <div class="notice">
+        <p>
+          💬 <strong>Need help now?</strong>
+          Chat with us on WhatsApp if you have any questions — our team is available 7 days a week.
+        </p>
+      </div>
 
-    footer: `To stop receiving countdown emails, reply "unsubscribe countdown" to <a href="mailto:${CFG.supportEmail}">${CFG.supportEmail}</a>.`,
+      <div class="cta-row">
+        <a href="${cfg.frontendUrl}/my-bookings" class="btn btn-g">View My Booking</a>
+        <a href="mailto:${cfg.supportEmail}" class="btn btn-o">Get Help</a>
+        <a href="https://wa.me/250785751391" class="btn btn-o">💬 WhatsApp</a>
+      </div>`,
   });
 
   return sendEmail({
-    to:      email,
-    subject: `${emoji} ${headline} — ${trip} | Altuvera Travel`,
+    to:      booking.email,
+    subject: `📬 Booking Received — ${esc(String(booking_number))} | Altuvera Travel`,
     html,
   });
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   VERIFY CONNECTION
-══════════════════════════════════════════════════════════════════════════════ */
-async function verifyConnection() {
-  if (CFG.resendApiKey) {
-    try {
-      const r = await fetch("https://api.resend.com/domains", {
-        headers: { Authorization: `Bearer ${CFG.resendApiKey}` },
-      });
-      if (r.ok) { console.log("[Email] ✅ Resend verified"); return true; }
-    } catch (e) { console.warn("[Email] Resend ping failed:", e.message); }
-  }
-  const s = getSmtp();
-  if (s) {
-    try {
-      await s.verify();
-      console.log("[Email] ✅ SMTP verified");
-      return true;
-    } catch (e) { console.warn("[Email] SMTP verify failed:", e.message); }
-  }
-  console.warn("[Email] ⚠️ No provider verified — console fallback active");
-  return false;
+/* Status mapping for emails */
+const STATUS = {
+  pending:   { label: "Pending Review",   color: "#92400e" },
+  confirmed: { label: "Confirmed",        color: "#166534" },
+  "on-hold": { label: "On Hold",          color: "#9d174d" },
+  completed: { label: "Completed",        color: "#1e40af" },
+  cancelled: { label: "Cancelled",        color: "#991b1b" },
+  refunded:  { label: "Refunded",         color: "#5b21b6" },
+};
+
+/* Trip name helper */
+function tripName(booking) {
+  return booking.destination_name ||
+         booking.service_name ||
+         booking.package_name ||
+         booking.destination ||
+         booking.service ||
+         booking.package ||
+         "Your Trip";
 }
 
-/* ══════════════════════════════════════════════════════════════════════════════
-   EXPORTS
-══════════════════════════════════════════════════════════════════════════════ */
+/* Safe helper */
+function safe(value, fallback = "—") {
+  return value == null || value === "" ? fallback : String(value);
+}
+
+/* ─── EXPORTS ──────────────────────────────────────────────────────────────── */
 module.exports = {
   sendEmail,
   sendBookingVerificationLink,
   sendAdminBookingNotification,
+  sendBookingReceivedEmail,
   sendBookingConfirmation,
   sendBookingStatusUpdate,
   sendBookingCancellation,
   sendTripCountdownEmail,
-  verifyConnection,
-  humanCountdown,
 };
