@@ -1,28 +1,28 @@
-﻿// server.js
-// ═══════════════════════════════════════════════════════════════════════════════
-// ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v7.1
+// server.js
+// -------------------------------------------------------------------------------
+// ALTUVERA TRAVEL � ENTERPRISE BACKEND SERVER v7.1
 // "True Adventures In High Places & Deep Culture"
 //
 // Changes from v7.0:
-//   ✓ CORS: altuverapanel.vercel.app explicitly allowed + OPTIONS pre-flight fix
-//   ✓ Maintenance route registered at /api/maintenance
-//   ✓ maintenanceController fully regenerated (countTable never throws)
-//   ✓ package_chat_preferences table added to ensurePackagesSchema
-//   ✓ Minor: unified logger patterns, no functional regressions
-// ═══════════════════════════════════════════════════════════════════════════════
+//   ? CORS: admin.altuverasafaris.com explicitly allowed + OPTIONS pre-flight fix
+//   ? Maintenance route registered at /api/maintenance
+//   ? maintenanceController fully regenerated (countTable never throws)
+//   ? package_chat_preferences table added to ensurePackagesSchema
+//   ? Minor: unified logger patterns, no functional regressions
+// -------------------------------------------------------------------------------
 
 'use strict'
 
-// ── IPv4 DNS preference — must be before any network calls ───────────────────
+// -- IPv4 DNS preference � must be before any network calls -------------------
 const dns = require('dns')
 dns.setDefaultResultOrder('ipv4first')
 
 try {
   const { setDefaultAutoSelectFamily } = require('net')
   setDefaultAutoSelectFamily(false)
-} catch { /* Node < 18.13 — safe to ignore */ }
+} catch { /* Node < 18.13 � safe to ignore */ }
 
-// ── Environment ───────────────────────────────────────────────────────────────
+// -- Environment ---------------------------------------------------------------
 require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') })
 
 const path        = require('path')
@@ -36,10 +36,10 @@ const jwt         = require('jsonwebtoken')
 const { v4: uuidv4 } = require('uuid')
 const { Server }  = require('socket.io')
 
-// ── Push (VAPID) ──────────────────────────────────────────────────────────────
+// -- Push (VAPID) --------------------------------------------------------------
 const pushUtility = require('./utils/push')
 
-// ── Internal DB ───────────────────────────────────────────────────────────────
+// -- Internal DB ---------------------------------------------------------------
 const {
   query,
   ensureUserSchema,
@@ -55,7 +55,7 @@ const logger    = require('./utils/logger')
 const shutdown  = require('./utils/shutdown')
 const socketBus = require('./utils/socketBus')
 
-// ── Email helpers — safe imports ──────────────────────────────────────────────
+// -- Email helpers � safe imports ----------------------------------------------
 let verifyEmailConnection = null
 let verifyAuthEmail       = null
 
@@ -67,7 +67,7 @@ try {
     typeof svc.verify                 === 'function' ? svc.verify                 :
     typeof svc.default                === 'function' ? svc.default                :
     null
-} catch { /* emailService.js not present — non-fatal */ }
+} catch { /* emailService.js not present � non-fatal */ }
 
 try {
   const eu = require('./utils/email')
@@ -77,9 +77,9 @@ try {
     typeof eu.verifyConnection      === 'function' ? eu.verifyConnection      :
     typeof eu.verify                === 'function' ? eu.verify                :
     null
-} catch { /* email.js not present — non-fatal */ }
+} catch { /* email.js not present � non-fatal */ }
 
-// ── Middleware / error handlers ───────────────────────────────────────────────
+// -- Middleware / error handlers -----------------------------------------------
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler')
 const {
   cacheMiddleware,
@@ -88,7 +88,7 @@ const {
   getCacheStats,
 } = require('./middleware/cache')
 
-// ── Route modules ─────────────────────────────────────────────────────────────
+// -- Route modules -------------------------------------------------------------
 const usersRouter               = require('./routes/users')
 const reviewsRouter             = require('./routes/reviews')
 const bookingsRouter            = require('./routes/bookings')
@@ -118,12 +118,12 @@ const destinationLikesRouter    = require('./routes/destinationLikes')
 const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
 const notificationsRouter       = require('./routes/notifications')
-const maintenanceRouter         = require('./routes/maintenance')   // ← v7.1
-const pushRouter                = require('./routes/push')            // ← push
+const maintenanceRouter         = require('./routes/maintenance')   // ? v7.1
+const pushRouter                = require('./routes/push')            // ? push
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // CONSTANTS
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const PORT     = parseInt(process.env.PORT || '3000', 10)
 const NODE_ENV = process.env.NODE_ENV || 'development'
@@ -131,9 +131,9 @@ const IS_PROD  = NODE_ENV === 'production'
 
 const connectedAdmins = new Map()
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // ALLOWED ORIGINS
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const envOrigins = (process.env.CORS_ORIGINS || '')
   .split(',').map(o => o.trim()).filter(Boolean)
@@ -143,14 +143,14 @@ const ALLOWED_ORIGINS = [
     process.env.FRONTEND_URL,
     process.env.BACKEND_URL,
     ...envOrigins,
-    // ── Admin panel ──────────────────────────────────────────────────────
-    'https://altuverapanel.vercel.app',
-    // ── Public site ──────────────────────────────────────────────────────
+     // -- Admin panel ------------------------------------------------------
+      'https://admin.altuverasafaris.com',
+    // -- Public site ------------------------------------------------------
     'https://altuverasafaris.com',
     'https://www.altuverasafaris.com',
     'https://altuvera.com',
     'https://www.altuvera.com',
-    // ── Local dev ────────────────────────────────────────────────────────
+    // -- Local dev --------------------------------------------------------
     'http://localhost:3000',
     'http://localhost:5173',
     'http://localhost:5174',
@@ -166,11 +166,11 @@ const isOriginAllowed = (origin) => {
   return false
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // SCHEMA DEFINITIONS
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
-// ── Packages ──────────────────────────────────────────────────────────────────
+// -- Packages ------------------------------------------------------------------
 const ensurePackagesSchema = async () => {
   const tables = [
     `CREATE TABLE IF NOT EXISTS packages (
@@ -306,7 +306,7 @@ const ensurePackagesSchema = async () => {
       updated_at     TIMESTAMP    DEFAULT NOW()
     )`,
 
-    // ── v7.1: added package_chat_preferences (referenced by maintenance purge)
+    // -- v7.1: added package_chat_preferences (referenced by maintenance purge)
     `CREATE TABLE IF NOT EXISTS package_chat_preferences (
       id          SERIAL PRIMARY KEY,
       package_id  INTEGER     REFERENCES packages(id) ON DELETE CASCADE,
@@ -340,10 +340,10 @@ const ensurePackagesSchema = async () => {
   ]
   for (const idx of indexes) await query(idx).catch(() => {})
 
-  logger.info('✅ Packages schema ready')
+  logger.info('? Packages schema ready')
 }
 
-// ── Countries ─────────────────────────────────────────────────────────────────
+// -- Countries -----------------------------------------------------------------
 const ensureCountriesSchema = async () => {
   try {
     await query(`
@@ -397,13 +397,13 @@ CREATE TABLE IF NOT EXISTS countries (
     ]
     for (const idx of indexes) await query(idx).catch(() => {})
 
-    logger.info('✅ Countries schema ready')
+    logger.info('? Countries schema ready')
   } catch (err) {
     logger.warn('[CountriesSchema] non-fatal:', err.message)
   }
 }
 
-// ── Messaging ─────────────────────────────────────────────────────────────────
+// -- Messaging -----------------------------------------------------------------
 const ensureMessagingSchema = async () => {
   const tables = [
     `CREATE TABLE IF NOT EXISTS conversations (
@@ -507,7 +507,7 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS msg_type       VARCHAR(30) DEFAULT 'text'`,
   ]
   for (const sql of migrations) {
-    await query(sql).catch(() => { /* column already exists — safe */ })
+    await query(sql).catch(() => { /* column already exists � safe */ })
   }
 
   // Make session_id nullable on existing DBs that created it NOT NULL
@@ -515,17 +515,17 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE conversations ALTER COLUMN session_id DROP NOT NULL`,
   ).catch(() => {})
 
-  logger.info('✅ Messaging schema ready')
+  logger.info('? Messaging schema ready')
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // EXPRESS APP
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const app = express()
 app.set('trust proxy', 1)
 
-// ── Security headers ──────────────────────────────────────────────────────────
+// -- Security headers ----------------------------------------------------------
 app.use(
   helmet({
     contentSecurityPolicy:     false,
@@ -543,7 +543,7 @@ app.use((_req, res, next) => {
   next()
 })
 
-// ── CORS ──────────────────────────────────────────────────────────────────────
+// -- CORS ----------------------------------------------------------------------
 const CORS_ALLOWED_HEADERS = [
   'Content-Type', 'Authorization', 'X-Requested-With',
   'Accept', 'Origin', 'X-CSRF-Token', 'Cache-Control',
@@ -567,7 +567,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions))
 
-// Explicit pre-flight handler — must come BEFORE route declarations
+// Explicit pre-flight handler � must come BEFORE route declarations
 app.options('*', (req, res) => {
   const origin = req.headers.origin
   if (isOriginAllowed(origin)) {
@@ -581,13 +581,13 @@ app.options('*', (req, res) => {
   return res.sendStatus(200)
 })
 
-// ── Body / static ─────────────────────────────────────────────────────────────
+// -- Body / static -------------------------------------------------------------
 app.use(compression())
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
-// ── Logging ───────────────────────────────────────────────────────────────────
+// -- Logging -------------------------------------------------------------------
 const skipHealthLog = (req) =>
   req.url === '/health' || req.url === '/api/health'
 
@@ -600,21 +600,21 @@ if (IS_PROD) {
   app.use(morgan('dev', { skip: skipHealthLog }))
 }
 
-// ── Request ID ────────────────────────────────────────────────────────────────
+// -- Request ID ----------------------------------------------------------------
 app.use((req, _res, next) => { req.id = uuidv4(); next() })
 
-// ── Response cache ────────────────────────────────────────────────────────────
+// -- Response cache ------------------------------------------------------------
 app.use(cacheMiddleware(120))
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // HTTP SERVER
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const httpServer = http.createServer(app)
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // SOCKET.IO
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const io = new Server(httpServer, {
   cors: {
@@ -639,9 +639,9 @@ const io = new Server(httpServer, {
 socketBus.setIO(io)
 app.set('io', io)
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // HEALTH & META ENDPOINTS
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 app.get('/health', (_req, res) =>
   res.json({
@@ -681,7 +681,7 @@ app.get('/api', (_req, res) =>
   }),
 )
 
-// ── Debug: email test ─────────────────────────────────────────────────────────
+// -- Debug: email test ---------------------------------------------------------
 app.get('/api/debug/email-test', async (req, res) => {
   if (req.query.secret !== 'altuvera-test')
     return res.status(403).json({ error: 'forbidden' })
@@ -699,7 +699,7 @@ app.get('/api/debug/email-test', async (req, res) => {
   try {
     const result = await sendEmail({
       to,
-      subject: '✅ Altuvera Email Test',
+      subject: '? Altuvera Email Test',
       html:    `<p>Email delivery works! Sent at ${new Date().toISOString()}</p>`,
     })
     res.json({ success: true, delivered: result?.delivered, sentTo: to })
@@ -708,7 +708,7 @@ app.get('/api/debug/email-test', async (req, res) => {
   }
 })
 
-// ── Debug: database tables ────────────────────────────────────────────────────
+// -- Debug: database tables ----------------------------------------------------
 app.get('/api/debug/tables', async (req, res) => {
   const secret = IS_PROD ? process.env.JWT_SECRET?.slice(0, 8) : 'dev'
   if (req.query.secret !== secret)
@@ -736,7 +736,7 @@ app.get('/api/debug/tables', async (req, res) => {
   }
 })
 
-// ── Debug: cache control ──────────────────────────────────────────────────────
+// -- Debug: cache control ------------------------------------------------------
 app.get('/api/debug/cache', (req, res) => {
   const secret = IS_PROD ? process.env.JWT_SECRET?.slice(0, 8) : 'dev'
   if (req.query.secret !== secret)
@@ -756,7 +756,7 @@ app.get('/api/debug/cache', (req, res) => {
   res.json({ success: true, ...getCacheStats() })
 })
 
-// ── Route inspector ───────────────────────────────────────────────────────────
+// -- Route inspector -----------------------------------------------------------
 const cleanPath = (p = '') =>
   p.replace(/\\/g, '').replace(/\/+$/, '').replace(/\/\//g, '/')
    .replace(/\(\?:\(\[\^\\\/\]\+\?\)\)/g, ':param')
@@ -787,9 +787,9 @@ app.get('/api/routes', (req, res) => {
   res.json({ success: true, total: routes.length, byMethod, routes })
 })
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // API ROUTES
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 app.use('/api/admin/auth',           adminAuthRouter)
 app.use('/api/users',                usersRouter)
@@ -824,36 +824,36 @@ app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
-app.use('/api/maintenance',          maintenanceRouter)   // ← v7.1 ✅
-app.use('/api/push',                pushRouter)           // ← push notifications
+app.use('/api/maintenance',          maintenanceRouter)   // ? v7.1 ?
+app.use('/api/push',                pushRouter)           // ? push notifications
 
-// ── Dev-only test routes ──────────────────────────────────────────────────────
+// -- Dev-only test routes ------------------------------------------------------
 if (!IS_PROD) {
   try {
     app.use('/api/test/notifications', require('./routes/notificationTest'))
-    logger.info('🧪 Notification test routes active at /api/test/notifications/*')
+    logger.info('?? Notification test routes active at /api/test/notifications/*')
   } catch (err) {
-    logger.warn('⚠️  notificationTest router not found (non-fatal):', err.message)
+    logger.warn('??  notificationTest router not found (non-fatal):', err.message)
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // JWT SOCKET HELPER
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const verifySocketToken = (token) => {
   if (!token || !process.env.JWT_SECRET) return null
   try { return jwt.verify(token, process.env.JWT_SECRET) } catch { return null }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // CONVERSATION HELPERS
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 const getOrCreateConversation = async ({
   sessionId, userId, guestName, guestEmail, channel, source, ipAddress,
 }) => {
-  // 1️⃣ Try by userId (authenticated users — preserve their open thread)
+  // 1?? Try by userId (authenticated users � preserve their open thread)
   if (userId) {
     const { rows } = await query(
       `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
@@ -883,7 +883,7 @@ const getOrCreateConversation = async ({
     }
   }
 
-  // 2️⃣ Try by sessionId
+  // 2?? Try by sessionId
   if (sessionId) {
     const sid = String(sessionId).trim()
     const { rows } = await query(
@@ -912,7 +912,7 @@ const getOrCreateConversation = async ({
     }
   }
 
-  // 3️⃣ Create new conversation
+  // 3?? Create new conversation
   if (!userId && !sessionId)
     throw new Error('userId or sessionId is required to create a conversation')
 
@@ -1054,7 +1054,7 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   })
 }
 
-// Legacy helpers (chat_messages table — backwards compat)
+// Legacy helpers (chat_messages table � backwards compat)
 const fetchSessionMessages = async (sessionId) => {
   try {
     const { rows } = await query(
@@ -1098,9 +1098,9 @@ const broadcastConversationMessage = ({
   if (adminPayload)   io.to('admins').emit('msg:new-from-user', adminPayload)
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO — AUTH MIDDLEWARE
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// SOCKET.IO � AUTH MIDDLEWARE
+// -------------------------------------------------------------------------------
 
 io.use((socket, next) => {
   try {
@@ -1131,9 +1131,9 @@ setInterval(async () => {
   try { await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`) } catch { /* silent */ }
 }, 15_000)
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SOCKET.IO — CONNECTION HANDLER
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// SOCKET.IO � CONNECTION HANDLER
+// -------------------------------------------------------------------------------
 
 io.on('connection', (socket) => {
   logger.info(
@@ -1154,7 +1154,7 @@ io.on('connection', (socket) => {
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
-  // ── Notifications ────────────────────────────────────────────────────────
+  // -- Notifications --------------------------------------------------------
   socket.on('notification:get-unread', async (_, cb) => {
     try {
       const userId   = socket.data.userId
@@ -1241,7 +1241,7 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ── Package rooms ────────────────────────────────────────────────────────
+  // -- Package rooms --------------------------------------------------------
   socket.on('pkg:join',  ({ packageId, userId } = {}) => {
     if (packageId) socket.join(`package-${packageId}`)
     if (userId)    socket.join(`user-${userId}`)
@@ -1250,7 +1250,7 @@ io.on('connection', (socket) => {
     if (packageId) socket.leave(`package-${packageId}`)
   })
 
-  // ── New messaging system ─────────────────────────────────────────────────
+  // -- New messaging system -------------------------------------------------
 
   socket.on('msg:register', async (payload = {}, cb) => {
     try {
@@ -1620,7 +1620,7 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ── Legacy chat system ───────────────────────────────────────────────────
+  // -- Legacy chat system ---------------------------------------------------
 
   socket.on('chat:register', async (payload = {}, cb) => {
     try {
@@ -1779,7 +1779,7 @@ io.on('connection', (socket) => {
     })
   })
 
-  // ── Disconnect ───────────────────────────────────────────────────────────
+  // -- Disconnect -----------------------------------------------------------
   socket.on('disconnect', async (reason) => {
     logger.info(`[Socket] Disconnected: ${socket.id} | reason=${reason}`)
 
@@ -1793,33 +1793,33 @@ io.on('connection', (socket) => {
   })
 })
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// ERROR HANDLERS — must be last middleware
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
+// ERROR HANDLERS � must be last middleware
+// -------------------------------------------------------------------------------
 
 app.use(notFoundHandler)
 app.use(errorHandler)
 
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 // SERVER BOOT
-// ═══════════════════════════════════════════════════════════════════════════════
+// -------------------------------------------------------------------------------
 
 async function initializeServer () {
   try {
-    logger.info('🔄 Connecting to database…')
+    logger.info('?? Connecting to database�')
     await query('SELECT NOW()')
-    logger.info('✅ Database connected')
+    logger.info('? Database connected')
 
     // Destination schema (has its own controller)
     try {
       const { ensureDestinationSchema } = require('./controllers/destinationsController')
       await ensureDestinationSchema()
-      logger.info('✅ Destinations extended schema ready')
+      logger.info('? Destinations extended schema ready')
     } catch (err) {
-      logger.warn('⚠️  Destination schema (non-fatal):', err.message)
+      logger.warn('??  Destination schema (non-fatal):', err.message)
     }
 
-    // All other schemas — run sequentially to avoid connection pool saturation
+    // All other schemas � run sequentially to avoid connection pool saturation
     const schemas = [
       { fn: ensureSubscribersSchema,   name: 'Subscribers'   },
       { fn: ensureUserSchema,          name: 'Users'         },
@@ -1835,11 +1835,11 @@ async function initializeServer () {
 
     for (const { fn, name } of schemas) {
       try { await fn() } catch (err) {
-        logger.warn(`⚠️  ${name} schema (non-fatal):`, err.message)
+        logger.warn(`??  ${name} schema (non-fatal):`, err.message)
       }
     }
 
-    // ── Push subscriptions table ─────────────────────────────────────────────
+    // -- Push subscriptions table ---------------------------------------------
     try {
       await query(`
         CREATE TABLE IF NOT EXISTS push_subscriptions (
@@ -1854,32 +1854,32 @@ async function initializeServer () {
           updated_at  TIMESTAMP DEFAULT NOW()
         )
       `)
-      logger.info('✅ Push Subscriptions table ready')
+      logger.info('? Push Subscriptions table ready')
     } catch (err) {
-      logger.warn('⚠️  Push Subscriptions table (non-fatal):', err.message)
+      logger.warn('??  Push Subscriptions table (non-fatal):', err.message)
     }
 
-    // ── Initialise Web Push (VAPID) ─────────────────────────────────────────
+    // -- Initialise Web Push (VAPID) -----------------------------------------
     pushUtility.initPush()
 
     await new Promise((resolve) => {
       httpServer.listen(PORT, () => {
-        const line = '═'.repeat(67)
+        const line = '-'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('🌍  ALTUVERA TRAVEL — Enterprise Backend v7.1')
+        logger.info('??  ALTUVERA TRAVEL � Enterprise Backend v7.1')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
         logger.info(`  Port         : ${PORT}`)
         logger.info(`  Backend      : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`)
-        logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
+        logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '�'}`)
         logger.info(`  CORS origins : ${ALLOWED_ORIGINS.join(', ')}`)
-        logger.info(`  Theme        : green-white (#16a34a) 🟢`)
-        logger.info(`  DNS          : ipv4first ✅`)
-        logger.info(`  Maintenance  : /api/maintenance ✅`)
-        logger.info(`  Push Notifs  : /api/push ✅`)
-        logger.info(`  Socket.io    : polling → websocket ✅`)
-        logger.info(`  Test routes  : ${IS_PROD ? 'disabled (production)' : '/api/test/notifications ✅'}`)
+        logger.info(`  Theme        : green-white (#16a34a) ??`)
+        logger.info(`  DNS          : ipv4first ?`)
+        logger.info(`  Maintenance  : /api/maintenance ?`)
+        logger.info(`  Push Notifs  : /api/push ?`)
+        logger.info(`  Socket.io    : polling ? websocket ?`)
+        logger.info(`  Test routes  : ${IS_PROD ? 'disabled (production)' : '/api/test/notifications ?'}`)
         logger.info(`${line}\n`)
         resolve()
       })
@@ -1887,7 +1887,7 @@ async function initializeServer () {
 
     shutdown(httpServer)
   } catch (err) {
-    logger.error('❌ Server boot failed:', err.message)
+    logger.error('? Server boot failed:', err.message)
     logger.error(err.stack)
     process.exit(1)
   }

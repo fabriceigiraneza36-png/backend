@@ -658,3 +658,146 @@ const remove = async (req, res, next) => {
       }
     };
 };
+
+// Export all controller functions
+module.exports = {
+  getAll,
+  getById,
+  create,
+  update,
+  remove,
+  getImages,
+  // Additional functions expected by routes
+  getOne: getById, // Alias for backward compatibility
+  getFeatured: async (req, res, next) => {
+    try {
+      const { rows } = await query(
+        `SELECT * FROM countries WHERE is_featured = true ORDER BY name`
+      );
+      return res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (err) {
+      logger.error("[Countries] getFeatured:", err.message);
+      next(err);
+    }
+  },
+  getByContinent: async (req, res, next) => {
+    try {
+      const { continent } = req.params;
+      const { rows } = await query(
+        `SELECT * FROM countries WHERE continent = $1 ORDER BY name`,
+        [continent]
+      );
+      return res.json({
+        success: true,
+        data: rows,
+      });
+    } catch (err) {
+      logger.error("[Countries] getByContinent:", err.message);
+      next(err);
+    }
+  },
+  getStats: async (req, res, next) {
+    try {
+      const { rows: countRes } = await query(
+        `SELECT COUNT(*) as total FROM countries`
+      );
+      const total = parseInt(countRes.rows[0].total, 10);
+      
+      const { rows: featuredRes } = await query(
+        `SELECT COUNT(*) as featured FROM countries WHERE is_featured = true`
+      );
+      const featured = parseInt(featuredRes.rows[0].featured, 10);
+      
+      return res.json({
+        success: true,
+        data: {
+          total,
+          featured,
+        },
+      });
+    } catch (err) {
+      logger.error("[Countries] getStats:", err.message);
+      next(err);
+    }
+  },
+  bulkDelete: async (req, res, next) => {
+    try {
+      const { ids } = req.body;
+      
+      if (!Array.isArray(ids) || ids.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Please provide an array of country IDs to delete",
+        });
+      }
+      
+      const placeholders = ids.map((_, index) => `$${index + 1}`).join(',');
+      const { rows } = await query(
+        `DELETE FROM countries WHERE id IN (${placeholders}) RETURNING *`,
+        ids
+      );
+      
+      return res.json({
+        success: true,
+        data: rows,
+        message: `${rows.length} countries deleted successfully`,
+      });
+    } catch (err) {
+      logger.error("[Countries] bulkDelete:", err.message);
+      next(err);
+    }
+  },
+  toggleActive: async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      
+      const { rows } = await query(
+        `UPDATE countries SET is_active = NOT is_active WHERE id = $1 RETURNING *`,
+        [id]
+      );
+      
+      if (rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Country not found",
+        });
+      }
+      
+      return res.json({
+        success: true,
+        data: rows[0],
+      });
+    } catch (err) {
+      logger.error("[Countries] toggleActive:", err.message);
+      next(err);
+    }
+  },
+  toggleFeatured: async (req, res, next) => {
+    try {
+      const { id } = req.params;
+      
+      const { rows } = await query(
+        `UPDATE countries SET is_featured = NOT is_featured WHERE id = $1 RETURNING *`,
+        [id]
+      );
+      
+      if (rows.length === 0) {
+        return res.status(404).json({
+          success: false,
+          error: "Country not found",
+        });
+      }
+      
+      return res.json({
+        success: true,
+        data: rows[0],
+      });
+    } catch (err) {
+      logger.error("[Countries] toggleFeatured:", err.message);
+      next(err);
+    }
+  },
+};
