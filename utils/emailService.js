@@ -13,6 +13,35 @@ let transporter = null;
 const getTransporter = () => {
   if (transporter) return transporter;
 
+  // Use SendGrid if API key is provided, otherwise fall back to SMTP
+  if (process.env.SENDGRID_API_KEY) {
+    const sgMail = require('@sendgrid/mail');
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+    
+    logger.info('[Email] Using SendGrid transporter');
+    return {
+      sendMail: async (mailOptions) => {
+        try {
+          const msg = {
+            to: mailOptions.to,
+            from: mailOptions.from || process.env.SENDGRID_FROM_EMAIL || `Altuvera Travel <${process.env.SMTP_USER}>`,
+            subject: mailOptions.subject,
+            html: mailOptions.html,
+            text: mailOptions.text,
+          };
+          
+            const result = await sgMail.send(msg);
+            logger.info(`[Email] Sent successfully via SendGrid to ${mailOptions.to}`);
+            return result[0]; // SendGrid returns an array, we want the first element
+          } catch (err) {
+            logger.error(`[Email] Error sending via SendGrid to ${mailOptions.to}: ${err.message}`);
+            throw err;
+        }
+      }
+    };
+  }
+
+  // Fallback to SMTP transporter
   const config = {
     host:   process.env.SMTP_HOST || 'smtp.gmail.com',
     port:   parseInt(process.env.SMTP_PORT || '587', 10),
@@ -45,19 +74,36 @@ const getTransporter = () => {
   return transporter;
 };
 
-// ── Verify SMTP on startup ───────────────────────────────────────────────────
+// ── Verify connection on startup ───────────────────────────────────────────────
 
 const verifyEmailConnection = async () => {
-  try {
-    const t = getTransporter();
-    await t.verify();
-    logger.info('[Email] ✅ SMTP connection verified successfully');
-    return true;
-  } catch (err) {
-    logger.warn(`[Email] ⚠️  SMTP verification failed: ${err.message}`);
-    logger.warn('[Email] Emails will still be attempted but may fail');
-    return false;
-  }
+    // Use SendGrid verification if API key is provided
+    if (process.env.SENDGRID_API_KEY) {
+      try {
+        // SendGrid doesn't have a direct verification method like SMTP
+        // We'll just check if the API key is set
+        if (process.env.SENDGRID_API_KEY) {
+          logger.info('[Email] SendGrid API key configured');
+          return true;
+        }
+      } catch (err) {
+        logger.warn(`[Email] Warning: SendGrid verification failed: ${err.message}`);
+        logger.warn('[Email] Emails will still be attempted but may fail');
+        return false;
+      }
+    }
+
+    // Fallback to SMTP verification
+    try {
+      const t = getTransporter();
+      await t.verify();
+      logger.info('[Email] � ✅ SMTP connection verified successfully');
+      return true;
+    } catch (err) {
+      logger.warn(`[Email] Warning: SMTP verification failed: ${err.message}`);
+      logger.warn('[Email] Emails will still be attempted but may fail');
+      return false;
+    }
 };
 
 // ── Core send function ───────────────────────────────────────────────────────
