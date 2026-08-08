@@ -1,7 +1,9 @@
 // scripts/test-smtp.js — Run with: node scripts/test-smtp.js
 "use strict";
 
-require("dotenv").config();
+console.log('Current working directory:', process.cwd());
+console.log('Looking for .env at:', require('path').resolve(process.cwd(), 'backend/.env'));
+require("dotenv").config({ path: require('path').resolve(process.cwd(), 'backend/.env') });
 
 const { testSmtp, verifySmtp, sendEmail } = require("../utils/email");
 const logger = require("../utils/logger");
