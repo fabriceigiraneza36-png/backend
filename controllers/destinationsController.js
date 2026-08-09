@@ -18,6 +18,7 @@
 const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
+const { sendDestinationAlertEmail } = require('../services/emailService')
 
 const LOG = '[Destinations]'
 
@@ -1821,11 +1822,19 @@ exports.create = async (req, res, next) => {
         featuredAt,
         req.user?.id           || null,
       ],
-    )
-
-    await syncCountryDestCount(country.id)
-
-    const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
+     )
+ 
+     await syncCountryDestCount(country.id)
+     
+     // Send destination alert email to subscribers
+     try {
+       await sendDestinationAlertEmail(rows[0])
+     } catch (emailErr) {
+       console.warn(`${LOG} Destination alert email failed:`, emailErr.message)
+       // Don't fail the destination creation if email fails
+     }
+     
+     const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
     return res.status(201).json({
       success: true,
       message: 'Destination created',

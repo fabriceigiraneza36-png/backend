@@ -1,6 +1,9 @@
 // services/emailService.js
 "use strict";
 
+const { query } = require("../config/db");
+const logger    = require("../utils/logger");
+
 const CFG = {
   resendApiKey:  process.env.RESEND_API_KEY     || "",
   smtp: {
@@ -49,9 +52,9 @@ const stripHtml = (h = "") =>
   h.replace(/<[^>]+>/g, " ").replace(/\s{2,}/g, " ").trim();
 
 const esc = (s = "") =>
-  String(s)
-    .replace(/&/g, "&").replace(/</g, "<")
-    .replace(/>/g, ">").replace(/"/g, """).replace(/'/g, "'");
+   String(s)
+     .replace(/&/g, "&").replace(/</g, "<")
+     .replace(/>/g, ">").replace(/"/g, '"').replace(/'/g, "'");
 
 const fmtDate = (d) => {
   if (!d) return "—";
@@ -134,7 +137,17 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
       html:     html || `<pre>${plain}</pre>`,
       text:     plain,
       reply_to: replyTo || CFG.replyTo,
-    };
+module.exports = {
+   sendEmail,
+   sendBookingVerificationLink,
+   sendAdminBookingNotification,
+   sendBookingReceivedEmail,
+   sendBookingConfirmation,
+   sendBookingStatusUpdate,
+   sendBookingCancellation,
+   sendTripCountdownEmail,
+   sendDestinationAlertEmail,
+};
     const res = await fetch("https://api.resend.com/emails", {
       method:  "POST",
       headers: {
@@ -1481,12 +1494,279 @@ function safe(value, fallback = "—") {
 
 /* ─── EXPORTS ──────────────────────────────────────────────────────────────── */
 module.exports = {
-  sendEmail,
-  sendBookingVerificationLink,
-  sendAdminBookingNotification,
-  sendBookingReceivedEmail,
-  sendBookingConfirmation,
-  sendBookingStatusUpdate,
-  sendBookingCancellation,
-  sendTripCountdownEmail,
+   sendEmail,
+   sendBookingVerificationLink,
+   sendAdminBookingNotification,
+   sendBookingReceivedEmail,
+   sendBookingConfirmation,
+   sendBookingStatusUpdate,
+   sendBookingCancellation,
+   sendTripCountdownEmail,
+   sendDestinationAlertEmail,
 };
+
+/* ���� �� �� ═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═
+    13.  sendDestinationAlertEmail — New destination alert to subscribers
+�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�══�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�══�═�═�═�═�═�═�═�═�═�═�═�═ */
+async function sendDestinationAlertEmail(destination) {
+   const {
+     id,
+     name = "New Destination",
+     slug,
+     country_name,
+     image_url,
+     short_description,
+   } = destination;
+
+   if (!slug) {
+     logger.warn("[Email] sendDestinationAlertEmail: no slug");
+     return { success: false, reason: "no_slug" };
+   }
+
+   const destinationUrl = `${cfg.appUrl}/destinations/${slug}`;
+   const imageToUse = image_url || "https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?w=1200&q=85";
+
+   const extraCss = `
+     .destination-card{background:#f0fdf4;border-radius:16px;padding:24px;
+                      border:1px solid #e2e8f0;margin:20px 0}
+     .destination-img{border-radius:12px;overflow:hidden;margin:0 0 16px;
+                      height:200px;background:#f8fafc}
+     .destination-img img{width:100%;height:100%;object-fit:cover;display:block}
+     .destination-info{margin:0 0 20px}
+     .destination-title{font-size:20px;font-weight:800;color:#022c22;
+                       margin:0 0 8px;display:flex;align-items:center;gap:8px}
+     .destination-map{width:16px;height:16px;flex-shrink:0}
+     .destination-location{font-size:14px;color:#64748b}
+     .destination-description{font-size:15px;color:#374151;line-height:1.6;
+                             margin:0 0 16px}
+     .btn-row{text-align:center;margin:24px 0}
+     .btn{display:inline-block;padding:14px 32px;border-radius:12px;font-weight:700;
+          font-size:15px;letter-spacing:.01em;line-height:1;border:2px solid transparent}
+     .btn-g{background:linear-gradient(135deg,#059669,#047857);color:#fff!important;
+            box-shadow:0 6px 20px rgba(5,150,105,.35)}
+     .btn-o{background:#f0fdf4;color:#059669!important;border-color:#a7f3d0}
+   `;
+
+   const html = shell({
+     title: `���������🌟 New Destination Alert: ${name} is now available!`,
+     preheader: `Explore our newest destination and be among the first to book your adventure.`,
+     extraCss,
+     body: `
+       <!-- Destination Card -->
+       <div class="destination-card">
+         <div class="destination-img">
+           <img src="${imageToUse}" alt="${esc(name)}" />
+         </div>
+         <div class="destination-info">
+           <div class="destination-title">
+             <span class="destination-map">���������📍</span>
+             <span>${esc(name)}${country_name ? `, ${esc(country_name)}` : ""}</span>
+           </div>
+           ${short_description ? `
+           <div class="destination-description">
+             ${esc(short_description)}
+           </div>` : ""}
+         </div>
+       </div>
+
+       <!-- CTA -->
+       <div class="btn-row">
+         <a href="${destinationUrl}" class="btn btn-g">
+           ���� �� �� 🌟 Book Now - ${name}
+         </a>
+         <a href="${cfg.appUrl}/destinations" class="btn btn-o">
+           Explore All Destinations
+         </a>
+       </div>
+
+       <!-- Why Book With Us -->
+       <div style="background:#f8fafc;border-radius:16px;padding:24px;margin:24px 0;
+                  border:1px solid #e2e8f0">
+         <p style="margin:0 0 16px;font-size:14px;color:#374151;font-weight:600;">
+           Why Book With Altuvera?
+         </p>
+         <p style="margin:0;font-size:14px;color:#4b5563;line-height:1.7;">
+           • Expert local guides with deep cultural knowledge<br/>
+           • Small group sizes for personalized experiences<br/>
+           • Sustainable tourism that supports local communities<br/>
+           • 24/7 support throughout your journey<br/>
+           • Flexible booking policies and payment protection
+         </p>
+       </div>
+
+       <!-- Footer -->
+       <div style="text-align:center;margin-top:24px;color:#64748b;font-size:13px;">
+         <p>This destination alert was sent to you because you're subscribed to our 
+            travel updates. Explore more incredible destinations and start planning 
+            your next adventure today.</p>
+       </div>
+     `,
+ 
+     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Travel."
+   });
+
+   // Send to all subscribers
+   const { rows } = await query(
+     `SELECT email, name FROM subscribers WHERE is_active = true AND email IS NOT NULL`
+   );
+   
+   let sent = 0;
+   let failed = 0;
+   
+   for (const subscriber of rows) {
+     try {
+       await sendEmail({
+         to: subscriber.email,
+         subject: `���������🌟 New Destination Alert: ${name} is now available!`,
+         html,
+         recipientName: subscriber.name || "Traveler"
+       });
+       sent++;
+     } catch (err) {
+       failed++;
+       logger.warn(`[Email] Destination alert failed for ${subscriber.email}: ${err.message}`);
+     }
+     
+     // Gentle throttle to respect rate limits
+     if (rows.length > 10) {
+       await new Promise(resolve => setTimeout(resolve, 100));
+     }
+   }
+   
+   logger.info(`[Email] Destination alert sent: ${sent} successful, ${failed} failed`);
+   
+   return { success: sent > 0, sent, failed, total: rows.length };
+ }
+
+/* �� ═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═
+     13.  sendDestinationAlertEmail — New destination alert to subscribers
+�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═�═ */
+async function sendDestinationAlertEmail(destination) {
+   const {
+     id,
+     name = "New Destination",
+     slug,
+     country_name,
+     image_url,
+     short_description,
+   } = destination;
+
+   if (!slug) {
+     console.warn("[Email] sendDestinationAlertEmail: no slug");
+     return { success: false, reason: "no_slug" };
+   }
+
+   const destinationUrl = `${cfg.appUrl}/destinations/${slug}`;
+   const imageToUse = image_url || "https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?w=1200&q=85";
+
+   const extraCss = `
+     .destination-card{background:#f0fdf4;border-radius:16px;padding:24px;
+                      border:1px solid #e2e8f0;margin:20px 0}
+     .destination-img{border-radius:12px;overflow:hidden;margin:0 0 16px;
+                      height:200px;background:#f8fafc}
+     .destination-img img{width:100%;height:100%;object-fit:cover;display:block}
+     .destination-info{margin:0 0 20px}
+     .destination-title{font-size:20px;font-weight:800;color:#022c22;
+                       margin:0 0 8px;display:flex;align-items:center;gap:8px}
+     .destination-map{width:16px;height:16px;flex-shrink:0}
+     .destination-location{font-size:14px;color:#64748b}
+     .destination-description{font-size:15px;color:#374151;line-height:1.6;
+                             margin:0 0 16px}
+     .btn-row{text-align:center;margin:24px 0}
+     .btn{display:inline-block;padding:14px 32px;border-radius:12px;font-weight:700;
+          font-size:15px;letter-spacing:.01em;line-height:1;border:2px solid transparent}
+     .btn-g{background:linear-gradient(135deg,#059669,#047857);color:#fff!important;
+            box-shadow:0 6px 20px rgba(5,150,105,.35)}
+     .btn-o{background:#f0fdf4;color:#059669!important;border-color:#a7f3d0}
+   `;
+
+   const html = shell({
+     title: `���🌟 New Destination Alert: ${name} is now available!`,
+     preheader: `Explore our newest destination and be among the first to book your adventure.`,
+     extraCss,
+     body: `
+       <!-- Destination Card -->
+       <div class="destination-card">
+         <div class="destination-img">
+           <img src="${imageToUse}" alt="${esc(name)}" />
+         </div>
+         <div class="destination-info">
+           <div class="destination-title">
+             <span class="destination-map">���📍</span>
+             <span>${esc(name)}${country_name ? `, ${esc(country_name)}` : ""}</span>
+           </div>
+           ${short_description ? `
+           <div class="destination-description">
+             ${esc(short_description)}
+           </div>` : ""}
+         </div>
+       </div>
+
+       <!-- CTA -->
+       <div class="btn-row">
+         <a href="${destinationUrl}" class="btn btn-g">
+           �� 🌟 Book Now - ${name}
+         </a>
+         <a href="${cfg.appUrl}/destinations" class="btn btn-o">
+           Explore All Destinations
+         </a>
+       </div>
+
+       <!-- Why Book With Us -->
+       <div style="background:#f8fafc;border-radius:16px;padding:24px;margin:24px 0;
+                  border:1px solid #e2e8f0">
+         <p style="margin:0 0 16px;font-size:14px;color:#374151;font-weight:600;">
+           Why Book With Altuvera?
+         </p>
+         <p style="margin:0;font-size:14px;color:#4b5563;line-height:1.7;">
+           • Expert local guides with deep cultural knowledge<br/>
+           • Small group sizes for personalized experiences<br/>
+           • Sustainable tourism that supports local communities<br/>
+           • 24/7 support throughout your journey<br/>
+           • Flexible booking policies and payment protection
+         </p>
+       </div>
+
+       <!-- Footer -->
+       <div style="text-align:center;margin-top:24px;color:#64748b;font-size:13px;">
+         <p>This destination alert was sent to you because you're subscribed to our 
+            travel updates. Explore more incredible destinations and start planning 
+            your next adventure today.</p>
+       </div>
+     `,
+ 
+     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Travel."
+   });
+
+   // Send to all subscribers
+   const { rows } = await query(
+     `SELECT email, name FROM subscribers WHERE is_active = true AND email IS NOT NULL`
+   );
+   
+   let sent = 0;
+   let failed = 0;
+   
+   for (const subscriber of rows) {
+     try {
+       await sendEmail({
+         to: subscriber.email,
+         subject: `���🌟 New Destination Alert: ${name} is now available!`,
+         html,
+         recipientName: subscriber.name || "Traveler"
+       });
+       sent++;
+     } catch (err) {
+       failed++;
+       logger.warn(`[Email] Destination alert failed for ${subscriber.email}: ${err.message}`);
+     }
+     
+     // Gentle throttle to respect rate limits
+     if (rows.length > 10) {
+       await new Promise(resolve => setTimeout(resolve, 100));
+     }
+   }
+   
+   logger.info(`[Email] Destination alert sent: ${sent} successful, ${failed} failed`);
+   
+   return { success: sent > 0, sent, failed, total: rows.length };
+ }
