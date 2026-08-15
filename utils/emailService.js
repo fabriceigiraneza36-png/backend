@@ -13,11 +13,11 @@ let transporter = null;
 const getTransporter = () => {
   if (transporter) return transporter;
 
-  // Use SendGrid if API key is provided, otherwise fall back to SMTP
+  // Use SendGrid if API key is provided
   if (process.env.SENDGRID_API_KEY) {
     const sgMail = require('@sendgrid/mail');
     sgMail.setApiKey(process.env.SENDGRID_API_KEY);
-    
+
     logger.info('[Email] Using SendGrid transporter');
     return {
       sendMail: async (mailOptions) => {
@@ -29,13 +29,45 @@ const getTransporter = () => {
             html: mailOptions.html,
             text: mailOptions.text,
           };
-          
-            const result = await sgMail.send(msg);
-            logger.info(`[Email] Sent successfully via SendGrid to ${mailOptions.to}`);
-            return result[0]; // SendGrid returns an array, we want the first element
-          } catch (err) {
-            logger.error(`[Email] Error sending via SendGrid to ${mailOptions.to}: ${err.message}`);
-            throw err;
+
+          const result = await sgMail.send(msg);
+          logger.info(`[Email] Sent successfully via SendGrid to ${mailOptions.to}`);
+          return result[0]; // SendGrid returns an array, we want the first element
+        } catch (err) {
+          logger.error(`[Email] Error sending via SendGrid to ${mailOptions.to}: ${err.message}`);
+          throw err;
+        }
+      }
+    };
+  }
+
+  // Use Resend if API key is provided
+  if (process.env.RESEND_API_KEY) {
+    const resend = require('resend');
+    resend.apiKey = process.env.RESEND_API_KEY;
+
+    logger.info('[Email] Using Resend transporter');
+    return {
+      sendMail: async (mailOptions) => {
+        try {
+          const { data, error } = await resend.emails.send({
+            from: mailOptions.from || process.env.SMTP_FROM || `"Altuvera Travel" <${process.env.SMTP_USER}>`,
+            to: mailOptions.to,
+            subject: mailOptions.subject,
+            html: mailOptions.html,
+            text: mailOptions.text,
+          });
+
+          if (error) {
+            logger.error(`[Email] Error sending via Resend to ${mailOptions.to}: ${error}`);
+            throw error;
+          }
+
+          logger.info(`[Email] Sent successfully via Resend to ${mailOptions.to}`);
+          return data; // Resend returns { id, ... } as data
+        } catch (err) {
+          logger.error(`[Email] Error sending via Resend to ${mailOptions.to}: ${err.message}`);
+          throw err;
         }
       }
     };
@@ -77,33 +109,51 @@ const getTransporter = () => {
 // ── Verify connection on startup ───────────────────────────────────────────────
 
 const verifyEmailConnection = async () => {
-    // Use SendGrid verification if API key is provided
-    if (process.env.SENDGRID_API_KEY) {
-      try {
-        // SendGrid doesn't have a direct verification method like SMTP
-        // We'll just check if the API key is set
-        if (process.env.SENDGRID_API_KEY) {
-          logger.info('[Email] SendGrid API key configured');
-          return true;
-        }
-      } catch (err) {
-        logger.warn(`[Email] Warning: SendGrid verification failed: ${err.message}`);
-        logger.warn('[Email] Emails will still be attempted but may fail');
-        return false;
-      }
-    }
-
-    // Fallback to SMTP verification
+  // Use SendGrid verification if API key is provided
+  if (process.env.SENDGRID_API_KEY) {
     try {
-      const t = getTransporter();
-      await t.verify();
-      logger.info('[Email] � ✅ SMTP connection verified successfully');
-      return true;
+      // SendGrid doesn't have a direct verification method like SMTP
+      // We'll just check if the API key is set
+      if (process.env.SENDGRID_API_KEY) {
+        logger.info('[Email] SendGrid API key configured');
+        return true;
+      }
     } catch (err) {
-      logger.warn(`[Email] Warning: SMTP verification failed: ${err.message}`);
+      logger.warn(`[Email] Warning: SendGrid verification failed: ${err.message}`);
       logger.warn('[Email] Emails will still be attempted but may fail');
       return false;
     }
+  }
+
+  // Use Resend verification if API key is provided
+  if (process.env.RESEND_API_KEY) {
+    try {
+      // Resend doesn't have a direct verification method, but we can try to send a test email? 
+      // However, to avoid sending real emails, we'll just check if the API key is set.
+      // Alternatively, we could make a request to Resend's API to get the account info, but that might be overkill.
+      // For now, we'll just check the API key.
+      if (process.env.RESEND_API_KEY) {
+        logger.info('[Email] Resend API key configured');
+        return true;
+      }
+    } catch (err) {
+      logger.warn(`[Email] Warning: Resend verification failed: ${err.message}`);
+      logger.warn('[Email] Emails will still be attempted but may fail');
+      return false;
+    }
+  }
+
+  // Fallback to SMTP verification
+  try {
+    const t = getTransporter();
+    await t.verify();
+    logger.info('[Email] ✅ SMTP connection verified successfully');
+    return true;
+  } catch (err) {
+    logger.warn(`[Email] Warning: SMTP verification failed: ${err.message}`);
+    logger.warn('[Email] Emails will still be attempted but may fail');
+    return false;
+  }
 };
 
 // ── Core send function ───────────────────────────────────────────────────────
