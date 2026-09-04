@@ -450,6 +450,28 @@ const row = (label, value, highlight = false) => {
   </tr>`;
 };
 
+const rowHtml = (label, value) => {
+  if (!value) return "";
+  return `<tr><td class="lbl">${esc(label)}</td><td class="val">${value}</td></tr>`;
+};
+
+const destinationLink = (booking, label) => {
+  const slug = booking.destination_slug;
+  if (!slug) return esc(label);
+  return `<a href="${esc(`${ENV.frontendUrl}/destinations/${encodeURIComponent(slug)}`)}" style="color:${T.g700};font-weight:700;text-decoration:underline;">${esc(label)}</a>`;
+};
+
+const attractionLink = (booking) => {
+  const name = booking.attraction_name;
+  if (!name) return "";
+  const destSlug = booking.destination_slug;
+  const attractionSlug = String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  const href = destSlug && attractionSlug
+    ? `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug)}/attractions/${encodeURIComponent(attractionSlug)}`
+    : `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug || "")}`;
+  return rowHtml("Attraction", `<a href="${esc(href)}" style="color:${T.g700};font-weight:700;text-decoration:underline;">${esc(name)}</a>`);
+};
+
 const infoTable = (title, rows) => {
   const content = rows.filter(Boolean).join("");
   if (!content.trim()) return "";
@@ -478,7 +500,8 @@ const bookingSummary = (b) => {
 
   return infoTable("Booking Summary", [
     row("Reference",     b.booking_number, true),
-    row("Destination",   dest !== "Your Trip" ? dest : null),
+    rowHtml("Destination", dest !== "Your Trip" ? destinationLink(b, dest) : ""),
+    attractionLink(b),
     row("Country",       country !== "—" ? country : null),
     row("Departure",     fmtDate(b.travel_date)),
     row("Return",        fmtDate(b.return_date)),
@@ -846,7 +869,8 @@ const sendAdminBookingNotification = async (booking) => {
 
       ${infoTable("Trip", [
         row("Reference",     booking.booking_number, true),
-        row("Destination",   dest),
+        rowHtml("Destination", destinationLink(booking, dest)),
+        attractionLink(booking),
         row("Country",       booking.country_name),
         row("Departure",     fmtDate(booking.travel_date)),
         row("Return",        fmtDate(booking.return_date)),

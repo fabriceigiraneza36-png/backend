@@ -464,11 +464,21 @@ exports.uploadCountryImages = async (req, res, next) => {
       throw err;
     }
 
+    const existingCount = Array.isArray(country.rows[0].images)
+      ? country.rows[0].images.filter(Boolean).length
+      : 0;
+    const remaining = 10 - existingCount;
+    if (remaining <= 0) {
+      const err = new Error("Maximum of 10 country images reached");
+      err.statusCode = 400;
+      throw err;
+    }
+
     const imageUrls = [];
     const uploadedAssets = [];
 
     try {
-      for (const file of files) {
+      for (const file of files.slice(0, remaining)) {
         const publicId = `countries/images/${countryId}/${Date.now()}-${Math.random()
           .toString(36)
           .substr(2, 9)}`;

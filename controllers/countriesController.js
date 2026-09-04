@@ -847,7 +847,7 @@ module.exports = {
   },
 };
 
-const cleanCountryImages = (value) => JSON.stringify(normalizeImages(value));
+const cleanCountryImages = (value) => JSON.stringify(normalizeImages(value).slice(0, 10));
 const cleanCountryImage = (value) => normalizeImages([value])[0]?.url || null;
 const sanitizeCountryMedia = (country) => ({
   ...country,

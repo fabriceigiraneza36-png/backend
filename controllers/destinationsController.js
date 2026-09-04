@@ -1739,6 +1739,7 @@ exports.create = async (req, res, next) => {
     const uploadedImg = req.file ? getUploadedFileUrl(req.file) : null
     let   imageUrls   = urlsOnly(data.image_urls)
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
+    imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
     if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
     const mainImg = imageUrls[0] || null
 
@@ -2620,11 +2621,24 @@ exports.addImages = async (req, res, next) => {
       [id],
     )
     let order   = maxRows[0]?.max || 0
+    const countRows = await safeQuery(
+      `SELECT GREATEST(
+         COALESCE(cardinality(d.image_urls), 0),
+         (SELECT COUNT(*)::INTEGER FROM destination_images di
+          WHERE di.destination_id = d.id AND di.is_active = true)
+       ) AS count
+       FROM destinations d WHERE d.id = $1`,
+      [id], 'addImages:count',
+    )
+    let remaining = Math.max(0, MAX_DESTINATION_IMAGES - (countRows[0]?.count || 0))
+    if (!remaining) {
+      return res.status(400).json({ success: false, error: `Maximum of ${MAX_DESTINATION_IMAGES} destination images reached` })
+    }
     const added = []
     const urls  = []
 
     const insertImage = async (url) => {
-      if (!isSafeImageUrl(url)) return
+      if (!remaining || !isSafeImageUrl(url)) return
       order++
       const { rows } = await query(
         `INSERT INTO destination_images
@@ -2634,6 +2648,7 @@ exports.addImages = async (req, res, next) => {
       )
       added.push(rows[0])
       urls.push(url)
+      remaining--
     }
 
     if (req.files?.length) {
@@ -2888,7 +2903,7 @@ exports.addDestinationTag = async (req, res, next) => {
 exports.removeDestinationTag = async (req, res, next) => {
   try {
     const { id, tagId } = req.params
-    const { rows } = await query(
+    const { rows } = await query( 
       `DELETE FROM destination_tags WHERE id = $1 AND destination_id = $2 RETURNING id`,
       [tagId, id],
     )

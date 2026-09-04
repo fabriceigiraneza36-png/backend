@@ -143,8 +143,9 @@ const ALLOWED_ORIGINS = [
     process.env.FRONTEND_URL,
     process.env.BACKEND_URL,
     ...envOrigins,
-     // -- Admin panel ------------------------------------------------------
-      'https://admin.altuverasafaris.com',
+// -- Admin panel ------------------------------------------------------
+       'https://admin.altuverasafaris.com',
+       'https://admin.altuvera.com',
     // -- Public site ------------------------------------------------------
     'https://altuverasafaris.com',
     'https://www.altuverasafaris.com',
