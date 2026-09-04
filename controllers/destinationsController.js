@@ -6,6 +6,8 @@ const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 
+const MAX_DESTINATION_IMAGES = 10 // Prevent ReferenceError crashes
+
 let sendDestinationAlertEmail = null
 try {
   ({ sendDestinationAlertEmail } = require('../services/emailService'))
@@ -18,6 +20,31 @@ try {
 }
 
 const LOG = '[Destinations]'
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   SCHEMA DISCOVERY (Bypasses missing columns dynamically)
+═══════════════════════════════════════════════════════════════════════════ */
+
+let destinationColumnsCache = null;
+
+const getDestinationColumns = async () => {
+  if (destinationColumnsCache) return destinationColumnsCache;
+  try {
+    const { rows } = await query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'destinations' AND table_schema = 'public'
+    `);
+    if (rows && rows.length > 0) {
+      destinationColumnsCache = rows.map(r => r.column_name.toLowerCase());
+      return destinationColumnsCache;
+    }
+  } catch (err) {
+    console.warn(`${LOG} Failed to inspect schema columns, using fallbacks:`, err.message);
+  }
+  // Standard safety fallback columns
+  return ["id", "name", "slug", "country_id", "status", "is_active", "is_featured", "category"];
+};
 
 /* ═══════════════════════════════════════════════════════════════════════════
    HELPERS
@@ -126,14 +153,15 @@ const safeQuery = async (sql, params = [], label = '') => {
 ═══════════════════════════════════════════════════════════════════════════ */
 
 const VARCHAR_LIMITS = {
-  status:         30,
-  difficulty:     50,
-  classification: 100,
-  price_currency: 10,
-  malaria_risk:   50,
-  safety_rating:  30,
-  category:      100,
-  fitness_level: 100,
+  status:             30,
+  difficulty:         50,
+  classification:     100,
+  price_currency:     10,
+  malaria_risk:       50,
+  safety_rating:      30,
+  category:          100,
+  adventure_category:100,
+  fitness_level:     100,
 }
 
 let COLUMN_META = null
@@ -244,6 +272,7 @@ exports.ensureDestinationSchema = async () => {
        local_tips               TEXT,
        safety_info              TEXT,
        category                 TEXT DEFAULT 'safari',
+       adventure_category       TEXT,
        difficulty               TEXT DEFAULT 'moderate',
        classification           TEXT,
        destination_type         TEXT,
@@ -356,6 +385,7 @@ exports.ensureDestinationSchema = async () => {
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS published_at       TIMESTAMPTZ`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS featured_at        TIMESTAMPTZ`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS created_by         INTEGER`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS adventure_category TEXT`,
 
     /* Widen narrow VARCHAR columns */
     `DO $$BEGIN
@@ -526,6 +556,7 @@ exports.ensureDestinationSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_dest_is_active       ON destinations (is_active)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_is_featured     ON destinations (is_featured) WHERE is_featured = true`,
     `CREATE INDEX IF NOT EXISTS idx_dest_category        ON destinations (category)`,
+    `CREATE INDEX IF NOT EXISTS idx_dest_adventure_cat  ON destinations (adventure_category)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_rating          ON destinations (rating DESC NULLS LAST)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_created_at      ON destinations (created_at DESC)`,
     `CREATE INDEX IF NOT EXISTS idx_dest_published_at    ON destinations (published_at DESC NULLS LAST)`,
@@ -541,6 +572,7 @@ exports.ensureDestinationSchema = async () => {
   for (const idx of indexes) await run(idx)
 
   COLUMN_META = null
+  destinationColumnsCache = null // Reset cache to force reload on change
   await getColumnMeta()
 
   console.log(`${LOG} ✅ Schema bootstrap complete`)
@@ -609,10 +641,11 @@ const serialize = (row) => {
     localTips:       row.local_tips,
     safetyInfo:      row.safety_info,
 
-    category:        row.category,
-    difficulty:      row.difficulty,
-    classification:  row.classification || null,
-    destinationType: row.destination_type,
+    category:          row.category,
+    adventureCategory: row.adventure_category || null,
+    difficulty:        row.difficulty,
+    classification:    row.classification || null,
+    destinationType:   row.destination_type,
 
     country: {
       id:        row.country_id,
@@ -881,6 +914,13 @@ const buildFilters = async (filters, { adminMode = false } = {}) => {
   if (filters.category) {
     conds.push(`d.category = $${pi++}`)
     params.push(filters.category)
+  }
+
+  const actualColumns = await getDestinationColumns()
+
+  if ((filters.adventure_category || filters.adventureCategory) && actualColumns.includes("adventure_category")) {
+    conds.push(`d.adventure_category = $${pi++}`)
+    params.push(filters.adventure_category || filters.adventureCategory)
   }
 
   if (filters.difficulty) {
@@ -1164,7 +1204,7 @@ exports.getByCountry = async (req, res, next) => {
          FROM destinations d
          LEFT JOIN countries c ON c.id = d.country_id
          ${where}`,
-        params,
+         params,
       ),
       query(
         `${BASE_SELECT} ${where}
@@ -1758,83 +1798,86 @@ exports.create = async (req, res, next) => {
     const publishedAt = status === 'published' ? new Date() : null
     const featuredAt  = toBool(data.is_featured) ? new Date() : null
 
+    const actualColumns = await getDestinationColumns()
+
+    // Map possible fields dynamically according to database schema
+    const fieldsToInsert = {
+      country_id: country.id,
+      name: data.name.trim(),
+      slug: slug,
+      tagline: data.tagline || null,
+      short_description: data.short_description || null,
+      description: data.description || null,
+      overview: data.overview || null,
+      what_to_expect: data.what_to_expect || null,
+      best_time_to_visit: data.best_time_to_visit || null,
+      getting_there: data.getting_there || null,
+      local_tips: data.local_tips || null,
+      safety_info: data.safety_info || null,
+      category: truncate('category', data.category || 'safari'),
+      adventure_category: truncate('adventure_category', data.adventure_category || null),
+      difficulty: truncate('difficulty', data.difficulty || 'moderate'),
+      classification: truncate('classification', data.classification || null),
+      destination_type: data.destination_type || null,
+      latitude: toNum(data.latitude),
+      longitude: toNum(data.longitude),
+      altitude_meters: toNum(data.altitude_meters),
+      address: data.address || null,
+      region: data.region || null,
+      nearest_city: data.nearest_city || null,
+      nearest_airport: data.nearest_airport || null,
+      distance_from_airport_km: toNum(data.distance_from_airport_km),
+      image_url: mainImg,
+      image_urls: imageUrls,
+      hero_image: safeMediaValue(data.hero_image),
+      thumbnail_url: safeMediaValue(data.thumbnail_url),
+      video_url: data.video_url || null,
+      virtual_tour_url: data.virtual_tour_url || null,
+      duration_days: toNum(data.duration_days),
+      duration_nights: toNum(data.duration_nights),
+      duration_display: fmtDuration(toNum(data.duration_days), toNum(data.duration_nights)),
+      min_group_size: toNum(data.min_group_size, 1),
+      max_group_size: toNum(data.max_group_size),
+      min_age: toNum(data.min_age),
+      fitness_level: truncate('fitness_level', data.fitness_level || null),
+      highlights: toArr(data.highlights),
+      activities: toArr(data.activities),
+      attractions: JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []),
+      wildlife: toArr(data.wildlife),
+      entrance_fee: data.entrance_fee || null,
+      operating_hours: data.operating_hours || null,
+      status: status,
+      is_active: data.is_active !== undefined ? toBool(data.is_active) : true,
+      is_featured: toBool(data.is_featured),
+      is_popular: toBool(data.is_popular),
+      is_new: toBool(data.is_new),
+      is_eco_friendly: toBool(data.is_eco_friendly),
+      is_family_friendly: toBool(data.is_family_friendly),
+      meta_title: data.meta_title || data.name.trim(),
+      meta_description: data.meta_description || data.short_description || null,
+      published_at: publishedAt,
+      featured_at: featuredAt,
+      created_by: req.user?.id || null,
+    }
+
+    const insertColumns = []
+    const placeholders = []
+    const values = []
+    let paramIdx = 1
+
+    for (const [col, val] of Object.entries(fieldsToInsert)) {
+      if (actualColumns.includes(col.toLowerCase())) {
+        insertColumns.push(col)
+        placeholders.push(`$${paramIdx++}`)
+        values.push(val)
+      }
+    }
+
     const { rows } = await query(
-      `INSERT INTO destinations (
-        country_id, name, slug, tagline, short_description, description, overview,
-        what_to_expect, best_time_to_visit, getting_there, local_tips, safety_info,
-        category, difficulty, classification, destination_type,
-        latitude, longitude, altitude_meters, address, region,
-        nearest_city, nearest_airport, distance_from_airport_km,
-        image_url, image_urls, hero_image, thumbnail_url, video_url, virtual_tour_url,
-        duration_days, duration_nights, duration_display,
-        min_group_size, max_group_size, min_age, fitness_level,
-        highlights, activities, attractions, wildlife,
-        entrance_fee, operating_hours,
-        status, is_active, is_featured, is_popular, is_new, is_eco_friendly, is_family_friendly,
-        meta_title, meta_description,
-        published_at, featured_at, created_by
-      ) VALUES (
-        $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-        $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
-        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55
-      ) RETURNING *`,
-      [
-        country.id, // $1
-        data.name.trim(), // $2
-        slug, // $3
-        data.tagline           || null, // $4
-        data.short_description || null, // $5
-        data.description       || null, // $6
-        data.overview          || null, // $7
-        data.what_to_expect    || null, // $8
-        data.best_time_to_visit|| null, // $9
-        data.getting_there     || null, // $10
-        data.local_tips        || null, // $11
-        data.safety_info       || null, // $12
-        truncate('category',   data.category   || 'safari'), // $13
-        truncate('difficulty', data.difficulty || 'moderate'), // $14
-        truncate('classification', data.classification || null), // $15
-        data.destination_type  || null, // $16
-        toNum(data.latitude), // $17
-        toNum(data.longitude), // $18
-        toNum(data.altitude_meters), // $19
-        data.address           || null, // $20
-        data.region            || null, // $21
-        data.nearest_city      || null, // $22
-        data.nearest_airport   || null, // $23
-        toNum(data.distance_from_airport_km), // $24
-        mainImg, // $25
-        imageUrls, // $26
-        safeMediaValue(data.hero_image), // $27
-        safeMediaValue(data.thumbnail_url), // $28
-        data.video_url         || null, // $29
-        data.virtual_tour_url  || null, // $30
-        toNum(data.duration_days), // $31
-        toNum(data.duration_nights), // $32
-        fmtDuration(toNum(data.duration_days), toNum(data.duration_nights)), // $33
-        toNum(data.min_group_size, 1), // $34
-        toNum(data.max_group_size), // $35
-        toNum(data.min_age), // $36
-        truncate('fitness_level', data.fitness_level || null), // $37
-        toArr(data.highlights), // $38
-        toArr(data.activities), // $39
-        JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []), // $40
-        toArr(data.wildlife), // $41
-        data.entrance_fee      || null, // $42
-        data.operating_hours   || null, // $43
-        status, // $44
-        data.is_active !== undefined ? toBool(data.is_active) : true, // $45
-        toBool(data.is_featured), // $46
-        toBool(data.is_popular), // $47
-        toBool(data.is_new), // $48
-        toBool(data.is_eco_friendly), // $49
-        toBool(data.is_family_friendly), // $50
-        data.meta_title        || data.name.trim(), // $51
-        data.meta_description  || data.short_description || null, // $52
-        publishedAt, // $53
-        featuredAt, // $54
-        req.user?.id           || null, // $55
-      ],
+      `INSERT INTO destinations (${insertColumns.join(", ")})
+       VALUES (${placeholders.join(", ")})
+       RETURNING *`,
+      values
     )
 
     await syncCountryDestCount(country.id)
@@ -1953,8 +1996,14 @@ exports.update = async (req, res, next) => {
       if (fields[col] !== undefined) fields[col] = truncate(col, fields[col])
     }
 
+    // Get actual column names in database
+    const actualColumns = await getDestinationColumns();
+
+    // Clean undefined fields AND fields that DO NOT exist as columns in the DB
     for (const k of Object.keys(fields)) {
-      if (fields[k] === undefined) delete fields[k]
+      if (fields[k] === undefined || !actualColumns.includes(k.toLowerCase())) {
+        delete fields[k]
+      }
     }
 
     const keys = Object.keys(fields)
@@ -2108,7 +2157,7 @@ exports.bulkUpdate = async (req, res, next) => {
 
     const ALLOWED = new Set([
       'status','is_active','is_featured','is_popular','is_new',
-      'is_eco_friendly','is_family_friendly','category','difficulty','classification',
+      'is_eco_friendly','is_family_friendly','category','adventure_category','difficulty','classification',
     ])
 
     const fields = {}
@@ -2131,6 +2180,14 @@ exports.bulkUpdate = async (req, res, next) => {
 
     for (const col of Object.keys(VARCHAR_LIMITS)) {
       if (fields[col] !== undefined) fields[col] = truncate(col, fields[col])
+    }
+
+    // Filter updates using actual database table structure
+    const actualColumns = await getDestinationColumns();
+    for (const k of Object.keys(fields)) {
+      if (!actualColumns.includes(k.toLowerCase())) {
+        delete fields[k]
+      }
     }
 
     const keys           = Object.keys(fields)
@@ -2203,7 +2260,6 @@ exports.bulkDelete = async (req, res, next) => {
 
 /* ═══════════════════════════════════════════════════════════════════════════
    ITINERARY / FAQs / IMAGES / TAGS / TIPS / REVIEWS / ENGAGEMENT
-   (unchanged sub-resource endpoints)
 ═══════════════════════════════════════════════════════════════════════════ */
 
 exports.getItinerary = async (req, res, next) => {
@@ -2708,7 +2764,7 @@ exports.updateImage = async (req, res, next) => {
     if (sort_order !== undefined) fields.sort_order = toNum(sort_order)
 
     const keys = Object.keys(fields)
-    if (!keys.length) return res.status(400).json({ success: false, error: 'No fields to update' })
+    if (!keys.length) return res.status(404).json({ success: false, error: 'No fields to update' })
 
     const vals = [...keys.map(k => fields[k]), imageId, id]
     const sets = keys.map((k, i) => `${k} = $${i + 1}`).join(', ')

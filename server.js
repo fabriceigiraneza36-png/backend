@@ -387,6 +387,11 @@ CREATE TABLE IF NOT EXISTS countries (
               ALTER TABLE countries ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
               ALTER SEQUENCE countries_id_seq AS BIGINT;
           END IF;
+    -- Add code column if missing
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
+                   WHERE table_name='countries' AND column_name='code') THEN
+        ALTER TABLE countries ADD COLUMN code VARCHAR(10) UNIQUE;
+    END IF;
        END $$;
     `)
 

@@ -1,5 +1,4 @@
-﻿// controllers/countriesController.js
-"use strict";
+﻿"use strict";
 
 const crypto = require("crypto");
 const { query } = require("../config/db");
@@ -8,7 +7,7 @@ const { slugify } = require("../utils/slugify");
 const { normalizeImages, urlsOnly } = require("../utils/media");
 
 /* ═══════════════════════════════════════════════════════════════════════════
-    SAFE REQUIRE: HELPERS
+    SAFE REQUIRE: HELPERS & SERVICE RESOLUTION
 ═══════════════════════════════════════════════════════════════════════════ */
 
 let getCountryService;
@@ -77,6 +76,32 @@ const sanitizeString = (value) => {
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
+    DYNAMIC SCHEMA INSPECTION (Bulletproof column-crash prevention)
+═══════════════════════════════════════════════════════════════════════════ */
+
+let tableColumnsCache = null;
+
+const getTableColumns = async () => {
+  if (tableColumnsCache) return tableColumnsCache;
+  try {
+    const { rows } = await query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_name = 'countries'
+    `);
+    if (rows && rows.length > 0) {
+      tableColumnsCache = rows.map(r => r.column_name.toLowerCase());
+      logger.info(`[Countries] Detected database columns: ${tableColumnsCache.join(", ")}`);
+      return tableColumnsCache;
+    }
+  } catch (err) {
+    logger.warn("[Countries] Failed to query schema, utilizing safety fallbacks:", err.message);
+  }
+  // Standard safety fallback columns if system inspection fails
+  return ["id", "name", "slug", "description", "is_active", "is_featured", "continent", "region"];
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
     EXPORTS
 ═══════════════════════════════════════════════════════════════════════════ */
 
@@ -94,22 +119,27 @@ const getAll = async (req, res, next) => {
     const limitNum = Math.min(parseInt(limit, 10), 100);
     const offset = (pageNum - 1) * limitNum;
 
+    // Dynamically retrieve actual columns to avoid querying missing ones (like 'code')
+    const actualColumns = await getTableColumns();
+
     let cleanSortBy = "name";
-    const validSortFields = ["name", "code", "continent", "region"];
-    if (validSortFields.includes(sortBy)) {
-      cleanSortBy = sortBy;
+    if (actualColumns.includes(sortBy.toLowerCase())) {
+      cleanSortBy = sortBy.toLowerCase();
+    } else {
+      logger.warn(`[Countries] Sort column "${sortBy}" does not exist in DB schema. Falling back to "name".`);
+      cleanSortBy = actualColumns.includes("name") ? "name" : (actualColumns[0] || "id");
     }
     
     const cleanOrder = ["asc", "desc"].includes(order.toLowerCase()) ? order.toUpperCase() : "ASC";
     const searchTerm = `%${search}%`;
 
     const { rows: dataRes } = await query(
-      `SELECT * FROM countries WHERE name ILIKE $1 OR code ILIKE $1 ORDER BY ${cleanSortBy} ${cleanOrder} LIMIT $2 OFFSET $3`,
+      `SELECT * FROM countries WHERE name ILIKE $1 ORDER BY ${cleanSortBy} ${cleanOrder} LIMIT $2 OFFSET $3`,
       [searchTerm, limitNum, offset]
     );
 
     const { rows: countRes } = await query(
-      `SELECT COUNT(*) FROM countries WHERE name ILIKE $1 OR code ILIKE $1`,
+      `SELECT COUNT(*) FROM countries WHERE name ILIKE $1`,
       [searchTerm]
     );
 
@@ -316,24 +346,27 @@ const create = async (req, res, next) => {
       is_active,
     } = req.body;
 
+    const actualColumns = await getTableColumns();
+    const hasCodeColumn = actualColumns.includes("code");
+
     // Required fields validation
-    if (!name || !code) {
+    if (!name || (hasCodeColumn && !code)) {
       return res.status(400).json({
         success: false,
-        error: "Name and code are required",
+        error: hasCodeColumn ? "Name and code are required" : "Name is required",
       });
     }
 
     const nameTrimmed = sanitizeString(name);
-    const codeTrimmed = sanitizeString(code).toUpperCase();
-    if (nameTrimmed.length === 0 || codeTrimmed.length === 0) {
+    const codeTrimmed = code ? sanitizeString(code).toUpperCase() : "";
+    if (nameTrimmed.length === 0 || (hasCodeColumn && codeTrimmed.length === 0)) {
       return res.status(400).json({
         success: false,
-        error: "Name and code cannot be empty after sanitization",
+        error: "Required validation failed: empty parameters after sanitization",
       });
     }
 
-    if (codeTrimmed.length !== 2) {
+    if (hasCodeColumn && codeTrimmed.length !== 2) {
       return res.status(400).json({
         success: false,
         error: "Country code must be exactly 2 characters",
@@ -354,15 +387,18 @@ const create = async (req, res, next) => {
     let paramIndex = 1;
 
     const addField = (col, val, isString = false) => {
-      if (val !== undefined && val !== null) {
-        columns.push(col);
-        placeholders.push(`$${paramIndex++}`);
-        values.push(isString ? sanitizeString(val) : val);
+      // Safely append values ONLY if the column actually exists in the DB table
+      if (actualColumns.includes(col.toLowerCase())) {
+        if (val !== undefined && val !== null) {
+          columns.push(col);
+          placeholders.push(`$${paramIndex++}`);
+          values.push(isString ? sanitizeString(val) : val);
+        }
       }
     };
 
     addField("name", nameTrimmed, true);
-    addField("code", codeTrimmed, true);
+    if (hasCodeColumn) addField("code", codeTrimmed, true);
     addField("continent", continent, true);
     addField("region", region, true);
     addField("slug", slugValue, true);
@@ -487,14 +523,19 @@ const update = async (req, res, next) => {
       is_active,
     } = req.body;
 
+    const actualColumns = await getTableColumns();
+    const hasCodeColumn = actualColumns.includes("code");
+
     const setClauses = [];
     const values = [];
     let paramIndex = 1;
 
     const addField = (col, val, isString = false) => {
-      if (val !== undefined && val !== null) {
-        setClauses.push(`${col} = $${paramIndex++}`);
-        values.push(isString ? sanitizeString(val) : val);
+      if (actualColumns.includes(col.toLowerCase())) {
+        if (val !== undefined && val !== null) {
+          setClauses.push(`${col} = $${paramIndex++}`);
+          values.push(isString ? sanitizeString(val) : val);
+        }
       }
     };
 
@@ -508,7 +549,7 @@ const update = async (req, res, next) => {
       }
       addField("name", nameTrimmed, true);
     }
-    if (code !== undefined) {
+    if (code !== undefined && hasCodeColumn) {
       const codeTrimmed = sanitizeString(code).toUpperCase();
       if (codeTrimmed.length === 0) {
         return res.status(400).json({
@@ -583,7 +624,6 @@ const update = async (req, res, next) => {
       });
     }
 
-    // Set the placeholder index specifically for the WHERE clause to avoid index displacement
     const whereParamIndex = paramIndex;
     values.push(id); 
 
@@ -847,12 +887,27 @@ module.exports = {
   },
 };
 
-const cleanCountryImages = (value) => JSON.stringify(normalizeImages(value).slice(0, 10));
-const cleanCountryImage = (value) => normalizeImages([value])[0]?.url || null;
-const sanitizeCountryMedia = (country) => ({
-  ...country,
-  image_url: cleanCountryImage(country.image_url),
-  cover_image_url: cleanCountryImage(country.cover_image_url),
-  hero_image: cleanCountryImage(country.hero_image),
-  hero_images: cleanCountryImages(country.hero_images),
-});
+const cleanCountryImages = (value) => {
+  try {
+    const normalized = normalizeImages(value);
+    return JSON.stringify((normalized || []).slice(0, 10));
+  } catch (err) {
+    return JSON.stringify([]);
+  }
+};
+
+const cleanCountryImage = (value) => {
+  const normalized = normalizeImages([value]);
+  return (normalized && normalized[0]?.url) || null;
+};
+
+const sanitizeCountryMedia = (country) => {
+  if (!country) return country;
+  return {
+    ...country,
+    image_url: cleanCountryImage(country.image_url),
+    cover_image_url: cleanCountryImage(country.cover_image_url),
+    hero_image: cleanCountryImage(country.hero_image),
+    hero_images: cleanCountryImages(country.hero_images),
+  };
+};
