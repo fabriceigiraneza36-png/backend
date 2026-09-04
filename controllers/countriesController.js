@@ -107,43 +107,33 @@ const getTableColumns = async () => {
 
 const getAll = async (req, res, next) => {
   try {
-    const {
-      page = 1,
-      limit = 10,
-      search = "",
-      sortBy = "name",
-      order = "asc",
-    } = req.query;
-
-    const pageNum = Math.max(parseInt(page, 10), 1);
-    const limitNum = Math.min(parseInt(limit, 10), 100);
+    const { page = 1, limit = 10, search = "", sortBy = "name", order = "asc" } = req.query;
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.min(parseInt(limit, 10) || 10, 100);
     const offset = (pageNum - 1) * limitNum;
+    const tableColumns = await getTableColumns();
+    const requestedSort = String(sortBy).toLowerCase();
+    const cleanSortBy = ["name", "code", "continent", "region"].includes(requestedSort) && tableColumns.includes(requestedSort)
+      ? requestedSort
+      : "name";
+    const cleanOrder = ["asc", "desc"].includes(String(order).toLowerCase()) ? String(order).toUpperCase() : "ASC";
+    const filters = ["name ILIKE $1"];
+    const filterValues = [`%${search}%`];
 
-    // Dynamically retrieve actual columns to avoid querying missing ones (like 'code')
-    const actualColumns = await getTableColumns();
-
-    let cleanSortBy = "name";
-    if (actualColumns.includes(sortBy.toLowerCase())) {
-      cleanSortBy = sortBy.toLowerCase();
-    } else {
-      logger.warn(`[Countries] Sort column "${sortBy}" does not exist in DB schema. Falling back to "name".`);
-      cleanSortBy = actualColumns.includes("name") ? "name" : (actualColumns[0] || "id");
+    if (String(req.query.is_active).toLowerCase() === "true" && tableColumns.includes("is_active")) {
+      filters.push(`is_active = $${filterValues.length + 1}`);
+      filterValues.push(true);
     }
-    
-    const cleanOrder = ["asc", "desc"].includes(order.toLowerCase()) ? order.toUpperCase() : "ASC";
-    const searchTerm = `%${search}%`;
 
     const { rows: dataRes } = await query(
-      `SELECT * FROM countries WHERE name ILIKE $1 ORDER BY ${cleanSortBy} ${cleanOrder} LIMIT $2 OFFSET $3`,
-      [searchTerm, limitNum, offset]
+      `SELECT * FROM countries WHERE ${filters.join(" AND ")} ORDER BY ${cleanSortBy} ${cleanOrder} LIMIT $${filterValues.length + 1} OFFSET $${filterValues.length + 2}`,
+      [...filterValues, limitNum, offset]
     );
-
     const { rows: countRes } = await query(
-      `SELECT COUNT(*) FROM countries WHERE name ILIKE $1`,
-      [searchTerm]
+      `SELECT COUNT(*) FROM countries WHERE ${filters.join(" AND ")}`,
+      filterValues
     );
-
-    const total = parseInt(countRes.rows[0].count, 10);
+    const total = parseInt(countRes[0].count, 10);
 
     return res.json({
       success: true,
@@ -166,7 +156,6 @@ const getAll = async (req, res, next) => {
 const getById = async (req, res, next) => {
   try {
     const { id } = req.params;
-
     if (!/^\d+$/.test(id)) {
       return res.status(400).json({
         success: false,
