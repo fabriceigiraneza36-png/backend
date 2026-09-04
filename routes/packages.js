@@ -69,6 +69,7 @@ const packagePayload = (body = {}, existing = {}) => ({
 ═══════════════════════════════════════════════════════════════════════════ */
 
 let _schemaChecked = false
+let _hasDestinationId = false
 const ensurePackagesSchema = async () => {
   if (_schemaChecked) return
   _schemaChecked = true
@@ -108,6 +109,14 @@ const ensurePackagesSchema = async () => {
       await db(sql).catch(() => {})
     }
 
+    const destinationColumn = await db(`
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name = 'packages' AND column_name = 'destination_id'
+      LIMIT 1
+    `).catch(() => ({ rows: [] }))
+    _hasDestinationId = destinationColumn.rows.length > 0
+
     logger.info('[Packages] ✅ Schema verified')
   } catch (err) {
     logger.warn('[Packages] Schema check failed:', err.message)
@@ -134,7 +143,9 @@ router.get('/', optionalAuth, async (req, res) => {
 
     if (destination) {
       vals.push(destination)
-      where.push(`p.destination_id = $${vals.length}`)
+      where.push(_hasDestinationId
+        ? `p.destination_id = $${vals.length}`
+        : `p.destination = $${vals.length}`)
     }
 
     let orderBy = 'p.is_featured DESC NULLS LAST, p.created_at DESC'
@@ -162,12 +173,18 @@ router.get('/', optionalAuth, async (req, res) => {
     const limitIdx   = dataVals.push(parsedLimit)
     const offsetIdx  = dataVals.push(parsedOffset)
 
-    const dataRes = await db(
+    const destinationSelect = _hasDestinationId
+      ? 'd.name AS destination_name, d.slug AS destination_slug'
+      : 'p.destination AS destination_name, NULL AS destination_slug'
+    const destinationJoin = _hasDestinationId
+      ? 'LEFT JOIN destinations d ON d.id = p.destination_id'
+      : ''
+
+    const dataRes   = await db(
       `SELECT p.*,
-              d.name AS destination_name,
-              d.slug AS destination_slug
+              ${destinationSelect}
        FROM packages p
-       LEFT JOIN destinations d ON d.id = p.destination_id
+       ${destinationJoin}
        ${whereSql}
        ORDER BY ${orderBy}
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

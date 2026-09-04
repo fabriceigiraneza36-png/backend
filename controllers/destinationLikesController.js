@@ -28,9 +28,9 @@ exports.getLikes = async (req, res, next) => {
           as: "user",
           attributes: [
             "id", 
-            ["full_name", "name"],    // Safely map Database full_name to output name
+            ["full_name", "name"],    // Map the database column to the API response name
             "email", 
-            ["avatar_url", "avatar"]  // Safely map Database avatar_url to output avatar
+            ["avatar_url", "avatar"]  // Map the database column to the API response name
           ],
         },
       ],

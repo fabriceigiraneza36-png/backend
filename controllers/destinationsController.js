@@ -117,6 +117,7 @@ const safeQuery = async (sql, params = [], label = '') => {
 const VARCHAR_LIMITS = {
   status:         30,
   difficulty:     50,
+  classification: 100,
   price_currency: 10,
   malaria_risk:   50,
   safety_rating:  30,
@@ -217,7 +218,7 @@ exports.ensureDestinationSchema = async () => {
 
   /* ── Base table (if it doesn't exist) ─────────────────────────────── */
   await run(`
-CREATE TABLE IF NOT EXISTS destinations (
+     CREATE TABLE IF NOT EXISTS destinations (
        id                       BIGSERIAL PRIMARY KEY,
        name                     TEXT NOT NULL,
        slug                     TEXT NOT NULL UNIQUE,
@@ -233,6 +234,7 @@ CREATE TABLE IF NOT EXISTS destinations (
        safety_info              TEXT,
        category                 TEXT DEFAULT 'safari',
        difficulty               TEXT DEFAULT 'moderate',
+       classification           TEXT,
        destination_type         TEXT,
        latitude                 NUMERIC(10,7),
        longitude                NUMERIC(10,7),
@@ -258,7 +260,7 @@ CREATE TABLE IF NOT EXISTS destinations (
        fitness_level            TEXT,
        highlights               TEXT[] DEFAULT '{}'::TEXT[],
        activities               TEXT[] DEFAULT '{}'::TEXT[],
-      attractions              JSONB DEFAULT '[]'::JSONB,
+       attractions              JSONB DEFAULT '[]'::JSONB,
        wildlife                 TEXT[] DEFAULT '{}'::TEXT[],
        entrance_fee             TEXT,
        operating_hours          TEXT,
@@ -284,16 +286,6 @@ CREATE TABLE IF NOT EXISTS destinations (
        created_at               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
        updated_at               TIMESTAMPTZ NOT NULL DEFAULT NOW()
      )
-     -- Ensure id is bigint for existing tables
-     DO $$
-     BEGIN
-        IF EXISTS (SELECT 1 FROM information_schema.columns 
-                   WHERE table_name='destinations' AND column_name='id' 
-                   AND data_type = 'integer') THEN
-            ALTER TABLE destinations ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
-            ALTER SEQUENCE destinations_id_seq AS BIGINT;
-        END IF;
-     END $$;
   `)
 
   /* ── Column additions for existing installs ──────────────────────── */
@@ -305,6 +297,7 @@ CREATE TABLE IF NOT EXISTS destinations (
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS getting_there      TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS local_tips         TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS safety_info        TEXT`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS classification     TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS destination_type   TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS latitude           NUMERIC(10,7)`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS longitude          NUMERIC(10,7)`,
@@ -555,8 +548,8 @@ const BASE_SELECT = `
     c.flag_url  AS country_flag_url,
     c.continent AS country_continent,
     c.region    AS country_region,
-      (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
-      (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
+    (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
+    (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
   FROM destinations d
   LEFT JOIN countries c ON c.id = d.country_id
 `
@@ -607,6 +600,7 @@ const serialize = (row) => {
 
     category:        row.category,
     difficulty:      row.difficulty,
+    classification:  row.classification || null,
     destinationType: row.destination_type,
 
     country: {
@@ -621,8 +615,8 @@ const serialize = (row) => {
     countryId:   row.country_id,
     countrySlug: row.country_slug || null,
     countryName: row.country_name || null,
-      likesCount: Number(row.likes_count || 0),
-      commentsCount: Number(row.comments_count || 0),
+    likesCount: Number(row.likes_count || 0),
+    commentsCount: Number(row.comments_count || 0),
 
     region:                row.region,
     nearestCity:           row.nearest_city,
@@ -883,6 +877,11 @@ const buildFilters = async (filters, { adminMode = false } = {}) => {
     params.push(filters.difficulty)
   }
 
+  if (filters.classification) {
+    conds.push(`d.classification = $${pi++}`)
+    params.push(filters.classification)
+  }
+
   if (filters.destination_type) {
     conds.push(`d.destination_type = $${pi++}`)
     params.push(filters.destination_type)
@@ -963,10 +962,9 @@ const SORT_MAP = {
   newest:   'd.created_at DESC',
   oldest:   'd.created_at ASC',
   popular:  'd.booking_count DESC NULLS LAST, d.view_count DESC NULLS LAST',
-    popular:  'd.booking_count DESC NULLS LAST, d.view_count DESC NULLS LAST',
-    engagement: 'likes_count DESC, comments_count DESC, d.is_featured DESC, d.rating DESC NULLS LAST, d.created_at DESC',
-    likes: 'likes_count DESC, comments_count DESC, d.created_at DESC',
-    comments: 'comments_count DESC, likes_count DESC, d.created_at DESC',
+  engagement: 'likes_count DESC, comments_count DESC, d.is_featured DESC, d.rating DESC NULLS LAST, d.created_at DESC',
+  likes: 'likes_count DESC, comments_count DESC, d.created_at DESC',
+  comments: 'comments_count DESC, likes_count DESC, d.created_at DESC',
   featured: 'd.is_featured DESC, d.rating DESC NULLS LAST, d.created_at DESC',
   views:    'd.view_count DESC NULLS LAST',
   duration: 'd.duration_days ASC NULLS LAST',
@@ -1752,7 +1750,7 @@ exports.create = async (req, res, next) => {
       `INSERT INTO destinations (
         country_id, name, slug, tagline, short_description, description, overview,
         what_to_expect, best_time_to_visit, getting_there, local_tips, safety_info,
-        category, difficulty, destination_type,
+        category, difficulty, classification, destination_type,
         latitude, longitude, altitude_meters, address, region,
         nearest_city, nearest_airport, distance_from_airport_km,
         image_url, image_urls, hero_image, thumbnail_url, video_url, virtual_tour_url,
@@ -1766,77 +1764,77 @@ exports.create = async (req, res, next) => {
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
         $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
-        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54
+        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54,$55
       ) RETURNING *`,
       [
-        country.id,
-        data.name.trim(),
-        slug,
-        data.tagline           || null,
-        data.short_description || null,
-        data.description       || null,
-        data.overview          || null,
-        data.what_to_expect    || null,
-        data.best_time_to_visit|| null,
-        data.getting_there     || null,
-        data.local_tips        || null,
-        data.safety_info       || null,
-        truncate('category',   data.category   || 'safari'),
-        truncate('difficulty', data.difficulty || 'moderate'),
-        data.destination_type  || null,
-        toNum(data.latitude),
-        toNum(data.longitude),
-        toNum(data.altitude_meters),
-        data.address           || null,
-        data.region            || null,
-        data.nearest_city      || null,
-        data.nearest_airport   || null,
-        toNum(data.distance_from_airport_km),
-        mainImg,
-        imageUrls,
-        safeMediaValue(data.hero_image),
-        safeMediaValue(data.thumbnail_url),
-        data.video_url         || null,
-        data.virtual_tour_url  || null,
-        toNum(data.duration_days),
-        toNum(data.duration_nights),
-        fmtDuration(toNum(data.duration_days), toNum(data.duration_nights)),
-        toNum(data.min_group_size, 1),
-        toNum(data.max_group_size),
-        toNum(data.min_age),
-        truncate('fitness_level', data.fitness_level || null),
-        toArr(data.highlights),
-        toArr(data.activities),
-        JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []),
-        toArr(data.wildlife),
-        data.entrance_fee      || null,
-        data.operating_hours   || null,
-        status,
-        data.is_active !== undefined ? toBool(data.is_active) : true,
-        toBool(data.is_featured),
-        toBool(data.is_popular),
-        toBool(data.is_new),
-        toBool(data.is_eco_friendly),
-        toBool(data.is_family_friendly),
-        data.meta_title        || data.name.trim(),
-        data.meta_description  || data.short_description || null,
-        publishedAt,
-        featuredAt,
-        req.user?.id           || null,
+        country.id, // $1
+        data.name.trim(), // $2
+        slug, // $3
+        data.tagline           || null, // $4
+        data.short_description || null, // $5
+        data.description       || null, // $6
+        data.overview          || null, // $7
+        data.what_to_expect    || null, // $8
+        data.best_time_to_visit|| null, // $9
+        data.getting_there     || null, // $10
+        data.local_tips        || null, // $11
+        data.safety_info       || null, // $12
+        truncate('category',   data.category   || 'safari'), // $13
+        truncate('difficulty', data.difficulty || 'moderate'), // $14
+        truncate('classification', data.classification || null), // $15
+        data.destination_type  || null, // $16
+        toNum(data.latitude), // $17
+        toNum(data.longitude), // $18
+        toNum(data.altitude_meters), // $19
+        data.address           || null, // $20
+        data.region            || null, // $21
+        data.nearest_city      || null, // $22
+        data.nearest_airport   || null, // $23
+        toNum(data.distance_from_airport_km), // $24
+        mainImg, // $25
+        imageUrls, // $26
+        safeMediaValue(data.hero_image), // $27
+        safeMediaValue(data.thumbnail_url), // $28
+        data.video_url         || null, // $29
+        data.virtual_tour_url  || null, // $30
+        toNum(data.duration_days), // $31
+        toNum(data.duration_nights), // $32
+        fmtDuration(toNum(data.duration_days), toNum(data.duration_nights)), // $33
+        toNum(data.min_group_size, 1), // $34
+        toNum(data.max_group_size), // $35
+        toNum(data.min_age), // $36
+        truncate('fitness_level', data.fitness_level || null), // $37
+        toArr(data.highlights), // $38
+        toArr(data.activities), // $39
+        JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []), // $40
+        toArr(data.wildlife), // $41
+        data.entrance_fee      || null, // $42
+        data.operating_hours   || null, // $43
+        status, // $44
+        data.is_active !== undefined ? toBool(data.is_active) : true, // $45
+        toBool(data.is_featured), // $46
+        toBool(data.is_popular), // $47
+        toBool(data.is_new), // $48
+        toBool(data.is_eco_friendly), // $49
+        toBool(data.is_family_friendly), // $50
+        data.meta_title        || data.name.trim(), // $51
+        data.meta_description  || data.short_description || null, // $52
+        publishedAt, // $53
+        featuredAt, // $54
+        req.user?.id           || null, // $55
       ],
-     )
- 
-     await syncCountryDestCount(country.id)
+    )
+
+    await syncCountryDestCount(country.id)
      
-     // Send destination alert email to subscribers
-     try {
-       await sendDestinationAlertEmail(rows[0])
-     } catch (emailErr) {
-       console.warn(`${LOG} Destination alert email failed:`, emailErr.message)
-       // Don't fail the destination creation if email fails
-     }
+    // Send destination alert email to subscribers
+    try {
+      await sendDestinationAlertEmail(rows[0])
+    } catch (emailErr) {
+      console.warn(`${LOG} Destination alert email failed:`, emailErr.message)
+    }
      
-     const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
+    const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
     return res.status(201).json({
       success: true,
       message: 'Destination created',
@@ -2098,7 +2096,7 @@ exports.bulkUpdate = async (req, res, next) => {
 
     const ALLOWED = new Set([
       'status','is_active','is_featured','is_popular','is_new',
-      'is_eco_friendly','is_family_friendly','category','difficulty',
+      'is_eco_friendly','is_family_friendly','category','difficulty','classification',
     ])
 
     const fields = {}

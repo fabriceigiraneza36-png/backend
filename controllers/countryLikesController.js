@@ -23,7 +23,7 @@ exports.getLikes = async (req, res, next) => {
         {
           model: require("../models").User,
           as: "user",
-          attributes: ["id", "name", "email", "avatar"],
+          attributes: ["id", ["full_name", "name"], "email", ["avatar_url", "avatar"]],
         },
       ],
       order: [["createdAt", "DESC"]],
