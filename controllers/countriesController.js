@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const { slugify } = require("../utils/slugify");
+const { normalizeImages, urlsOnly } = require("../utils/media");
 
 /* ═══════════════════════════════════════════════════════════════════════════
     SAFE REQUIRE: HELPERS
@@ -116,7 +117,7 @@ const getAll = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: dataRes,
+      data: dataRes.map(sanitizeCountryMedia),
       pagination: {
         total,
         page: pageNum,
@@ -157,7 +158,7 @@ const getById = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: rows[0],
+      data: sanitizeCountryMedia(rows[0]),
     });
   } catch (err) {
     logger.error("[Countries] getById:", err.message);
@@ -176,7 +177,7 @@ const getOne = async (req, res, next) => {
     if (!countryQuery.rows.length) {
       return res.status(404).json({ error: "Country not found" });
     }
-    const country = countryQuery.rows[0];
+    const country = sanitizeCountryMedia(countryQuery.rows[0]);
 
     // Track views asynchronously
     query("UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1", [country.id]).catch(() => {});
@@ -279,6 +280,7 @@ const create = async (req, res, next) => {
       description,
       full_description,
       hero_images,
+      gallery,
       short_notes,
       destination_count,
       activities,
@@ -361,14 +363,14 @@ const create = async (req, res, next) => {
     addField("official_name", official_name, true);
     addField("flag", flag, true);
     addField("flag_url", flag_url, true);
-    addField("image_url", image_url, true);
-    addField("cover_image_url", cover_image_url, true);
-    addField("hero_image", hero_image, true);
+    addField("image_url", cleanCountryImage(image_url), true);
+    addField("cover_image_url", cleanCountryImage(cover_image_url), true);
+    addField("hero_image", cleanCountryImage(hero_image), true);
     addField("tagline", tagline, true);
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", Array.isArray(hero_images) || typeof hero_images === "object" ? JSON.stringify(hero_images) : hero_images);
+    addField("hero_images", cleanCountryImages(gallery || hero_images));
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
     addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
@@ -449,6 +451,7 @@ const update = async (req, res, next) => {
       description,
       full_description,
       hero_images,
+      gallery,
       short_notes,
       destination_count,
       activities,
@@ -531,14 +534,14 @@ const update = async (req, res, next) => {
     addField("official_name", official_name, true);
     addField("flag", flag, true);
     addField("flag_url", flag_url, true);
-    addField("image_url", image_url, true);
-    addField("cover_image_url", cover_image_url, true);
-    addField("hero_image", hero_image, true);
+    addField("image_url", cleanCountryImage(image_url), true);
+    addField("cover_image_url", cleanCountryImage(cover_image_url), true);
+    addField("hero_image", cleanCountryImage(hero_image), true);
     addField("tagline", tagline, true);
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", Array.isArray(hero_images) || typeof hero_images === "object" ? JSON.stringify(hero_images) : hero_images);
+    addField("hero_images", cleanCountryImages(gallery || hero_images));
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
     addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
@@ -685,9 +688,7 @@ const getImages = async (req, res, next) => {
       heroImages = [];
     }
 
-    const images = heroImages
-      .filter(img => typeof img === 'string' && img.trim() !== '')
-      .map(img => img.trim());
+    const images = urlsOnly(heroImages);
 
     return res.json({
       success: true,
@@ -839,3 +840,13 @@ module.exports = {
     }
   },
 };
+
+const cleanCountryImages = (value) => JSON.stringify(normalizeImages(value));
+const cleanCountryImage = (value) => normalizeImages([value])[0]?.url || null;
+const sanitizeCountryMedia = (country) => ({
+  ...country,
+  image_url: cleanCountryImage(country.image_url),
+  cover_image_url: cleanCountryImage(country.cover_image_url),
+  hero_image: cleanCountryImage(country.hero_image),
+  hero_images: cleanCountryImages(country.hero_images),
+});

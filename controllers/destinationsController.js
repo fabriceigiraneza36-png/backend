@@ -1,8 +1,10 @@
+const safeMediaValue = (value) => isSafeImageUrl(value) ? String(value).trim() : null
 'use strict'
 
 const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
+const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 const { sendDestinationAlertEmail } = require('../services/emailService')
 const LOG = '[Destinations]'
 
@@ -550,8 +552,7 @@ const BASE_SELECT = `
     c.flag      AS country_flag,
     c.flag_url  AS country_flag_url,
     c.continent AS country_continent,
-    c.region    AS country_region
-      c.region    AS country_region,
+    c.region    AS country_region,
       (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
       (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
   FROM destinations d
@@ -580,7 +581,7 @@ const REVIEW_AGG_SQL = `
 
 const serialize = (row) => {
   if (!row) return null
-  const images  = toArr(row.image_urls)
+  const images  = urlsOnly(row.image_urls)
   const mainImg = images[0] || row.image_url || null
 
   return {
@@ -617,7 +618,6 @@ const serialize = (row) => {
     countryId:   row.country_id,
     countrySlug: row.country_slug || null,
     countryName: row.country_name || null,
-      countryName: row.country_name || null,
       likesCount: Number(row.likes_count || 0),
       commentsCount: Number(row.comments_count || 0),
 
@@ -674,7 +674,15 @@ const serialize = (row) => {
     publishedAt: row.published_at,
     featuredAt:  row.featured_at,
 
-    gallery:         [],
+    gallery:         images.map((url, index) => ({
+      id: null,
+      imageUrl: url,
+      thumbnailUrl: url,
+      caption: null,
+      altText: null,
+      isPrimary: index === 0,
+      sortOrder: index,
+    })),
     itinerary:       [],
     faqs:            [],
     reviews:         [],
@@ -689,8 +697,8 @@ const serialize = (row) => {
 
 const serializeImage = (img) => ({
   id:           img.id,
-  imageUrl:     img.image_url,
-  thumbnailUrl: img.thumbnail_url,
+  imageUrl:     isSafeImageUrl(img.image_url) ? img.image_url : null,
+  thumbnailUrl: isSafeImageUrl(img.thumbnail_url) ? img.thumbnail_url : (isSafeImageUrl(img.image_url) ? img.image_url : null),
   caption:      img.caption,
   altText:      img.alt_text,
   isPrimary:    toBool(img.is_primary),
@@ -1728,9 +1736,9 @@ exports.create = async (req, res, next) => {
     const slug = await createUniqueSlug(data.name.trim())
 
     const uploadedImg = req.file ? getUploadedFileUrl(req.file) : null
-    let   imageUrls   = toArr(data.image_urls)
+    let   imageUrls   = urlsOnly(data.image_urls)
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
-    if (!imageUrls.length && data.image_url) imageUrls = [data.image_url]
+    if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
     const mainImg = imageUrls[0] || null
 
     const status      = truncate('status', data.status || 'draft')
@@ -1783,8 +1791,8 @@ exports.create = async (req, res, next) => {
         toNum(data.distance_from_airport_km),
         mainImg,
         imageUrls,
-        data.hero_image        || null,
-        data.thumbnail_url     || null,
+        safeMediaValue(data.hero_image),
+        safeMediaValue(data.thumbnail_url),
         data.video_url         || null,
         data.virtual_tour_url  || null,
         toNum(data.duration_days),
@@ -1886,8 +1894,12 @@ exports.update = async (req, res, next) => {
       const existing    = toArr(data.image_urls || current.image_urls)
       fields.image_urls = [url, ...existing.filter(u => u !== url)]
     } else if (fields.image_urls) {
-      fields.image_urls = toArr(fields.image_urls)
+      fields.image_urls = urlsOnly(fields.image_urls)
       if (fields.image_urls.length) fields.image_url = fields.image_urls[0]
+    }
+
+    for (const field of ['image_url', 'hero_image', 'thumbnail_url', 'cover_image_url']) {
+      if (fields[field] !== undefined) fields[field] = safeMediaValue(fields[field])
     }
 
     for (const f of ['highlights','activities','wildlife']) {
@@ -2606,6 +2618,7 @@ exports.addImages = async (req, res, next) => {
     const urls  = []
 
     const insertImage = async (url) => {
+      if (!isSafeImageUrl(url)) return
       order++
       const { rows } = await query(
         `INSERT INTO destination_images

@@ -178,7 +178,7 @@ const toPlain = (html = "") =>
       .replace(/\s{2,}/g, " ").trim().slice(0, 6000);
 
 const tripName = (b) =>
-  safe(b.destination_name || b.service_name || b.package_name ||
+  safe(b.destination_name || b.service_name || b.package_name || b.package_title ||
     b.destination || b.service || b.package, "Your Trip");
 
 /* ════════════════════════════════════════════════════════════════════════════

@@ -137,17 +137,7 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
       html:     html || `<pre>${plain}</pre>`,
       text:     plain,
       reply_to: replyTo || CFG.replyTo,
-module.exports = {
-   sendEmail,
-   sendBookingVerificationLink,
-   sendAdminBookingNotification,
-   sendBookingReceivedEmail,
-   sendBookingConfirmation,
-   sendBookingStatusUpdate,
-   sendBookingCancellation,
-   sendTripCountdownEmail,
-   sendDestinationAlertEmail,
-};
+    };
     const res = await fetch("https://api.resend.com/emails", {
       method:  "POST",
       headers: {

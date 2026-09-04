@@ -436,7 +436,7 @@ router.get(
         query(
           `SELECT id, user_id, user_email, sender_type, sender_name,
                   type, category, title, message,
-                  action_url, action_label, priority,
+                  action_url, action_label, priority, image_url, metadata,
                   is_read, read_at, reaction, reply_text, admin_reply,
                   target_scope, target_role, email_sent, created_at, updated_at
              FROM notifications

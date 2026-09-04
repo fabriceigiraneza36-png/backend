@@ -472,6 +472,7 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     const enrichedBooking = {
       ...booking,
       package_title:    p.title,
+      package_name:     p.title,
       package_price:    p.price,
       package_currency: p.currency,
       booking_type:     'package',
