@@ -551,6 +551,9 @@ const BASE_SELECT = `
     c.flag_url  AS country_flag_url,
     c.continent AS country_continent,
     c.region    AS country_region
+      c.region    AS country_region,
+      (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
+      (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
   FROM destinations d
   LEFT JOIN countries c ON c.id = d.country_id
 `
@@ -614,6 +617,9 @@ const serialize = (row) => {
     countryId:   row.country_id,
     countrySlug: row.country_slug || null,
     countryName: row.country_name || null,
+      countryName: row.country_name || null,
+      likesCount: Number(row.likes_count || 0),
+      commentsCount: Number(row.comments_count || 0),
 
     region:                row.region,
     nearestCity:           row.nearest_city,
@@ -946,6 +952,10 @@ const SORT_MAP = {
   newest:   'd.created_at DESC',
   oldest:   'd.created_at ASC',
   popular:  'd.booking_count DESC NULLS LAST, d.view_count DESC NULLS LAST',
+    popular:  'd.booking_count DESC NULLS LAST, d.view_count DESC NULLS LAST',
+    engagement: 'likes_count DESC, comments_count DESC, d.is_featured DESC, d.rating DESC NULLS LAST, d.created_at DESC',
+    likes: 'likes_count DESC, comments_count DESC, d.created_at DESC',
+    comments: 'comments_count DESC, likes_count DESC, d.created_at DESC',
   featured: 'd.is_featured DESC, d.rating DESC NULLS LAST, d.created_at DESC',
   views:    'd.view_count DESC NULLS LAST',
   duration: 'd.duration_days ASC NULLS LAST',
@@ -1625,13 +1635,11 @@ exports.getOne = async (req, res, next) => {
            WHERE d.id != $1
              AND d.is_active = true
              AND d.status = 'published'
-             AND (d.country_id = $2 OR d.category = $3)
+             AND d.country_id = $2
            ORDER BY
              CASE
-               WHEN d.country_id = $2 AND d.category = $3 THEN 0
-               WHEN d.category   = $3                      THEN 1
-               WHEN d.country_id = $2                      THEN 2
-               ELSE 3
+               WHEN d.category = $3 THEN 0
+               ELSE 1
              END,
              d.rating DESC NULLS LAST
            LIMIT 6`,
@@ -1680,13 +1688,11 @@ exports.getRelated = async (req, res, next) => {
        WHERE d.id != $1
          AND d.is_active = true
          AND d.status = 'published'
-         AND (d.country_id = $2 OR d.category = $3)
+         AND d.country_id = $2
        ORDER BY
          CASE
-           WHEN d.country_id = $2 AND d.category = $3 THEN 0
-           WHEN d.category   = $3                      THEN 1
-           WHEN d.country_id = $2                      THEN 2
-           ELSE 3
+           WHEN d.category = $3 THEN 0
+           ELSE 1
          END,
          d.rating DESC NULLS LAST
        LIMIT $4`,

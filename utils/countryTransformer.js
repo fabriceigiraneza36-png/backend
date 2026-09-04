@@ -171,7 +171,10 @@ const removeNulls = (obj) => {
  */
 const buildHeroImages = (raw) => {
   const seen = new Set()
-  const add  = (v) => { if (v && typeof v === 'string' && v.trim()) seen.add(v.trim()) }
+  const add  = (v) => {
+    const url = typeof v === 'string' ? v : v?.url || v?.image_url || v?.imageUrl
+    if (url && typeof url === 'string' && url.trim()) seen.add(url.trim())
+  }
 
   // 1. Dedicated hero_images column
   const heroArr = parseJsonb(raw.hero_images)

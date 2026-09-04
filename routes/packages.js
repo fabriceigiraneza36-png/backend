@@ -50,6 +50,19 @@ const asyncNoThrow = (promise, label) => {
   })
 }
 
+const packageImage = (body = {}) => String(
+  body.cover_image_url || body.image_url || body.thumbnail_url || ''
+).trim()
+
+const packagePayload = (body = {}, existing = {}) => ({
+  title: existing.title || 'Travel package',
+  cover_image_url: packageImage(body) || existing.cover_image_url || '',
+  is_published: body.is_published === undefined
+    ? (existing.is_published ?? false) : Boolean(body.is_published),
+  is_featured: body.is_featured === undefined
+    ? (existing.is_featured ?? false) : Boolean(body.is_featured),
+})
+
 /* ═══════════════════════════════════════════════════════════════════════════
    SCHEMA GUARD
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -176,6 +189,74 @@ router.get('/', optionalAuth, async (req, res) => {
       error: 'Failed to fetch packages',
       details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
     })
+  }
+})
+
+// Admin packages are represented by one uploaded poster image.
+router.post('/', requireAdmin, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    const payload = packagePayload(req.body)
+    if (!payload.cover_image_url) {
+      return res.status(400).json({ success: false, error: 'A package poster image is required' })
+    }
+    const result = await db(
+      `INSERT INTO packages (title, cover_image_url, is_published, is_featured)
+       VALUES ($1, $2, $3, $4) RETURNING *`,
+      [payload.title, payload.cover_image_url, payload.is_published, payload.is_featured],
+    )
+    return res.status(201).json({ success: true, data: result.rows[0] })
+  } catch (err) {
+    logger.error('[Packages] create error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to create package' })
+  }
+})
+
+router.patch('/:id', requireAdmin, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    const current = await db('SELECT * FROM packages WHERE id = $1', [req.params.id])
+    if (!current.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
+    const payload = packagePayload(req.body, current.rows[0])
+    if (!payload.cover_image_url) {
+      return res.status(400).json({ success: false, error: 'A package poster image is required' })
+    }
+    const result = await db(
+      `UPDATE packages
+       SET cover_image_url = $1, is_published = $2, is_featured = $3, updated_at = NOW()
+       WHERE id = $4 RETURNING *`,
+      [payload.cover_image_url, payload.is_published, payload.is_featured, req.params.id],
+    )
+    return res.json({ success: true, data: result.rows[0] })
+  } catch (err) {
+    logger.error('[Packages] update error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to update package' })
+  }
+})
+
+router.delete('/:id', requireAdmin, async (req, res) => {
+  try {
+    const result = await db('DELETE FROM packages WHERE id = $1 RETURNING id', [req.params.id])
+    if (!result.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
+    return res.json({ success: true, data: { id: result.rows[0].id } })
+  } catch (err) {
+    logger.error('[Packages] delete error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to delete package' })
+  }
+})
+
+router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) => {
+  try {
+    const isPublished = req.params.action === 'publish'
+    const result = await db(
+      'UPDATE packages SET is_published = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
+      [isPublished, req.params.id],
+    )
+    if (!result.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
+    return res.json({ success: true, data: result.rows[0] })
+  } catch (err) {
+    logger.error('[Packages] publish error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to update package status' })
   }
 })
 

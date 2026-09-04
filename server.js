@@ -1304,6 +1304,29 @@ io.on('connection', (socket) => {
     }
   })
 
+  socket.on('msg:client-join', async (payload = {}, cb) => {
+    try {
+      const conv = await resolveConversationForSocket({
+        conversationId: payload.conversationId,
+        sessionId: payload.sessionId,
+      })
+      if (!conv) throw new Error('Conversation not found')
+
+      socket.data.conversationId = conv.id
+      socket.data.sessionId = conv.session_id
+      socket.join(`conv:${conv.id}`)
+      if (conv.session_id) socket.join(`session:${conv.session_id}`)
+      if (typeof cb === 'function') cb({ success: true, conversationId: conv.id })
+    } catch (err) {
+      logger.warn('[Socket] msg:client-join failed:', err.message)
+      if (typeof cb === 'function') cb({ success: false, error: err.message })
+    }
+  })
+
+  socket.on('msg:leave-conversation', ({ conversationId } = {}) => {
+    if (conversationId) socket.leave(`conv:${conversationId}`)
+  })
+
   socket.on('msg:send', async (payload = {}, cb) => {
     try {
       if (socket.data.isAdmin) throw new Error('Admins must use msg:admin-send')

@@ -67,6 +67,12 @@ const handleError = (res, err, message = "Operation failed") => {
   return res.status(500).json({ success: false, message, error: err.message });
 };
 
+const formatTeamMember = (member) => ({
+  ...member,
+  image_url: member.image_url || member.avatar_url || member.photo_url || member.profile_image_url || null,
+  imageUrl: member.image_url || member.avatar_url || member.photo_url || member.profile_image_url || null,
+});
+
 // ═══════════════════════════════════════════════════════════════
 // GET /api/team/departments/list
 // ═══════════════════════════════════════════════════════════════
@@ -152,7 +158,7 @@ router.get("/featured", async (req, res) => {
       [limit]
     );
 
-    return res.status(200).json({ success: true, data: rows, total: rows.length });
+    return res.status(200).json({ success: true, data: rows.map(formatTeamMember), total: rows.length });
   } catch (err) {
     return handleError(res, err, "Failed to fetch featured members");
   }
@@ -222,7 +228,7 @@ router.get("/", async (req, res) => {
 
     return res.status(200).json({
       success: true,
-      data: rows,
+      data: rows.map(formatTeamMember),
       pagination: {
         page:       safePage,
         limit:      safeLimit,
@@ -249,7 +255,7 @@ router.get("/:id", async (req, res) => {
     if (rows.length === 0)
       return res.status(404).json({ success: false, message: "Team member not found" });
 
-    return res.status(200).json({ success: true, data: rows[0] });
+    return res.status(200).json({ success: true, data: formatTeamMember(rows[0]) });
   } catch (err) {
     return handleError(res, err, "Failed to fetch team member");
   }
@@ -262,7 +268,7 @@ router.post("/", async (req, res) => {
   try {
     const {
       name, role, department, bio,
-      avatar_url, email, phone,
+      avatar_url, image_url, photo_url, profile_image_url, email, phone,
       linkedin_url, twitter_url, instagram_url, facebook_url,
       display_order, is_active, is_featured,
     } = req.body;
@@ -282,7 +288,7 @@ router.post("/", async (req, res) => {
         role          || null,
         department    || "General",
         bio           || null,
-        avatar_url    || null,
+        image_url     || avatar_url || photo_url || profile_image_url || null,
         email         || null,
         phone         || null,
         linkedin_url  || null,
@@ -295,7 +301,7 @@ router.post("/", async (req, res) => {
       ]
     );
 
-    return res.status(201).json({ success: true, message: "Team member created", data: rows[0] });
+    return res.status(201).json({ success: true, message: "Team member created", data: formatTeamMember(rows[0]) });
   } catch (err) {
     return handleError(res, err, "Failed to create team member");
   }
@@ -312,7 +318,7 @@ router.put("/:id", async (req, res) => {
 
     const {
       name, role, department, bio,
-      avatar_url, email, phone,
+      avatar_url, image_url, photo_url, profile_image_url, email, phone,
       linkedin_url, twitter_url, instagram_url, facebook_url,
       display_order, is_active, is_featured,
     } = req.body;
@@ -341,7 +347,7 @@ router.put("/:id", async (req, res) => {
         role          || null,
         department    || null,
         bio           || null,
-        avatar_url    || null,
+        image_url     || avatar_url || photo_url || profile_image_url || null,
         email         || null,
         phone         || null,
         linkedin_url  || null,
@@ -358,7 +364,7 @@ router.put("/:id", async (req, res) => {
     if (rows.length === 0)
       return res.status(404).json({ success: false, message: "Team member not found" });
 
-    return res.status(200).json({ success: true, message: "Team member updated", data: rows[0] });
+    return res.status(200).json({ success: true, message: "Team member updated", data: formatTeamMember(rows[0]) });
   } catch (err) {
     return handleError(res, err, "Failed to update team member");
   }
