@@ -17,16 +17,39 @@ const logger = require("./logger");
 
 /* ─── Resolve sendEmail ──────────────────────────────────────────────────── */
 let _send = null;
-for (const p of ["../utils/email", "../services/emailService", "../utils/emailService"]) {
-  try {
-    const mod = require(p);
-    if (typeof mod.sendEmail === "function") {
-      _send = mod.sendEmail;
-      logger.info(`[BookingEmails] ✅ Using sendEmail from: ${p}`);
-      break;
-    }
-  } catch { /* try next */ }
+/* Try utils/email first (same as contact form) */
+try {
+  const emailUtils = require("../utils/email");
+  if (typeof emailUtils.sendEmail === "function") {
+    // Wrap to ensure consistent signature: _send expects an object with to, subject, html, text
+    _send = (opts) => emailUtils.sendEmail(opts);
+    logger.info("[BookingEmails] ✅ Using sendEmail from: ../utils/email");
+  }
+} catch (err) {
+  logger.warn("[BookingEmails] Failed to load ../utils/email:", err.message);
 }
+
+/* Fallback to legacy paths if the above failed */
+if (!_send) {
+  const LEGACY_PATHS = [
+    "../services/emailService",
+    "../utils/emailService",
+    "../services/email",
+    "../utils/email",
+  ];
+  for (const p of LEGACY_PATHS) {
+    try {
+      const mod = require(p);
+      if (typeof mod.sendEmail === "function") {
+        _send = mod.sendEmail;
+        logger.info(`[BookingEmails] ✅ Using sendEmail from: ${p}`);
+        break;
+      }
+    } catch { /* try next */ }
+  }
+}
+
+/* Final fallback: console logger */
 if (!_send) {
   logger.warn("[BookingEmails] ⚠️  No sender found — using console fallback");
   _send = async ({ to, subject }) => {
@@ -80,11 +103,12 @@ const API_URL = sanitiseUrl(
   process.env.API_URL || process.env.BACKEND_URL,
   "https://backend-jd8f.onrender.com",
 );
+const API_ROOT = API_URL.replace(/\/api$/i, "");
 
 const ENV = {
   appName:      process.env.APP_NAME       || "Altuvera Safaris",
   frontendUrl:  FRONTEND_URL,
-  backendUrl:   API_URL,
+  backendUrl:   API_ROOT,
   adminEmail:   process.env.ADMIN_EMAIL    || "info@altuverasafaris.com",
   supportEmail: process.env.SUPPORT_EMAIL  || "info@altuverasafaris.com",
   supportPhone: process.env.SUPPORT_PHONE  || "+250 785 751 391",

@@ -182,7 +182,7 @@ const getOne = async (req, res, next) => {
     // Track views asynchronously
     query("UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1", [country.id]).catch(() => {});
 
-    // Safe retrieve for destinations (aliasing d.duration_days to d.duration)
+    // Use only columns shared by the current and legacy destinations schemas.
     const destinationsQuery = await query(`
       SELECT
         d.id,
@@ -191,10 +191,10 @@ const getOne = async (req, res, next) => {
         d.short_description,
         d.image_url,
         d.difficulty,
-        COALESCE(d.duration_days::TEXT, 'N/A') AS duration,
+        COALESCE(d.duration_display, d.duration_days::TEXT, 'N/A') AS duration,
         d.duration_days,
-        d.price_from,
-        d.price_currency,
+        NULL AS price_from,
+        'USD' AS price_currency,
         d.rating,
         d.review_count,
         d.is_featured,
@@ -229,14 +229,20 @@ const getOne = async (req, res, next) => {
       return { rows: [] };
     });
 
-    // Safe retrieve for services (handling missing database columns s.price_from and s.price_currency)
-    const servicesQuery = await query(`
+    // Legacy services tables may not have country_id, so only query related
+    // services when that relationship is available.
+    const serviceCountryColumn = await query(`
+      SELECT 1 FROM information_schema.columns
+      WHERE table_name = 'services' AND column_name = 'country_id'
+      LIMIT 1
+    `).catch(() => ({ rows: [] }));
+    const servicesQuery = serviceCountryColumn.rows.length ? await query(`
       SELECT
         s.id, s.title, s.slug, s.description,
         s.image_url, 
         0 AS price_from, 
         'USD' AS price_currency,
-        s.duration, s.category, s.is_featured,
+        NULL AS duration, s.category, s.is_featured,
         s.rating, s.review_count
       FROM services s
       WHERE s.country_id = $1 AND s.is_active = true
@@ -244,7 +250,7 @@ const getOne = async (req, res, next) => {
     `, [country.id]).catch(err => {
       logger.error(`[Countries] fallback services query error: ${err.message}`);
       return { rows: [] };
-    });
+    }) : { rows: [] };
 
     return res.json({
       success: true,
