@@ -258,6 +258,7 @@ CREATE TABLE IF NOT EXISTS destinations (
        fitness_level            TEXT,
        highlights               TEXT[] DEFAULT '{}'::TEXT[],
        activities               TEXT[] DEFAULT '{}'::TEXT[],
+      attractions              JSONB DEFAULT '[]'::JSONB,
        wildlife                 TEXT[] DEFAULT '{}'::TEXT[],
        entrance_fee             TEXT,
        operating_hours          TEXT,
@@ -328,6 +329,7 @@ CREATE TABLE IF NOT EXISTS destinations (
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS fitness_level      TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS highlights         TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS activities         TEXT[] DEFAULT '{}'::TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS attractions        JSONB DEFAULT '[]'::JSONB`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wildlife           TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS entrance_fee       TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS operating_hours    TEXT`,
@@ -595,6 +597,7 @@ const serialize = (row) => {
 
     highlights:      toArr(row.highlights),
     activities:      toArr(row.activities),
+    attractions:     Array.isArray(row.attractions) ? row.attractions : (row.attractions || []),
     wildlife:        toArr(row.wildlife),
     bestTimeToVisit: row.best_time_to_visit,
     gettingThere:    row.getting_there,
@@ -1755,7 +1758,7 @@ exports.create = async (req, res, next) => {
         image_url, image_urls, hero_image, thumbnail_url, video_url, virtual_tour_url,
         duration_days, duration_nights, duration_display,
         min_group_size, max_group_size, min_age, fitness_level,
-        highlights, activities, wildlife,
+        highlights, activities, attractions, wildlife,
         entrance_fee, operating_hours,
         status, is_active, is_featured, is_popular, is_new, is_eco_friendly, is_family_friendly,
         meta_title, meta_description,
@@ -1763,7 +1766,7 @@ exports.create = async (req, res, next) => {
       ) VALUES (
         $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
         $21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,
-        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53
+        $39,$40,$41,$42,$43,$44,$45,$46,$47,$48,$49,$50,$51,$52,$53,$54
       ) RETURNING *`,
       [
         country.id,
@@ -1804,6 +1807,7 @@ exports.create = async (req, res, next) => {
         truncate('fitness_level', data.fitness_level || null),
         toArr(data.highlights),
         toArr(data.activities),
+        JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []),
         toArr(data.wildlife),
         data.entrance_fee      || null,
         data.operating_hours   || null,
@@ -1900,6 +1904,10 @@ exports.update = async (req, res, next) => {
 
     for (const field of ['image_url', 'hero_image', 'thumbnail_url', 'cover_image_url']) {
       if (fields[field] !== undefined) fields[field] = safeMediaValue(fields[field])
+    }
+
+    if (fields.attractions !== undefined) {
+      fields.attractions = JSON.stringify(Array.isArray(fields.attractions) ? fields.attractions : [])
     }
 
     for (const f of ['highlights','activities','wildlife']) {
