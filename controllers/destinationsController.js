@@ -1991,6 +1991,17 @@ exports.update = async (req, res, next) => {
       if (fields[f] !== undefined) fields[f] = toBool(fields[f])
     }
 
+    /* Convert empty form values before writing to numeric columns. */
+    const numericFields = [
+      'latitude', 'longitude', 'altitude_meters', 'distance_from_airport_km',
+      'duration_days', 'duration_nights', 'min_group_size', 'max_group_size',
+      'min_age', 'rating', 'review_count', 'view_count', 'booking_count',
+      'wishlist_count', 'share_count',
+    ]
+    for (const f of numericFields) {
+      if (fields[f] !== undefined) fields[f] = toNum(fields[f])
+    }
+
     /* Truncate varchar */
     for (const col of Object.keys(VARCHAR_LIMITS)) {
       if (fields[col] !== undefined) fields[col] = truncate(col, fields[col])
