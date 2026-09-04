@@ -13,7 +13,7 @@ const slugify = (str) =>
      .replace(/-+/g, '-')
 
 const genBookingRef = (id) =>
-  `PKG-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${String(id).padStart(5,'0')}`
+  `PKG-${new Date().toISOString().slice(0,10).replace(/-/g,'')}-${String(id || Math.floor(10000 + Math.random() * 90000)).slice(-5)}`
 
 const parseJsonField = (val, fallback = []) => {
   if (!val) return fallback
@@ -27,45 +27,56 @@ const parseJsonField = (val, fallback = []) => {
 router.get('/', optionalAuth, async (req, res) => {
   try {
     const { page = 1, limit = 10, sort = 'featured', destination } = req.query
-    const offset = (parseInt(page) - 1) * parseInt(limit)
+    const parsedLimit = parseInt(limit, 10) || 10
+    const parsedOffset = (parseInt(page, 10) - 1) * parsedLimit
+
     const where = []
     const vals = []
 
     if (destination) {
-      where.push(`destination_id = $${++vals.length}`)
       vals.push(destination)
+      where.push(`p.destination_id = $${vals.length}`)
     }
 
-    const [countRes, dataRes] = await Promise.all([
-      db(
-        `SELECT COUNT(*) FROM packages p ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`,
-        [...vals]
-      ),
-      db(
-        `SELECT p.*,
-           d.name AS destination_name,
-                  d.slug   AS destination_slug
-         FROM packages p
-         LEFT JOIN destinations d ON d.id = p.destination_id
-         ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-         ORDER BY 
-           CASE WHEN $3 = 'featured' THEN p.is_featured DESC END,
-           CASE WHEN $3 = 'price_asc' THEN (p.price || 0) ASC END,
-           CASE WHEN $3 = 'price_desc' THEN (p.price || 0) DESC END,
-           CASE WHEN $3 = 'latest' THEN p.created_at DESC END
-         LIMIT $${++vals.length} OFFSET $${++vals.length}`,
-        [...resp, limit, offset]
-      ),
-    ])
+    // Determine clean ordering logic to avoid SQL injection
+    let orderBy = 'p.is_featured DESC, p.created_at DESC'
+    if (sort === 'price_asc') {
+      orderBy = 'COALESCE(p.price, 0) ASC, p.id ASC'
+    } else if (sort === 'price_desc') {
+      orderBy = 'COALESCE(p.price, 0) DESC, p.id DESC'
+    } else if (sort === 'latest') {
+      orderBy = 'p.created_at DESC'
+    }
+
+    const countQuery = `SELECT COUNT(*) FROM packages p ${where.length ? `WHERE ${where.join(' AND ')}` : ''}`
+    
+    const countRes = await db(countQuery, vals)
+
+    const dataVals = [...vals]
+    const limitIndex = dataVals.push(parsedLimit)
+    const offsetIndex = dataVals.push(parsedOffset)
+
+    const dataQuery = `
+      SELECT p.*,
+             d.name AS destination_name,
+             d.slug   AS destination_slug
+      FROM packages p
+      LEFT JOIN destinations d ON d.id = p.destination_id
+      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
+      ORDER BY ${orderBy}
+      LIMIT $${limitIndex} OFFSET $${offsetIndex}
+    `
+
+    const dataRes = await db(dataQuery, dataVals)
 
     return res.json({
       success: true,
       data: dataRes.rows,
       pagination: {
-        total: parseInt(countRes.rows[0].count),
-        page: parseInt(page),
-        limit: parseInt(limit),
-        pages: Math.ceil(parseInt(countRes.rows[0].count) / parseInt(limit)),
+        total: parseInt(countRes.rows[0].count, 10),
+        page: parseInt(page, 10),
+        limit: parsedLimit,
+        pages: Math.ceil(parseInt(countRes.rows[0].count, 10) / parsedLimit),
       },
     })
   } catch (err) {
@@ -174,13 +185,13 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     const travelersCountNum = parseInt(travelers_count) || (adultsNum + childrenNum)
 
     // Generate booking reference
-    let bookingNumber = generateBookingRef(0)
+    let bookingNumber = genBookingRef(p.id)
     let attempts = 0
     while (attempts < 5) {
       try {
         const existing = await db('SELECT id FROM bookings WHERE booking_number = $1', [bookingNumber])
         if (!existing.rows.length) break
-        bookingNumber = generateBookingRef(0)
+        bookingNumber = genBookingRef(p.id)
         attempts++
       } catch { break }
     }
@@ -188,7 +199,7 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     // Insert booking
     const result = await db(`
       INSERT INTO bookings (
-        booking_number, destination_id, service_id, full_name, email, phone, whatsapp, nationality,
+        booking_number, destination_id, package_id, full_name, email, phone, whatsapp, nationality,
         travel_date, return_date, number_of_travelers, accommodation_type, special_requests, status, admin_notes
       ) VALUES (
         $1, $2, $3, $4, $5, $6, $7, $8,
@@ -197,7 +208,7 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     `, [
       bookingNumber,
       null, // destination_id (package booking)
-      null, // service_id
+      p.id, // package_id
       guest_name.trim(),
       guest_email.trim(),
       guest_phone || null,
@@ -299,7 +310,7 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
          WHERE pb.package_id = $1 ${where.length ? `AND ${where.join(' AND ')}` : ''}
          ORDER BY pb.created_at DESC
          LIMIT $${++vals.length} OFFSET $${++vals.length}`,
-        [...pkgId, ...(status ? [status] : []), limit, offset]
+        [...vals, limit, offset]
       ),
     ])
 
