@@ -230,6 +230,7 @@ const ensurePackagesSchema = async () => {
       created_at         TIMESTAMP     DEFAULT NOW(),
       updated_at         TIMESTAMP     DEFAULT NOW()
     )`,
+    `ALTER TABLE packages ADD COLUMN IF NOT EXISTS destination_id INTEGER`,
 
     `CREATE TABLE IF NOT EXISTS package_bookings (
       id               SERIAL PRIMARY KEY,

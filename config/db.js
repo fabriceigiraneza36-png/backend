@@ -245,7 +245,6 @@ const ensureSubscribersSchema = async () => {
         updated_at      TIMESTAMPTZ   DEFAULT NOW()
       )
     `);
-
     // 2. Idempotently add any columns that might be missing on older tables
     await addColumns("subscribers", [
       { name: "user_id",          type: "INTEGER REFERENCES users(id) ON DELETE SET NULL" },
@@ -586,6 +585,8 @@ const ensurePackagesSchema = async () => {
         updated_at        TIMESTAMP     DEFAULT NOW()
       )
     `);
+
+    await pool.query(`ALTER TABLE packages ADD COLUMN IF NOT EXISTS destination_id INTEGER`);
 
     // ── package_messages ──────────────────────────────────────────────────
     await pool.query(`

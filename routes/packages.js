@@ -55,7 +55,8 @@ const packageImage = (body = {}) => String(
 ).trim()
 
 const packagePayload = (body = {}, existing = {}) => ({
-  title: existing.title || 'Travel package',
+  title: String(body.title || existing.title || 'Travel package').trim().slice(0, 255),
+  slug: existing.slug || `${slugify(body.title || 'travel-package')}-${Date.now()}`,
   cover_image_url: packageImage(body) || existing.cover_image_url || '',
   is_published: body.is_published === undefined
     ? (existing.is_published ?? false) : Boolean(body.is_published),
@@ -96,6 +97,7 @@ const ensurePackagesSchema = async () => {
     const cols = [
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_featured   BOOLEAN DEFAULT false`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_published  BOOLEAN DEFAULT true`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS destination_id INTEGER`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS booking_count INTEGER DEFAULT 0`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS view_count    INTEGER DEFAULT 0`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS currency      VARCHAR(10) DEFAULT 'USD'`,
@@ -192,6 +194,33 @@ router.get('/', optionalAuth, async (req, res) => {
   }
 })
 
+/* Keep this before /:id: otherwise Express treats "stats" as a package ID. */
+router.get('/stats', requireAdmin, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    const result = await db(`
+      SELECT COUNT(*)::INTEGER AS total,
+             COUNT(*) FILTER (WHERE is_published = true)::INTEGER AS published,
+             COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured,
+             COALESCE(SUM(booking_count), 0)::INTEGER AS bookings
+      FROM packages
+    `)
+    const row = result.rows[0]
+    return res.json({
+      success: true,
+      data: {
+        ...row,
+        packages: { total: row.total, published: row.published, featured: row.featured },
+        bookings: { total: row.bookings, pending: 0 },
+        messages: { unread: 0 },
+      },
+    })
+  } catch (err) {
+    logger.error('[Packages] stats error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to fetch package stats' })
+  }
+})
+
 // Admin packages are represented by one uploaded poster image.
 router.post('/', requireAdmin, async (req, res) => {
   try {
@@ -201,9 +230,9 @@ router.post('/', requireAdmin, async (req, res) => {
       return res.status(400).json({ success: false, error: 'A package poster image is required' })
     }
     const result = await db(
-      `INSERT INTO packages (title, cover_image_url, is_published, is_featured)
-       VALUES ($1, $2, $3, $4) RETURNING *`,
-      [payload.title, payload.cover_image_url, payload.is_published, payload.is_featured],
+      `INSERT INTO packages (title, slug, cover_image_url, is_published, is_featured)
+       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
+      [payload.title, payload.slug, payload.cover_image_url, payload.is_published, payload.is_featured],
     )
     return res.status(201).json({ success: true, data: result.rows[0] })
   } catch (err) {
@@ -227,7 +256,16 @@ router.patch('/:id', requireAdmin, async (req, res) => {
        WHERE id = $4 RETURNING *`,
       [payload.cover_image_url, payload.is_published, payload.is_featured, req.params.id],
     )
-    return res.json({ success: true, data: result.rows[0] })
+    const row = result.rows[0]
+    return res.json({
+      success: true,
+      data: {
+        ...row,
+        packages: { total: row.total, published: row.published, featured: row.featured },
+        bookings: { total: row.bookings, pending: 0 },
+        messages: { unread: 0 },
+      },
+    })
   } catch (err) {
     logger.error('[Packages] update error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to update package' })
@@ -257,26 +295,6 @@ router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) =>
   } catch (err) {
     logger.error('[Packages] publish error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to update package status' })
-  }
-})
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   GET /api/packages/stats
-═══════════════════════════════════════════════════════════════════════════ */
-router.get('/stats', requireAdmin, async (req, res) => {
-  try {
-    await ensurePackagesSchema()
-    const result = await db(`
-      SELECT COUNT(*)::INTEGER AS total,
-             COUNT(*) FILTER (WHERE is_published = true)::INTEGER AS published,
-             COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured,
-             COALESCE(SUM(booking_count), 0)::INTEGER AS bookings
-      FROM packages
-    `)
-    return res.json({ success: true, data: result.rows[0] })
-  } catch (err) {
-    logger.error('[Packages] stats error:', err.message)
-    return res.status(500).json({ success: false, error: 'Failed to fetch package stats' })
   }
 })
 
