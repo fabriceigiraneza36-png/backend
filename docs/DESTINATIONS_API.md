@@ -1557,4 +1557,4 @@ curl -X POST http://localhost:3000/api/destinations/5/reviews \
 
 ---
 
-*End of Destinations API Documentation — Altuvera Travel v6.1*
+*End of Destinations API Documentation — Altuvera Safaris v6.1*

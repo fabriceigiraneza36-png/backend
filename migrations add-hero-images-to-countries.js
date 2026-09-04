@@ -69,7 +69,7 @@ ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT FALSE,
 ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT TRUE;
 
 -- Update table comment
-COMMENT ON TABLE countries IS 'Stores country information for the Altuvera travel platform';
+COMMENT ON TABLE countries IS 'Stores country information for the Altuvera Safaris platform';
 
 DO $$ 
 BEGIN

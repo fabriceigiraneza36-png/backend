@@ -1101,4 +1101,4 @@ Deleting a country **requires** all dependent destinations to be deleted first.
 
 ---
 
-*End of Countries API Documentation — Altuvera Travel v6.1*
+*End of Countries API Documentation — Altuvera Safaris v6.1*

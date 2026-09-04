@@ -75,7 +75,7 @@ if (!welcomeSubscriberEmail) {
     <html>
     <body style="font-family:sans-serif;background:#f0fdf4;padding:40px 20px;">
       <div style="max-width:560px;margin:0 auto;background:#fff;border-radius:16px;padding:40px;">
-        <h1 style="color:#15803D;">Welcome to Altuvera Travel! 🌿</h1>
+        <h1 style="color:#15803D;">Welcome to Altuvera Safaris! 🌿</h1>
         <p>Hi ${name || 'Explorer'},</p>
         <p>Thank you for subscribing. We'll keep you updated with the best travel experiences from Rwanda and beyond.</p>
         <p style="color:#6B7280;font-size:13px;">If you didn't subscribe, you can safely ignore this email.</p>
@@ -249,7 +249,7 @@ async function sendWelcomeEmail(subscriberId, email, name) {
     const htmlBody = welcomeSubscriberEmail(email, name);
     const result   = await _sendEmail(
       email,
-      '🌿 Welcome to Altuvera Travel — Your Adventure Begins!',
+      '🌿 Welcome to Altuvera Safaris — Your Adventure Begins!',
       htmlBody,
     );
 
@@ -337,7 +337,7 @@ function unsubscribeHtml(email, success) {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Unsubscribed — Altuvera Travel</title>
+  <title>Unsubscribed — Altuvera Safaris</title>
 </head>
 <body style="margin:0;padding:0;background:#F0FDF4;font-family:'Segoe UI',sans-serif;
              display:flex;justify-content:center;align-items:center;min-height:100vh;">
@@ -370,7 +370,7 @@ function unsubscribeHtml(email, success) {
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <title>Not Found — Altuvera Travel</title>
+  <title>Not Found — Altuvera Safaris</title>
 </head>
 <body style="margin:0;padding:0;background:#FEF2F2;font-family:'Segoe UI',sans-serif;
              display:flex;justify-content:center;align-items:center;min-height:100vh;">
@@ -540,7 +540,7 @@ exports.sendNewsletter = async (req, res, next) => {
     <div style="color:#1f2937;line-height:1.7;white-space:pre-wrap;">${textBody.replace(/</g, '&lt;')}</div>
     <hr style="border:none;border-top:1px solid #e5e7eb;margin:28px 0;" />
     <p style="color:#9CA3AF;font-size:12px;">
-      You're receiving this because you subscribed to Altuvera Travel updates.<br/>
+      You're receiving this because you subscribed to Altuvera Safaris updates.<br/>
       <a href="${process.env.FRONTEND_URL || 'https://www.altuverasafaris.com'}/unsubscribe" style="color:#15803D;">Unsubscribe</a>
     </p>
   </div>

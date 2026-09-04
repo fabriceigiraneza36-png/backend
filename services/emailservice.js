@@ -14,13 +14,13 @@ const CFG = {
     pass:   process.env.SMTP_PASS   || "",
   },
   from: {
-    name:    "Altuvera Travel",
+    name:    "Altuvera Safaris",
     address: process.env.SMTP_USER || "altuverasafari@gmail.com",
   },
   adminEmail:   process.env.ADMIN_EMAIL   || "altuverasafari@gmail.com",
   supportEmail: process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
   replyTo:      process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
-  appName:      process.env.APP_NAME      || "Altuvera Travel",
+  appName:      process.env.APP_NAME      || "Altuvera Safaris",
   appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   backendUrl:   process.env.BACKEND_URL   || "https://backend-jd8f.onrender.com",
   isDev:        process.env.NODE_ENV      !== "production",
@@ -386,7 +386,7 @@ function shell({ title, preheader = "", body, footer = "", extraCss = "" }) {
       <a href="mailto:${cfg.supportEmail}">Support</a> &nbsp;·&nbsp;
       <a href="https://wa.me/250785751391">WhatsApp</a>
     </p>
-    <p style="margin-top:8px">© ${new Date().getFullYear()} Altuvera Travel · All rights reserved</p>
+    <p style="margin-top:8px">© ${new Date().getFullYear()} Altuvera Safaris · All rights reserved</p>
     <p style="margin-top:4px">
       <a href="${cfg.appUrl}" style="color:#cbd5e1;font-weight:400">
         www.altuverasafaris.com
@@ -440,7 +440,7 @@ async function sendBookingVerificationLink(booking, verificationToken) {
   `;
 
   const html = shell({
-    title:     "Confirm Your Booking Request — Altuvera Travel",
+    title:     "Confirm Your Booking Request — Altuvera Safaris",
     preheader: `One click to secure your ${destination_name} adventure. Link expires in 24 hours.`,
     extraCss,
     body: `
@@ -524,7 +524,7 @@ async function sendBookingVerificationLink(booking, verificationToken) {
 
   return sendEmail({
     to:      email,
-    subject: `✅ Please verify your booking: ${destination_name} — Altuvera Travel`,
+    subject: `✅ Please verify your booking: ${destination_name} — Altuvera Safaris`,
     html,
     text: [
       `Hi ${full_name},`,
@@ -539,7 +539,7 @@ async function sendBookingVerificationLink(booking, verificationToken) {
       ``,
       `This link expires in 24 hours.`,
       ``,
-      `— Altuvera Travel`,
+      `— Altuvera Safaris`,
     ].filter(Boolean).join("\n"),
   });
 }
@@ -955,7 +955,7 @@ async function sendBookingConfirmation(booking) {
 
   return sendEmail({
     to:      email,
-    subject: `🎉 Confirmed: Your ${trip} Safari Adventure | Altuvera Travel`,
+    subject: `🎉 Confirmed: Your ${trip} Safari Adventure | Altuvera Safaris`,
     html,
   });
 }
@@ -996,7 +996,7 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason = "
 
   const html = shell({
     title:     `Booking Update: ${booking_number} is now ${newStatus}`,
-    preheader: `Your Altuvera Travel booking ${booking_number} status has changed to ${newStatus}.`,
+    preheader: `Your Altuvera Safaris booking ${booking_number} status has changed to ${newStatus}.`,
     extraCss,
     body: `
       <div class="status-hero"
@@ -1058,7 +1058,7 @@ async function sendBookingStatusUpdate(booking, oldStatus, newStatus, reason = "
 
   return sendEmail({
     to:      booking.email,
-    subject: `🔄 Booking Update: ${booking_number} is now "${newStatus}" | Altuvera Travel`,
+    subject: `🔄 Booking Update: ${booking_number} is now "${newStatus}" | Altuvera Safaris`,
     html,
   });
 }
@@ -1085,7 +1085,7 @@ async function sendBookingCancellation(booking, reason) {
 
   const html = shell({
     title:     `Booking Cancelled — ${booking_number}`,
-    preheader: `Your Altuvera Travel booking ${booking_number} has been cancelled. We hope to see you again soon.`,
+    preheader: `Your Altuvera Safaris booking ${booking_number} has been cancelled. We hope to see you again soon.`,
     extraCss,
     body: `
       <div class="cancel-hero">
@@ -1139,7 +1139,7 @@ async function sendBookingCancellation(booking, reason) {
 
   return sendEmail({
     to:      booking.email,
-    subject: `Cancelled — ${esc(String(booking_number))} | Altuvera Travel`,
+    subject: `Cancelled — ${esc(String(booking_number))} | Altuvera Safaris`,
     html,
   });
 }
@@ -1281,7 +1281,7 @@ async function sendTripCountdownEmail(booking) {
   `;
 
   const html = shell({
-    title:     `⏳ ${content.title} — ${dest} | Altuvera Travel`,
+    title:     `⏳ ${content.title} — ${dest} | Altuvera Safaris`,
     preheader: `${content.urgency} Your ${dest} adventure is ${days === 0 ? "today" : days === 1 ? "tomorrow" : `in ${days} days`}.`,
     extraCss,
     body: `
@@ -1339,7 +1339,7 @@ async function sendTripCountdownEmail(booking) {
 
   return sendEmail({
     to:      booking.email,
-    subject: `⏳ ${content.title} — ${dest} | Altuvera Travel`,
+    subject: `⏳ ${content.title} — ${dest} | Altuvera Safaris`,
     html,
   });
 }
@@ -1382,7 +1382,7 @@ async function sendBookingReceivedEmail(booking) {
   `;
 
   const html = shell({
-    title:     `📬 Booking Received — ${booking_number} | Altuvera Travel`,
+    title:     `📬 Booking Received — ${booking_number} | Altuvera Safaris`,
     preheader: `Booking received for ${dest} — we'll contact you within 24 hours.`,
     extraCss,
     body: `
@@ -1461,7 +1461,7 @@ async function sendBookingReceivedEmail(booking) {
 
   return sendEmail({
     to:      booking.email,
-    subject: `📬 Booking Received — ${esc(String(booking_number))} | Altuvera Travel`,
+    subject: `📬 Booking Received — ${esc(String(booking_number))} | Altuvera Safaris`,
     html,
   });
 }
@@ -1602,7 +1602,7 @@ async function sendDestinationAlertEmail(destination) {
        </div>
      `,
  
-     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Travel."
+     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Safaris."
    });
 
    // Send to all subscribers
@@ -1735,7 +1735,7 @@ async function sendDestinationAlertEmail(destination) {
        </div>
      `,
  
-     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Travel."
+     footer: "You're receiving this email because you subscribed to receive updates about new destinations and travel opportunities from Altuvera Safaris."
    });
 
    // Send to all subscribers

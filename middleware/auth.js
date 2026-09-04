@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA TRAVEL - AUTH MIDDLEWARE v2.1
+ * Altuvera Safaris - AUTH MIDDLEWARE v2.1
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Exports (all names used across the codebase):

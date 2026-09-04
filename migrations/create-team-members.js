@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * MIGRATION: Create team_members table - Altuvera Travel
+ * MIGRATION: Create team_members table - Altuvera Safaris
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Run:   npx sequelize-cli db:migrate

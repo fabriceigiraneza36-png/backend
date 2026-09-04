@@ -1,7 +1,7 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  * FRONTEND CONTACT MESSAGE UTILITY
- * Utility for sending contact messages to Altuvera Travel backend
+ * Utility for sending contact messages to Altuvera Safaris backend
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 

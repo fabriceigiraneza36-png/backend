@@ -271,6 +271,9 @@ const create = async (req, res, next) => {
       official_name,
       flag,
       flag_url,
+      image_url,
+      cover_image_url,
+      hero_image,
       tagline,
       motto,
       description,
@@ -302,6 +305,7 @@ const create = async (req, res, next) => {
       neighboring_countries,
       demonym,
       is_featured,
+      is_active,
     } = req.body;
 
     // Required fields validation
@@ -357,6 +361,9 @@ const create = async (req, res, next) => {
     addField("official_name", official_name, true);
     addField("flag", flag, true);
     addField("flag_url", flag_url, true);
+    addField("image_url", image_url, true);
+    addField("cover_image_url", cover_image_url, true);
+    addField("hero_image", hero_image, true);
     addField("tagline", tagline, true);
     addField("motto", motto, true);
     addField("description", description, true);
@@ -388,6 +395,7 @@ const create = async (req, res, next) => {
     addField("neighboring_countries", Array.isArray(neighboring_countries) ? JSON.stringify(neighboring_countries) : neighboring_countries);
     addField("demonym", demonym, true);
     addField("is_featured", is_featured);
+    addField("is_active", is_active);
 
     const queryText = `
       INSERT INTO countries (${columns.join(", ")})
@@ -433,6 +441,9 @@ const update = async (req, res, next) => {
       official_name,
       flag,
       flag_url,
+      image_url,
+      cover_image_url,
+      hero_image,
       tagline,
       motto,
       description,
@@ -464,6 +475,7 @@ const update = async (req, res, next) => {
       neighboring_countries,
       demonym,
       is_featured,
+      is_active,
     } = req.body;
 
     const setClauses = [];
@@ -519,6 +531,9 @@ const update = async (req, res, next) => {
     addField("official_name", official_name, true);
     addField("flag", flag, true);
     addField("flag_url", flag_url, true);
+    addField("image_url", image_url, true);
+    addField("cover_image_url", cover_image_url, true);
+    addField("hero_image", hero_image, true);
     addField("tagline", tagline, true);
     addField("motto", motto, true);
     addField("description", description, true);
@@ -550,6 +565,7 @@ const update = async (req, res, next) => {
     addField("neighboring_countries", Array.isArray(neighboring_countries) ? JSON.stringify(neighboring_countries) : neighboring_countries);
     addField("demonym", demonym, true);
     addField("is_featured", is_featured);
+    addField("is_active", is_active);
 
     if (setClauses.length === 0) {
       return res.status(400).json({

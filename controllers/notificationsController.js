@@ -249,7 +249,7 @@ const notif = await insertNotification({
         <h2 style="color:#059669;">{{name}}, ${title}</h2>
         <p style="font-size:16px;line-height:1.6;">${message}</p>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
-        <p style="font-size:12px;color:#94a3b8;">Altuvera Travel — Admin Activity Digest</p>
+        <p style="font-size:12px;color:#94a3b8;">Altuvera Safaris — Admin Activity Digest</p>
       </div>`,
     ).catch(() => {});
   } catch (err) {

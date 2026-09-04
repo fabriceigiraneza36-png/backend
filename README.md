@@ -1,4 +1,4 @@
-# Altuvera Travel - Backend (Node.js + PostgreSQL)
+# Altuvera Safaris - Backend (Node.js + PostgreSQL)
 
 A production-ready Express backend with advanced security, monitoring, and resiliency features.
 

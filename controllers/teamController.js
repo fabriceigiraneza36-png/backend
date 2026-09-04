@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * TEAM CONTROLLER - Altuvera Travel
+ * TEAM CONTROLLER - Altuvera Safaris
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Full CRUD operations for team members.

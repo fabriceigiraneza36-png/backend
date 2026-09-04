@@ -1,25 +1,9 @@
-// controllers/destinationsController.js
-/**
- * DESTINATIONS CONTROLLER v7.0
- *
- * Key changes:
- *  - Admin mode: ?admin=true shows ALL destinations regardless of status/active
- *  - Public mode (default): only shows published + active
- *  - Explicit safeLimit/safePage/safeOffset (no paginate helper dependency)
- *  - VARCHAR auto-truncation to prevent 500s
- *  - All pg errors return 400/409 not 500
- *  - Fault-tolerant getOne (one failing sub-query doesn't kill response)
- *  - LEFT JOIN countries so destinations show even without country
- *  - Cached column schema introspection
- */
-
 'use strict'
 
 const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { sendDestinationAlertEmail } = require('../services/emailService')
-
 const LOG = '[Destinations]'
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -643,9 +627,9 @@ const serialize = (row) => {
 
     images,
     imageUrl:      mainImg,
-    heroImage:     row.hero_image      || mainImg,
-    thumbnailUrl:  row.thumbnail_url   || mainImg,
-    coverImageUrl: row.cover_image_url || mainImg,
+    heroImage:     row.hero_image      || null,
+    thumbnailUrl:  row.thumbnail_url   || null,
+    coverImageUrl: row.cover_image_url || null,
     videoUrl:      row.video_url,
     virtualTourUrl:row.virtual_tour_url,
 
@@ -1776,7 +1760,7 @@ exports.create = async (req, res, next) => {
         data.description       || null,
         data.overview          || null,
         data.what_to_expect    || null,
-        data.best_time_to_visit|| country.best_time_to_visit || null,
+        data.best_time_to_visit|| null,
         data.getting_there     || null,
         data.local_tips        || null,
         data.safety_info       || null,
@@ -1787,14 +1771,14 @@ exports.create = async (req, res, next) => {
         toNum(data.longitude),
         toNum(data.altitude_meters),
         data.address           || null,
-        data.region            || country.region  || null,
-        data.nearest_city      || country.capital || null,
+        data.region            || null,
+        data.nearest_city      || null,
         data.nearest_airport   || null,
         toNum(data.distance_from_airport_km),
         mainImg,
         imageUrls,
-        data.hero_image        || mainImg,
-        data.thumbnail_url     || mainImg,
+        data.hero_image        || null,
+        data.thumbnail_url     || null,
         data.video_url         || null,
         data.virtual_tour_url  || null,
         toNum(data.duration_days),

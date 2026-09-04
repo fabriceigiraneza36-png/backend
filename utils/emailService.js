@@ -24,7 +24,7 @@ const getTransporter = () => {
         try {
           const msg = {
             to: mailOptions.to,
-            from: mailOptions.from || process.env.SENDGRID_FROM_EMAIL || `Altuvera Travel <${process.env.SMTP_USER}>`,
+            from: mailOptions.from || process.env.SENDGRID_FROM_EMAIL || `Altuvera Safaris <${process.env.SMTP_USER}>`,
             subject: mailOptions.subject,
             html: mailOptions.html,
             text: mailOptions.text,
@@ -51,7 +51,7 @@ const getTransporter = () => {
       sendMail: async (mailOptions) => {
         try {
           const { data, error } = await resend.emails.send({
-            from: mailOptions.from || process.env.SMTP_FROM || `"Altuvera Travel" <${process.env.SMTP_USER}>`,
+            from: mailOptions.from || process.env.SMTP_FROM || `"Altuvera Safaris" <${process.env.SMTP_USER}>`,
             to: mailOptions.to,
             subject: mailOptions.subject,
             html: mailOptions.html,
@@ -169,7 +169,7 @@ const verifyEmailConnection = async () => {
 const sendEmail = async (to, subject, html, options = {}) => {
   const fromAddress =
     process.env.SMTP_FROM ||
-    `"Altuvera Travel" <${process.env.SMTP_USER}>`;
+    `"Altuvera Safaris" <${process.env.SMTP_USER}>`;
 
   const mailOptions = {
     from:    fromAddress,

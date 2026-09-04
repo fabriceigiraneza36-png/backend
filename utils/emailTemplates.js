@@ -1,5 +1,5 @@
 /**
- * Welcome subscriber email — Altuvera Travel branded
+ * Welcome subscriber email — Altuvera Safaris branded
  */
 const welcomeSubscriberEmail = (email, name = null) => {
   // Use BACKEND_URL for the unsubscribe API link
@@ -15,7 +15,7 @@ const welcomeSubscriberEmail = (email, name = null) => {
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Welcome to Altuvera Travel</title>
+  <title>Welcome to Altuvera Safaris</title>
 </head>
 <body style="margin:0;padding:0;background-color:#F0FDF4;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 
@@ -30,7 +30,7 @@ const welcomeSubscriberEmail = (email, name = null) => {
             <td style="background:linear-gradient(135deg,#15803D 0%,#16A34A 50%,#22C55E 100%);padding:48px 40px;text-align:center;">
               <div style="font-size:48px;margin-bottom:16px;">🌿</div>
               <h1 style="margin:0 0 8px;font-size:28px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">
-                Altuvera Travel
+                Altuvera Safaris
               </h1>
               <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.8);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;">
                 True Adventures In High Places &amp; Deep Culture
@@ -46,7 +46,7 @@ const welcomeSubscriberEmail = (email, name = null) => {
                 ${greeting}
               </h2>
               <p style="margin:0 0 12px;font-size:16px;color:#5A7A5A;line-height:1.7;">
-                Thank you for subscribing to the Altuvera Travel newsletter.
+                Thank you for subscribing to the Altuvera Safaris newsletter.
               </p>
               <p style="margin:0;font-size:16px;color:#5A7A5A;line-height:1.7;">
                 You've joined <strong style="color:#15803D;">thousands of adventurers</strong>
@@ -125,7 +125,7 @@ const welcomeSubscriberEmail = (email, name = null) => {
                 Unsubscribe
               </a>
               <p style="margin:20px 0 0;font-size:11px;color:rgba(255,255,255,0.3);">
-                © ${currentYear} Altuvera Travel. All rights reserved.
+                © ${currentYear} Altuvera Safaris. All rights reserved.
               </p>
             </td>
           </tr>

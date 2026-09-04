@@ -99,10 +99,10 @@ const sendNotificationEmail = async (notif, recipientEmail, recipientName) => {
     });
 
     // Mark email as sent
-    await query(
+    await Promise.resolve(query(
       `UPDATE notifications SET email_sent = true, email_sent_at = NOW() WHERE id = $1`,
       [notif.id],
-    ).catch(() => {});
+    )).catch(() => {});
   } catch (err) {
     logger.warn("[Notifications] sendNotificationEmail:", err.message);
   }
@@ -320,7 +320,7 @@ router.get("/my", protect, async (req, res) => {
     const unreadCount = unreadRes.rows[0]?.cnt   ?? 0;
 
     /* Trip alerts — confirmed bookings in next 14 days */
-    const tripRes = await query(
+    const tripRes = await Promise.resolve(query(
       `SELECT b.id, b.travel_date, b.booking_number,
               COALESCE(d.name, b.destination_name, 'Your Adventure') AS destination_name
          FROM bookings b
@@ -332,7 +332,7 @@ router.get("/my", protect, async (req, res) => {
         ORDER BY b.travel_date ASC
         LIMIT 10`,
       [userId],
-    ).catch(() => ({ rows: [] }));
+    )).catch(() => ({ rows: [] }));
 
     const tripAlerts = tripRes.rows.map((b) => {
       const days = Math.ceil(
@@ -680,17 +680,17 @@ router.post(
             if (recipientEmail) {
               let shouldSend = true;
               if (recipientId) {
-                const userPrefs = await query(
+                const userPrefs = await Promise.resolve(query(
                   `SELECT preferences FROM users WHERE id = $1`,
                   [recipientId],
-                ).catch(() => ({ rows: [] }));
+                )).catch(() => ({ rows: [] }));
                 const prefs = userPrefs.rows[0]?.preferences || {};
                 shouldSend = prefs.emailNotifications !== false;
               }
 
               if (shouldSend) {
                 const userRow = recipientId
-                  ? await query(`SELECT full_name FROM users WHERE id = $1`, [recipientId]).catch(() => ({ rows: [] }))
+                  ? await Promise.resolve(query(`SELECT full_name FROM users WHERE id = $1`, [recipientId])).catch(() => ({ rows: [] }))
                   : { rows: [] };
                 const name = userRow.rows[0]?.full_name || "";
                 sendNotificationEmail(notif, recipientEmail, name).catch(() => {});
@@ -823,10 +823,10 @@ router.post("/:id/reply", protect, async (req, res) => {
       /* Notify the original user via socket */
       try {
         const io = req.app?.get?.("io");
-        const nr = await query(
+        const nr = await Promise.resolve(query(
           `SELECT user_id FROM notifications WHERE id = $1`,
           [id],
-        ).catch(() => ({ rows: [] }));
+        )).catch(() => ({ rows: [] }));
         if (io && nr.rows[0]?.user_id) {
           io.to(`user-${nr.rows[0].user_id}`).emit(
             "notification:admin-replied",

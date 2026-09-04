@@ -1,6 +1,6 @@
 // server.js
 // -------------------------------------------------------------------------------
-// ALTUVERA TRAVEL — ENTERPRISE BACKEND SERVER v7.1
+// Altuvera Safaris ï¿½ ENTERPRISE BACKEND SERVER v7.1
 // "True Adventures In High Places & Deep Culture"
 //
 // Changes from v7.0:
@@ -13,14 +13,14 @@
 
 'use strict'
 
-// -- IPv4 DNS preference — must be before any network calls -------------------
+// -- IPv4 DNS preference ï¿½ must be before any network calls -------------------
 const dns = require('dns')
 dns.setDefaultResultOrder('ipv4first')
 
 try {
   const { setDefaultAutoSelectFamily } = require('net')
   setDefaultAutoSelectFamily(false)
-} catch { /* Node < 18.13 — safe to ignore */ }
+} catch { /* Node < 18.13 ï¿½ safe to ignore */ }
 
 // -- Environment ---------------------------------------------------------------
 require('dotenv').config({ path: require('path').resolve(process.cwd(), '.env') })
@@ -55,7 +55,7 @@ const logger    = require('./utils/logger')
 const shutdown  = require('./utils/shutdown')
 const socketBus = require('./utils/socketBus')
 
-// -- Email helpers — safe imports ----------------------------------------------
+// -- Email helpers ï¿½ safe imports ----------------------------------------------
 let verifyEmailConnection = null
 let verifyAuthEmail       = null
 
@@ -67,7 +67,7 @@ try {
     typeof svc.verify                 === 'function' ? svc.verify                 :
     typeof svc.default                === 'function' ? svc.default                :
     null
-} catch { /* emailService.js not present — non-fatal */ }
+} catch { /* emailService.js not present ï¿½ non-fatal */ }
 
 try {
   const eu = require('./utils/email')
@@ -77,7 +77,7 @@ try {
     typeof eu.verifyConnection      === 'function' ? eu.verifyConnection      :
     typeof eu.verify                === 'function' ? eu.verify                :
     null
-} catch { /* email.js not present — non-fatal */ }
+} catch { /* email.js not present ï¿½ non-fatal */ }
 
 // -- Middleware / error handlers -----------------------------------------------
 const { errorHandler, notFoundHandler } = require('./middleware/errorHandler')
@@ -507,7 +507,7 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS msg_type       VARCHAR(30) DEFAULT 'text'`,
   ]
   for (const sql of migrations) {
-    await query(sql).catch(() => { /* column already exists — safe */ })
+    await query(sql).catch(() => { /* column already exists ï¿½ safe */ })
   }
 
   // Make session_id nullable on existing DBs that created it NOT NULL
@@ -567,7 +567,7 @@ const corsOptions = {
 
 app.use(cors(corsOptions))
 
-// Explicit pre-flight handler — must come BEFORE route declarations
+// Explicit pre-flight handler ï¿½ must come BEFORE route declarations
 app.options('*', (req, res) => {
   const origin = req.headers.origin
   if (isOriginAllowed(origin)) {
@@ -647,7 +647,7 @@ app.get('/health', (_req, res) =>
   res.json({
     success:     true,
     status:      'healthy',
-    service:     'Altuvera Travel API',
+    service:     'Altuvera Safaris API',
     version:     '7.1',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
@@ -673,7 +673,7 @@ app.get('/api/health', (_req, res) =>
 app.get('/api', (_req, res) =>
   res.json({
     success: true,
-    name:    'Altuvera Travel API',
+    name:    'Altuvera Safaris API',
     version: '7.1',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
@@ -853,7 +853,7 @@ const verifySocketToken = (token) => {
 const getOrCreateConversation = async ({
   sessionId, userId, guestName, guestEmail, channel, source, ipAddress,
 }) => {
-  // 1?? Try by userId (authenticated users — preserve their open thread)
+  // 1?? Try by userId (authenticated users ï¿½ preserve their open thread)
   if (userId) {
     const { rows } = await query(
       `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
@@ -1054,7 +1054,7 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   })
 }
 
-// Legacy helpers (chat_messages table — backwards compat)
+// Legacy helpers (chat_messages table ï¿½ backwards compat)
 const fetchSessionMessages = async (sessionId) => {
   try {
     const { rows } = await query(
@@ -1099,7 +1099,7 @@ const broadcastConversationMessage = ({
 }
 
 // -------------------------------------------------------------------------------
-// SOCKET.IO — AUTH MIDDLEWARE
+// SOCKET.IO ï¿½ AUTH MIDDLEWARE
 // -------------------------------------------------------------------------------
 
 io.use((socket, next) => {
@@ -1132,7 +1132,7 @@ setInterval(async () => {
 }, 15_000)
 
 // -------------------------------------------------------------------------------
-// SOCKET.IO — CONNECTION HANDLER
+// SOCKET.IO ï¿½ CONNECTION HANDLER
 // -------------------------------------------------------------------------------
 
 io.on('connection', (socket) => {
@@ -1794,7 +1794,7 @@ io.on('connection', (socket) => {
 })
 
 // -------------------------------------------------------------------------------
-// ERROR HANDLERS — must be last middleware
+// ERROR HANDLERS ï¿½ must be last middleware
 // -------------------------------------------------------------------------------
 
 app.use(notFoundHandler)
@@ -1806,7 +1806,7 @@ app.use(errorHandler)
 
 async function initializeServer () {
   try {
-    logger.info('?? Connecting to database…')
+    logger.info('?? Connecting to databaseï¿½')
     await query('SELECT NOW()')
     logger.info('? Database connected')
 
@@ -1819,7 +1819,7 @@ async function initializeServer () {
       logger.warn('??  Destination schema (non-fatal):', err.message)
     }
 
-    // All other schemas — run sequentially to avoid connection pool saturation
+    // All other schemas ï¿½ run sequentially to avoid connection pool saturation
     const schemas = [
       { fn: ensureSubscribersSchema,   name: 'Subscribers'   },
       { fn: ensureUserSchema,          name: 'Users'         },
@@ -1863,16 +1863,16 @@ async function initializeServer () {
     pushUtility.initPush()
 
     await new Promise((resolve) => {
-      httpServer.listen(PORT, () => {
+      httpServer.listen(PORT,'0.0.0.0', () => {
         const line = '-'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('??  ALTUVERA TRAVEL — Enterprise Backend v7.1')
+        logger.info('??  ALTUVERA Safaris Enterprise Backend v7.1')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
         logger.info(`  Port         : ${PORT}`)
         logger.info(`  Backend      : ${process.env.BACKEND_URL || `http://localhost:${PORT}`}`)
-        logger.info(`  Frontend     : ${process.env.FRONTEND_URL || '—'}`)
+        logger.info(`  Frontend     : ${process.env.FRONTEND_URL || 'ï¿½'}`)
         logger.info(`  CORS origins : ${ALLOWED_ORIGINS.join(', ')}`)
         logger.info(`  Theme        : green-white (#16a34a) ??`)
         logger.info(`  DNS          : ipv4first ?`)
