@@ -5,11 +5,10 @@ const crypto = require("crypto");
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const { slugify } = require("../utils/slugify");
-const slugify = require("../utils/slugify");
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+/* ═══════════════════════════════════════════════════════════════════════════
     SAFE REQUIRE: HELPERS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 
 let getCountryService;
 let sanitizeInput;
@@ -20,7 +19,7 @@ try {
     sanitizeInput,
   } = require("../services/countryService"));
 } catch (err) {
-  logger.warn("[Countries] countryService not found â€” trying legacy paths:", err.message);
+  logger.warn("[Countries] countryService not found — trying legacy paths:", err.message);
 
   const LEGACY_PATHS = [
     "../services/country",
@@ -34,19 +33,19 @@ try {
       const mod = require(p);
       if (typeof mod.getCountryService === "function") {
         getCountryService = mod.getCountryService;
-        logger.info(`[Countries] âœ… Using getCountryService from: ${p}`);
+        logger.info(`[Countries] ✅ Using getCountryService from: ${p}`);
         break;
       }
       if (typeof mod.default === "object" && mod.default.getCountryService) {
         getCountryService = mod.default.getCountryService;
-        logger.info(`[Countries] âœ… Using getCountryService from: ${p} (default export)`);
+        logger.info(`[Countries] ✅ Using getCountryService from: ${p} (default export)`);
         break;
       }
     } catch {/* try next */}
   }
 
   if (!getCountryService) {
-    logger.warn("[Countries] No countryService found â€” using stub");
+    logger.warn("[Countries] No countryService found — using stub");
     getCountryService = () => ({});
   }
 
@@ -54,10 +53,10 @@ try {
     const mod = require("../utils/helpers");
     if (typeof mod.sanitizeInput === "function") {
       sanitizeInput = mod.sanitizeInput;
-      logger.info("[Countries] âœ… Using sanitizeInput from: ../utils/helpers");
+      logger.info("[Countries] ✅ Using sanitizeInput from: ../utils/helpers");
     }
   } catch (err) {
-    logger.warn("[Countries] helpers not found â€” using basic sanitize", err.message);
+    logger.warn("[Countries] helpers not found — using basic sanitize", err.message);
     sanitizeInput = (input) => {
       if (typeof input !== "string") return "";
       return input
@@ -68,9 +67,17 @@ try {
   }
 }
 
-/* â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•
+const sanitizeString = (value) => {
+  if (typeof value !== "string") return "";
+  return value
+    .replace(/[<>]/g, "")
+    .replace(/['"]/g, "")
+    .trim();
+};
+
+/* ═══════════════════════════════════════════════════════════════════════════
     EXPORTS
-â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â• */
+═══════════════════════════════════════════════════════════════════════════ */
 
 const getAll = async (req, res, next) => {
   try {
@@ -86,14 +93,17 @@ const getAll = async (req, res, next) => {
     const limitNum = Math.min(parseInt(limit, 10), 100);
     const offset = (pageNum - 1) * limitNum;
 
-    let validSortFields = ["name", "code", "continent", "region"];
-    if (!validSortFields.includes(sortBy)) sortBy = "name";
-    if (!["asc", "desc"].includes(order.toLowerCase())) order = "asc";
-
+    let cleanSortBy = "name";
+    const validSortFields = ["name", "code", "continent", "region"];
+    if (validSortFields.includes(sortBy)) {
+      cleanSortBy = sortBy;
+    }
+    
+    const cleanOrder = ["asc", "desc"].includes(order.toLowerCase()) ? order.toUpperCase() : "ASC";
     const searchTerm = `%${search}%`;
 
-    const { rows: dataRes, rowCount } = await query(
-      `SELECT * FROM countries WHERE name ILIKE $1 OR code ILIKE $1 ORDER BY ${sortBy} ${order.toUpperCase()} LIMIT $2 OFFSET $3`,
+    const { rows: dataRes } = await query(
+      `SELECT * FROM countries WHERE name ILIKE $1 OR code ILIKE $1 ORDER BY ${cleanSortBy} ${cleanOrder} LIMIT $2 OFFSET $3`,
       [searchTerm, limitNum, offset]
     );
 
@@ -106,7 +116,7 @@ const getAll = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: dataRes.rows,
+      data: dataRes,
       pagination: {
         total,
         page: pageNum,
@@ -151,6 +161,102 @@ const getById = async (req, res, next) => {
     });
   } catch (err) {
     logger.error("[Countries] getById:", err.message);
+    next(err);
+  }
+};
+
+const getOne = async (req, res, next) => {
+  try {
+    const { slug } = req.params;
+
+    // Retrieve the base country details (slug or numerical id check)
+    const isNumeric = /^\d+$/.test(slug);
+    const whereClause = isNumeric ? "c.id = $1" : "c.slug = $1";
+
+    const countryQuery = await query(`SELECT c.* FROM countries c WHERE ${whereClause} AND c.is_active = true`, [slug]);
+    if (!countryQuery.rows.length) {
+      return res.status(404).json({ error: "Country not found" });
+    }
+    const country = countryQuery.rows[0];
+
+    // Asynchronously log the view increment
+    query("UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1", [country.id]).catch(() => {});
+
+    // Safe retrieve for connected destinations mapping missing columns safely
+    const destinationsQuery = await query(`
+      SELECT
+        d.id,
+        d.name,
+        d.slug,
+        d.short_description,
+        d.image_url,
+        d.difficulty,
+        COALESCE(d.duration_days::TEXT, 'N/A') AS duration,
+        d.duration_days,
+        d.price_from,
+        d.price_currency,
+        d.rating,
+        d.review_count,
+        d.is_featured,
+        d.highlights,
+        d.best_time_to_visit,
+        d.category
+      FROM destinations d
+      WHERE d.country_id = $1 AND d.is_active = true
+      ORDER BY d.is_featured DESC, d.name ASC
+    `, [country.id]).catch(err => {
+      logger.warn(`[Countries] fallback destinations details query: ${err.message}`);
+      return { rows: [] };
+    });
+
+    // Safe retrieve similar countries avoiding Ambiguous "destination_count" sorts
+    const similarQuery = await query(`
+      SELECT * FROM (
+        SELECT
+          c.id, c.name, c.slug, c.flag_url, c.image_url, c.continent,
+          (SELECT COUNT(*)::INTEGER FROM destinations d
+           WHERE d.country_id = c.id AND d.is_active = true
+          ) AS destination_count
+        FROM countries c
+        WHERE c.continent = $1
+          AND c.id        != $2
+          AND c.is_active  = true
+      ) sub
+      ORDER BY sub.destination_count DESC, sub.name ASC
+      LIMIT 3
+    `, [country.continent, country.id]).catch(err => {
+      logger.error(`[Countries] fallback similar countries query: ${err.message}`);
+      return { rows: [] };
+    });
+
+    // Safe retrieve connected services mapping price_from safely
+    const servicesQuery = await query(`
+      SELECT
+        s.id, s.title, s.slug, s.description,
+        s.image_url, 
+        0 AS price_from, 
+        'USD' AS price_currency,
+        s.duration, s.category, s.is_featured,
+        s.rating, s.review_count
+      FROM services s
+      WHERE s.country_id = $1 AND s.is_active = true
+      ORDER BY s.is_featured DESC, s.title ASC
+    `, [country.id]).catch(err => {
+      logger.warn(`[Countries] fallback services details query: ${err.message}`);
+      return { rows: [] };
+    });
+
+    return res.json({
+      success: true,
+      data: {
+        ...country,
+        destinations: destinationsQuery.rows,
+        similar: similarQuery.rows,
+        services: servicesQuery.rows
+      }
+    });
+  } catch (err) {
+    logger.error("[Countries] getOne error:", err.message);
     next(err);
   }
 };
@@ -207,15 +313,6 @@ const create = async (req, res, next) => {
       });
     }
 
-    // Sanitize string fields
-    const sanitizeString = (value) => {
-      if (typeof value !== "string") return "";
-      return value
-        .replace(/[<>]/g, "")
-        .replace(/['"]/g, "")
-        .trim();
-    };
-
     const nameTrimmed = sanitizeString(name);
     const codeTrimmed = sanitizeString(code).toUpperCase();
     if (nameTrimmed.length === 0 || codeTrimmed.length === 0) {
@@ -240,19 +337,19 @@ const create = async (req, res, next) => {
       });
     }
 
-    // Prepare columns and values for INSERT
     const columns = [];
+    const placeholders = [];
     const values = [];
     let paramIndex = 1;
 
     const addField = (col, val, isString = false) => {
       if (val !== undefined && val !== null) {
-        columns.push(`${col} = $${paramIndex++}`);
+        columns.push(col);
+        placeholders.push(`$${paramIndex++}`);
         values.push(isString ? sanitizeString(val) : val);
       }
     };
 
-    // Add all fields
     addField("name", nameTrimmed, true);
     addField("code", codeTrimmed, true);
     addField("continent", continent, true);
@@ -265,38 +362,37 @@ const create = async (req, res, next) => {
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", hero_images);
+    addField("hero_images", Array.isArray(hero_images) || typeof hero_images === "object" ? JSON.stringify(hero_images) : hero_images);
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
-    addField("activities", activities);
-    addField("faqs", faqs);
-    addField("extra_info", extra_info);
+    addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
+    addField("faqs", Array.isArray(faqs) || typeof faqs === "object" ? JSON.stringify(faqs) : faqs);
+    addField("extra_info", typeof extra_info === "object" ? JSON.stringify(extra_info) : extra_info);
     addField("language", language, true);
     addField("timezone", timezone, true);
     addField("currency", currency, true);
     addField("climate", climate, true);
     addField("best_time_to_visit", best_time_to_visit, true);
     addField("visa_info", visa_info, true);
-    addField("key_facts", key_facts);
-    addField("government", government);
-    addField("languages", languages);
-    addField("climate_detail", climate_detail);
-    addField("geography", geography);
-    addField("practical_info", practical_info);
-    addField("wildlife", wildlife);
-    addField("cuisine", cuisine);
-    addField("ratings", ratings);
-    addField("highlights", highlights);
-    addField("experiences", experiences);
-    addField("travel_tips", travel_tips);
-    addField("neighboring_countries", neighboring_countries);
+    addField("key_facts", typeof key_facts === "object" ? JSON.stringify(key_facts) : key_facts);
+    addField("government", typeof government === "object" ? JSON.stringify(government) : government);
+    addField("languages", Array.isArray(languages) ? JSON.stringify(languages) : languages);
+    addField("climate_detail", typeof climate_detail === "object" ? JSON.stringify(climate_detail) : climate_detail);
+    addField("geography", typeof geography === "object" ? JSON.stringify(geography) : geography);
+    addField("practical_info", typeof practical_info === "object" ? JSON.stringify(practical_info) : practical_info);
+    addField("wildlife", typeof wildlife === "object" ? JSON.stringify(wildlife) : wildlife);
+    addField("cuisine", typeof cuisine === "object" ? JSON.stringify(cuisine) : cuisine);
+    addField("ratings", typeof ratings === "object" ? JSON.stringify(ratings) : ratings);
+    addField("highlights", Array.isArray(highlights) ? JSON.stringify(highlights) : highlights);
+    addField("experiences", Array.isArray(experiences) ? JSON.stringify(experiences) : experiences);
+    addField("travel_tips", Array.isArray(travel_tips) ? JSON.stringify(travel_tips) : travel_tips);
+    addField("neighboring_countries", Array.isArray(neighboring_countries) ? JSON.stringify(neighboring_countries) : neighboring_countries);
     addField("demonym", demonym, true);
     addField("is_featured", is_featured);
 
-    // Build query
     const queryText = `
-      INSERT INTO columns (${columns.map((c) => c.split(" =")[0]).join(", ")})
-      VALUES (${columns.map((_, i) => `$${i + 1}`).join(", ")})
+      INSERT INTO countries (${columns.join(", ")})
+      VALUES (${placeholders.join(", ")})
       RETURNING *
     `;
 
@@ -310,7 +406,7 @@ const create = async (req, res, next) => {
     if (err.code === "23505") {
       return res.status(409).json({
         success: false,
-        error: "Country with this code already exists",
+        error: "Country with this code or slug already exists",
       });
     }
     logger.error("[Countries] create:", err.message);
@@ -371,16 +467,6 @@ const update = async (req, res, next) => {
       is_featured,
     } = req.body;
 
-    // Sanitize string fields
-    const sanitizeString = (value) => {
-      if (typeof value !== "string") return "";
-      return value
-        .replace(/[<>]/g, "")
-        .replace(/['"]/g, "")
-        .trim();
-    };
-
-    // Build SET clause
     const setClauses = [];
     const values = [];
     let paramIndex = 1;
@@ -392,7 +478,6 @@ const update = async (req, res, next) => {
       }
     };
 
-    // Handle each field
     if (name !== undefined) {
       const nameTrimmed = sanitizeString(name);
       if (nameTrimmed.length === 0) {
@@ -429,6 +514,7 @@ const update = async (req, res, next) => {
       }
       addField("slug", slugValue, true);
     }
+
     addField("continent", continent, true);
     addField("region", region, true);
     addField("official_name", official_name, true);
@@ -438,31 +524,31 @@ const update = async (req, res, next) => {
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", hero_images);
+    addField("hero_images", Array.isArray(hero_images) || typeof hero_images === "object" ? JSON.stringify(hero_images) : hero_images);
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
-    addField("activities", activities);
-    addField("faqs", faqs);
-    addField("extra_info", extra_info);
+    addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
+    addField("faqs", Array.isArray(faqs) || typeof faqs === "object" ? JSON.stringify(faqs) : faqs);
+    addField("extra_info", typeof extra_info === "object" ? JSON.stringify(extra_info) : extra_info);
     addField("language", language, true);
     addField("timezone", timezone, true);
     addField("currency", currency, true);
     addField("climate", climate, true);
     addField("best_time_to_visit", best_time_to_visit, true);
     addField("visa_info", visa_info, true);
-    addField("key_facts", key_facts);
-    addField("government", government);
-    addField("languages", languages);
-    addField("climate_detail", climate_detail);
-    addField("geography", geography);
-    addField("practical_info", practical_info);
-    addField("wildlife", wildlife);
-    addField("cuisine", cuisine);
-    addField("ratings", ratings);
-    addField("highlights", highlights);
-    addField("experiences", experiences);
-    addField("travel_tips", travel_tips);
-    addField("neighboring_countries", neighboring_countries);
+    addField("key_facts", typeof key_facts === "object" ? JSON.stringify(key_facts) : key_facts);
+    addField("government", typeof government === "object" ? JSON.stringify(government) : government);
+    addField("languages", Array.isArray(languages) ? JSON.stringify(languages) : languages);
+    addField("climate_detail", typeof climate_detail === "object" ? JSON.stringify(climate_detail) : climate_detail);
+    addField("geography", typeof geography === "object" ? JSON.stringify(geography) : geography);
+    addField("practical_info", typeof practical_info === "object" ? JSON.stringify(practical_info) : practical_info);
+    addField("wildlife", typeof wildlife === "object" ? JSON.stringify(wildlife) : wildlife);
+    addField("cuisine", typeof cuisine === "object" ? JSON.stringify(cuisine) : cuisine);
+    addField("ratings", typeof ratings === "object" ? JSON.stringify(ratings) : ratings);
+    addField("highlights", Array.isArray(highlights) ? JSON.stringify(highlights) : highlights);
+    addField("experiences", Array.isArray(experiences) ? JSON.stringify(experiences) : experiences);
+    addField("travel_tips", Array.isArray(travel_tips) ? JSON.stringify(travel_tips) : travel_tips);
+    addField("neighboring_countries", Array.isArray(neighboring_countries) ? JSON.stringify(neighboring_countries) : neighboring_countries);
     addField("demonym", demonym, true);
     addField("is_featured", is_featured);
 
@@ -473,12 +559,12 @@ const update = async (req, res, next) => {
       });
     }
 
-    values.push(id); // for WHERE clause
+    values.push(id); 
 
     const queryText = `
       UPDATE countries
       SET ${setClauses.join(", ")}
-      WHERE id = $${params.length}
+      WHERE id = $${paramIndex}
       RETURNING *
     `;
 
@@ -499,7 +585,7 @@ const update = async (req, res, next) => {
     if (err.code === "23505") {
       return res.status(409).json({
         success: false,
-        error: "Country with this code already exists",
+        error: "Country with this code or slug already exists",
       });
     }
     logger.error("[Countries] update:", err.message);
@@ -540,135 +626,70 @@ const remove = async (req, res, next) => {
     next(err);
   }
 };
-// Function to get images for a country by ID
-    // Function to get images for a country by ID
-    const getImages = async (req, res, next) => {
+
+const getImages = async (req, res, next) => {
+  try {
+    const { id } = req.params;
+
+    if (!/^\d+$/.test(id)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid country ID",
+      });
+    }
+
+    const { rows } = await query(
+      "SELECT hero_images FROM countries WHERE id = $1",
+      [id]
+    );
+
+    if (rows.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Country not found",
+      });
+    }
+
+    let heroImages = rows[0].hero_images;
+    if (typeof heroImages === 'string') {
       try {
-        const { id } = req.params;
-        
-        if (!/^\d+$/.test(id)) {
-          return res.status(400).json({
-            success: false,
-            error: "Invalid country ID",
-          });
-        }
-        
-        const { rows } = await query(
-          \SELECT hero_images FROM countries WHERE id = \,
-          [id]
-        );
-        
-        if (rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            error: "Country not found",
-          });
-        }
-        
-        let heroImages = rows[0].hero_images;
-        // If it's a string, try to parse as JSON
-        if (typeof heroImages === 'string') {
-          try {
-            const parsed = JSON.parse(heroImages);
-            if (Array.isArray(parsed)) {
-              heroImages = parsed;
-            } else {
-              // If not an array, treat as a single string and split by commas if needed
-              heroImages = [heroImages];
-            }
-          } catch (e) {
-            // If JSON parsing fails, split by comma and trim
-            heroImages = heroImages.split(',').map(s => s.trim()).filter(s => s !== '');
-          }
-        } else if (!Array.isArray(heroImages)) {
-          // If it's not a string and not an array, wrap in an array
+        const parsed = JSON.parse(heroImages);
+        if (Array.isArray(parsed)) {
+          heroImages = parsed;
+        } else {
           heroImages = [heroImages];
         }
-        
-        // Filter out empty strings and ensure each item is a string
-        const images = heroImages
-          .filter(img => typeof img === 'string' && img.trim() !== '')
-          .map(img => img.trim());
-        
-        return res.json({
-          success: true,
-          data: images,
-        });
-      } catch (err) {
-        logger.error("[Countries] getImages:", err.message);
-        next(err);
+      } catch (e) {
+        heroImages = heroImages.split(',').map(s => s.trim()).filter(s => s !== '');
       }
-    };
-    // Function to get images for a country by ID
-    const getImages = async (req, res, next) => {
-      try {
-        const { id } = req.params;
-        
-        if (!/^\d+$/.test(id)) {
-          return res.status(400).json({
-            success: false,
-            error: "Invalid country ID",
-          });
-        }
-        
-        const { rows } = await query(
-          \SELECT hero_images FROM countries WHERE id = \,
-          [id]
-        );
-        
-        if (rows.length === 0) {
-          return res.status(404).json({
-            success: false,
-            error: "Country not found",
-          });
-        }
-        
-        let heroImages = rows[0].hero_images;
-        // If it's a string, try to parse as JSON
-        if (typeof heroImages === 'string') {
-          try {
-            const parsed = JSON.parse(heroImages);
-            if (Array.isArray(parsed)) {
-              heroImages = parsed;
-            } else {
-              // If not an array, treat as a single string and split by commas if needed
-              heroImages = [heroImages];
-            }
-          } catch (e) {
-            // If JSON parsing fails, split by comma and trim
-            heroImages = heroImages.split(',').map(s => s.trim()).filter(s => s !== '');
-          }
-        } else if (!Array.isArray(heroImages)) {
-          // If it's not a string and not an array, wrap in an array
-          heroImages = [heroImages];
-        }
-        
-        // Filter out empty strings and ensure each item is a string
-        const images = heroImages
-          .filter(img => typeof img === 'string' && img.trim() !== '')
-          .map(img => img.trim());
-        
-        return res.json({
-          success: true,
-          data: images,
-        });
-      } catch (err) {
-        logger.error("[Countries] getImages:", err.message);
-        next(err);
-      }
-    };
+    } else if (!Array.isArray(heroImages) && heroImages !== null) {
+      heroImages = [heroImages];
+    } else if (heroImages === null) {
+      heroImages = [];
+    }
+
+    const images = heroImages
+      .filter(img => typeof img === 'string' && img.trim() !== '')
+      .map(img => img.trim());
+
+    return res.json({
+      success: true,
+      data: images,
+    });
+  } catch (err) {
+    logger.error("[Countries] getImages:", err.message);
+    next(err);
+  }
 };
 
-// Export all controller functions
 module.exports = {
   getAll,
   getById,
+  getOne,
   create,
   update,
   remove,
   getImages,
-  // Additional functions expected by routes
-  getOne: getById, // Alias for backward compatibility
   getFeatured: async (req, res, next) => {
     try {
       const { rows } = await query(
@@ -699,18 +720,18 @@ module.exports = {
       next(err);
     }
   },
-  getStats: async (req, res, next) {
+  getStats: async (req, res, next) => {
     try {
       const { rows: countRes } = await query(
         `SELECT COUNT(*) as total FROM countries`
       );
       const total = parseInt(countRes.rows[0].total, 10);
-      
+
       const { rows: featuredRes } = await query(
         `SELECT COUNT(*) as featured FROM countries WHERE is_featured = true`
       );
       const featured = parseInt(featuredRes.rows[0].featured, 10);
-      
+
       return res.json({
         success: true,
         data: {
@@ -726,20 +747,20 @@ module.exports = {
   bulkDelete: async (req, res, next) => {
     try {
       const { ids } = req.body;
-      
+
       if (!Array.isArray(ids) || ids.length === 0) {
         return res.status(400).json({
           success: false,
           error: "Please provide an array of country IDs to delete",
         });
       }
-      
+
       const placeholders = ids.map((_, index) => `$${index + 1}`).join(',');
       const { rows } = await query(
         `DELETE FROM countries WHERE id IN (${placeholders}) RETURNING *`,
         ids
       );
-      
+
       return res.json({
         success: true,
         data: rows,
@@ -753,19 +774,19 @@ module.exports = {
   toggleActive: async (req, res, next) => {
     try {
       const { id } = req.params;
-      
+
       const { rows } = await query(
         `UPDATE countries SET is_active = NOT is_active WHERE id = $1 RETURNING *`,
         [id]
       );
-      
+
       if (rows.length === 0) {
         return res.status(404).json({
           success: false,
           error: "Country not found",
         });
       }
-      
+
       return res.json({
         success: true,
         data: rows[0],
@@ -778,19 +799,19 @@ module.exports = {
   toggleFeatured: async (req, res, next) => {
     try {
       const { id } = req.params;
-      
+
       const { rows } = await query(
         `UPDATE countries SET is_featured = NOT is_featured WHERE id = $1 RETURNING *`,
         [id]
       );
-      
+
       if (rows.length === 0) {
         return res.status(404).json({
           success: false,
           error: "Country not found",
         });
       }
-      
+
       return res.json({
         success: true,
         data: rows[0],

@@ -1,14 +1,16 @@
 /**
  * Destination Likes Controller
  */
-const { DestinationLike, Destination } = require("../models");
+const { DestinationLike, Destination, User } = require("../models");
 const { Op } = require("sequelize");
+const { query: db } = require("../config/db");
+const logger = require("../utils/logger");
 
 // Get all likes for a destination
 exports.getLikes = async (req, res, next) => {
+  const { destinationId } = req.params;
+  
   try {
-    const { destinationId } = req.params;
-
     const destination = await Destination.findByPk(destinationId);
     if (!destination) {
       return res.status(404).json({
@@ -17,13 +19,19 @@ exports.getLikes = async (req, res, next) => {
       });
     }
 
+    // Explicitly select existing columns to resolve column user.name does not exist errors
     const likes = await DestinationLike.findAll({
       where: { destinationId },
       include: [
         {
-          model: require("../models").User,
+          model: User,
           as: "user",
-          attributes: ["id", "name", "email", "avatar"],
+          attributes: [
+            "id", 
+            ["full_name", "name"],    // Safely map Database full_name to output name
+            "email", 
+            ["avatar_url", "avatar"]  // Safely map Database avatar_url to output avatar
+          ],
         },
       ],
       order: [["createdAt", "DESC"]],
@@ -31,7 +39,7 @@ exports.getLikes = async (req, res, next) => {
 
     const totalLikes = await DestinationLike.count({ where: { destinationId } });
 
-    res.json({
+    return res.json({
       status: "success",
       data: {
         likes,
@@ -39,7 +47,52 @@ exports.getLikes = async (req, res, next) => {
       },
     });
   } catch (error) {
-    next(error);
+    logger.warn(`[DestinationLikes] Sequelize mapped fetch failed (${error.message}). Running raw query fallback...`);
+
+    // Safe direct query fallback routing
+    try {
+      const rawLikes = await db(`
+        SELECT dl.id, dl.destination_id, dl.user_id, dl.session_id, dl.created_at,
+               u.id AS user_id_val, 
+               u.full_name AS user_full_name, 
+               u.avatar_url AS user_avatar_url,
+               u.email AS user_email
+        FROM destination_likes dl
+        LEFT JOIN users u ON u.id = dl.user_id
+        WHERE dl.destination_id = $1
+        ORDER BY dl.created_at DESC
+      `, [destinationId]);
+
+      const totalLikesRes = await db(
+        `SELECT COUNT(*)::INTEGER as cnt FROM destination_likes WHERE destination_id = $1`, 
+        [destinationId]
+      );
+
+      const formatted = rawLikes.rows.map(row => ({
+        id: row.id,
+        destinationId: row.destination_id,
+        userId: row.user_id,
+        sessionId: row.session_id,
+        createdAt: row.created_at,
+        user: row.user_id_val ? {
+          id: row.user_id_val,
+          name: row.user_full_name || 'Anonymous Explorer',
+          avatar: row.user_avatar_url || null,
+          email: row.user_email
+        } : null
+      }));
+
+      return res.json({
+        status: "success",
+        data: {
+          likes: formatted,
+          totalLikes: parseInt(totalLikesRes.rows[0]?.cnt || 0, 10),
+        },
+      });
+    } catch (rawError) {
+      logger.error("[DestinationLikes] Fallback execution failed:", rawError.message);
+      next(rawError);
+    }
   }
 };
 
@@ -65,7 +118,7 @@ exports.toggleLike = async (req, res, next) => {
       });
     }
 
-    const whereClause = { destinationId: parseInt(destinationId) };
+    const whereClause = { destinationId: parseInt(destinationId, 10) };
     if (userId) {
       whereClause.userId = userId;
     } else {
@@ -90,14 +143,14 @@ exports.toggleLike = async (req, res, next) => {
     }
 
     const newLike = await DestinationLike.create({
-      destinationId: parseInt(destinationId),
+      destinationId: parseInt(destinationId, 10),
       userId: userId || null,
       sessionId: userId ? null : sessionId,
     });
 
     const totalLikes = await DestinationLike.count({ where: { destinationId } });
 
-    res.status(201).json({
+    return res.status(201).json({
       status: "success",
       message: "Like added",
       data: {
@@ -107,6 +160,7 @@ exports.toggleLike = async (req, res, next) => {
       },
     });
   } catch (error) {
+    logger.error("[DestinationLikes] toggleLike failure:", error.message);
     next(error);
   }
 };
@@ -125,7 +179,7 @@ exports.checkLike = async (req, res, next) => {
       });
     }
 
-    const whereClause = { destinationId: parseInt(destinationId) };
+    const whereClause = { destinationId: parseInt(destinationId, 10) };
     if (userId) {
       whereClause.userId = userId;
     } else {
@@ -134,13 +188,14 @@ exports.checkLike = async (req, res, next) => {
 
     const existingLike = await DestinationLike.findOne({ where: whereClause });
 
-    res.json({
+    return res.json({
       status: "success",
       data: {
         isLiked: !!existingLike,
       },
     });
   } catch (error) {
+    logger.error("[DestinationLikes] checkLike failure:", error.message);
     next(error);
   }
 };
@@ -157,31 +212,39 @@ exports.getLikeStats = async (req, res, next) => {
       });
     }
 
+    const cleanedIds = destinationIds.map((id) => parseInt(id, 10)).filter(id => !isNaN(id));
+    if (cleanedIds.length === 0) {
+      return res.json({
+        status: "success",
+        data: []
+      });
+    }
+
     const likes = await DestinationLike.findAll({
       where: {
-        destinationId: { [Op.in]: destinationIds.map((id) => parseInt(id)) },
+        destinationId: { [Op.in]: cleanedIds },
       },
       attributes: ["destinationId"],
       group: ["destinationId"],
     });
 
-    const likeCounts = {};
-    for (const like of likes) {
-      likeCounts[like.destinationId] = await DestinationLike.count({
-        where: { destinationId: like.destinationId },
+    const result = [];
+    for (const id of cleanedIds) {
+      const count = await DestinationLike.count({
+        where: { destinationId: id },
+      });
+      result.push({
+        destinationId: id,
+        totalLikes: count
       });
     }
 
-    const result = destinationIds.map((id) => ({
-      destinationId: parseInt(id),
-      totalLikes: likeCounts[parseInt(id)] || 0,
-    }));
-
-    res.json({
+    return res.json({
       status: "success",
       data: result,
     });
   } catch (error) {
+    logger.error("[DestinationLikes] getLikeStats failure:", error.message);
     next(error);
   }
 };
