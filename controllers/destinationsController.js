@@ -5,7 +5,18 @@ const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
-const { sendDestinationAlertEmail } = require('../services/emailService')
+
+let sendDestinationAlertEmail = null
+try {
+  ({ sendDestinationAlertEmail } = require('../services/emailService'))
+} catch (err) {
+  try {
+    ({ sendDestinationAlertEmail } = require('../utils/emailService'))
+  } catch {
+    sendDestinationAlertEmail = async () => ({ success: false, error: 'Email service unavailable' })
+  }
+}
+
 const LOG = '[Destinations]'
 
 /* ═══════════════════════════════════════════════════════════════════════════
