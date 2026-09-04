@@ -409,7 +409,7 @@ exports.uploadCountryFlag = async (req, res, next) => {
     await query(
       `UPDATE countries 
        SET flag_url = $1, 
-           images = array_prepend($1, array_remove(images, $1)),
+           images = array_prepend($1, array_remove(COALESCE(images, ARRAY[]::text[]), $1)),
            updated_at = NOW()
        WHERE id = $2`,
       [result.secure_url, countryId]
@@ -505,9 +505,14 @@ exports.uploadCountryImages = async (req, res, next) => {
       // Append images to country's images array (flag is always first if it exists)
       await query(
         `UPDATE countries 
-         SET images = array_cat(images, $1::text[]), updated_at = NOW()
+         SET images = array_cat(COALESCE(images, ARRAY[]::text[]), $1::text[]),
+             image_url = COALESCE(NULLIF(image_url, ''), $3),
+             hero_image = COALESCE(NULLIF(hero_image, ''), $3),
+             cover_image_url = COALESCE(NULLIF(cover_image_url, ''), $3),
+             hero_images = COALESCE(hero_images, '[]'::jsonb) || to_jsonb($1::text[]),
+             updated_at = NOW()
          WHERE id = $2`,
-        [imageUrls, countryId]
+        [imageUrls, countryId, imageUrls[0]]
       );
 
       res.status(201).json({

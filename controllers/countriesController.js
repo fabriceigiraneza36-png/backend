@@ -892,11 +892,24 @@ const cleanCountryImage = (value) => {
 
 const sanitizeCountryMedia = (country) => {
   if (!country) return country;
+  const gallery = [
+    ...normalizeImages(country.hero_images),
+    ...normalizeImages(country.images),
+    ...normalizeImages(country.gallery),
+  ].filter((item, index, all) => all.findIndex((candidate) => candidate.url === item.url) === index);
+  const primaryImage = cleanCountryImage(
+    country.hero_image || country.hero_image_url || country.cover_image_url ||
+    country.cover_image || country.image_url || gallery[0]?.url,
+  );
+
   return {
     ...country,
-    image_url: cleanCountryImage(country.image_url),
-    cover_image_url: cleanCountryImage(country.cover_image_url),
-    hero_image: cleanCountryImage(country.hero_image),
-    hero_images: cleanCountryImages(country.hero_images),
+    image_url: cleanCountryImage(country.image_url) || primaryImage,
+    cover_image_url: cleanCountryImage(country.cover_image_url) || primaryImage,
+    cover_image: cleanCountryImage(country.cover_image) || primaryImage,
+    hero_image: cleanCountryImage(country.hero_image) || primaryImage,
+    hero_image_url: cleanCountryImage(country.hero_image_url) || primaryImage,
+    hero_images: JSON.stringify(gallery.slice(0, 10)),
+    images: gallery.map((item) => item.url),
   };
 };
