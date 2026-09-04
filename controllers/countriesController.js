@@ -169,20 +169,19 @@ const getOne = async (req, res, next) => {
   try {
     const { slug } = req.params;
 
-    // Retrieve the base country details (slug or numerical id check)
     const isNumeric = /^\d+$/.test(slug);
-    const whereClause = isNumeric ? "c.id = $1" : "c.slug = $1";
+    const whereClause = isNumeric ? "id = $1" : "slug = $1";
 
-    const countryQuery = await query(`SELECT c.* FROM countries c WHERE ${whereClause} AND c.is_active = true`, [slug]);
+    const countryQuery = await query(`SELECT * FROM countries WHERE ${whereClause} AND is_active = true`, [slug]);
     if (!countryQuery.rows.length) {
       return res.status(404).json({ error: "Country not found" });
     }
     const country = countryQuery.rows[0];
 
-    // Asynchronously log the view increment
+    // Track views asynchronously
     query("UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1", [country.id]).catch(() => {});
 
-    // Safe retrieve for connected destinations mapping missing columns safely
+    // Safe retrieve for destinations (aliasing d.duration_days to d.duration)
     const destinationsQuery = await query(`
       SELECT
         d.id,
@@ -205,31 +204,31 @@ const getOne = async (req, res, next) => {
       WHERE d.country_id = $1 AND d.is_active = true
       ORDER BY d.is_featured DESC, d.name ASC
     `, [country.id]).catch(err => {
-      logger.warn(`[Countries] fallback destinations details query: ${err.message}`);
+      logger.error(`[Countries] fallback destinations query error: ${err.message}`);
       return { rows: [] };
     });
 
-    // Safe retrieve similar countries avoiding Ambiguous "destination_count" sorts
+    // Safe retrieve for similar countries (renames subquery alias to prevent ambiguous sort conflict)
     const similarQuery = await query(`
       SELECT * FROM (
         SELECT
           c.id, c.name, c.slug, c.flag_url, c.image_url, c.continent,
           (SELECT COUNT(*)::INTEGER FROM destinations d
            WHERE d.country_id = c.id AND d.is_active = true
-          ) AS destination_count
+          ) AS calc_dest_count
         FROM countries c
         WHERE c.continent = $1
-          AND c.id        != $2
-          AND c.is_active  = true
+          AND c.id != $2
+          AND c.is_active = true
       ) sub
-      ORDER BY sub.destination_count DESC, sub.name ASC
+      ORDER BY sub.calc_dest_count DESC, sub.name ASC
       LIMIT 3
     `, [country.continent, country.id]).catch(err => {
-      logger.error(`[Countries] fallback similar countries query: ${err.message}`);
+      logger.error(`[Countries] fallback similar query error: ${err.message}`);
       return { rows: [] };
     });
 
-    // Safe retrieve connected services mapping price_from safely
+    // Safe retrieve for services (handling missing database columns s.price_from and s.price_currency)
     const servicesQuery = await query(`
       SELECT
         s.id, s.title, s.slug, s.description,
@@ -242,7 +241,7 @@ const getOne = async (req, res, next) => {
       WHERE s.country_id = $1 AND s.is_active = true
       ORDER BY s.is_featured DESC, s.title ASC
     `, [country.id]).catch(err => {
-      logger.warn(`[Countries] fallback services details query: ${err.message}`);
+      logger.error(`[Countries] fallback services query error: ${err.message}`);
       return { rows: [] };
     });
 
@@ -305,7 +304,7 @@ const create = async (req, res, next) => {
       is_featured,
     } = req.body;
 
-    // Required fields
+    // Required fields validation
     if (!name || !code) {
       return res.status(400).json({
         success: false,
@@ -559,12 +558,14 @@ const update = async (req, res, next) => {
       });
     }
 
+    // Set the placeholder index specifically for the WHERE clause to avoid index displacement
+    const whereParamIndex = paramIndex;
     values.push(id); 
 
     const queryText = `
       UPDATE countries
       SET ${setClauses.join(", ")}
-      WHERE id = $${paramIndex}
+      WHERE id = $${whereParamIndex}
       RETURNING *
     `;
 
