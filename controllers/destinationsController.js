@@ -1064,9 +1064,50 @@ exports.getAll = async (req, res, next) => {
     const total      = parseInt(countRes.rows[0].count, 10)
     const totalPages = Math.ceil(total / lim) || 0
 
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = dataRes.rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'getAll:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
     return res.json({
       success: true,
-      data:    dataRes.rows.map(serialize),
+      data:    destinations,
       pagination: {
         total,
         page:        pg,
@@ -1105,7 +1146,7 @@ exports.getFeatured = async (req, res, next) => {
     }
     params.push(lim)
 
-    const rows = await safeQuery(
+const rows = await safeQuery(
       `${BASE_SELECT}
        WHERE ${conds.join(' AND ')}
        ORDER BY d.featured_at DESC NULLS LAST, d.rating DESC NULLS LAST
@@ -1113,7 +1154,48 @@ exports.getFeatured = async (req, res, next) => {
       params, 'getFeatured',
     )
 
-    return res.json({ success: true, data: rows.map(serialize), count: rows.length })
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'getFeatured:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
+    return res.json({ success: true, data: destinations, count: destinations.length })
   } catch (err) { next(err) }
 }
 
@@ -1135,7 +1217,7 @@ exports.getPopular = async (req, res, next) => {
     }
     params.push(lim)
 
-    const rows = await safeQuery(
+const rows = await safeQuery(
       `${BASE_SELECT}
        WHERE ${conds.join(' AND ')}
        ORDER BY d.booking_count DESC NULLS LAST, d.view_count DESC NULLS LAST, d.rating DESC NULLS LAST
@@ -1143,7 +1225,48 @@ exports.getPopular = async (req, res, next) => {
       params, 'getPopular',
     )
 
-    return res.json({ success: true, data: rows.map(serialize), count: rows.length })
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'getPopular:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
+    return res.json({ success: true, data: destinations, count: destinations.length })
   } catch (err) { next(err) }
 }
 
@@ -1165,7 +1288,48 @@ exports.getNew = async (req, res, next) => {
       [safeDays, lim], 'getNew',
     )
 
-    return res.json({ success: true, data: rows.map(serialize), count: rows.length })
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'getNew:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
+    return res.json({ success: true, data: destinations, count: destinations.length })
   } catch (err) { next(err) }
 }
 
@@ -1217,11 +1381,58 @@ exports.getByCountry = async (req, res, next) => {
     const total      = parseInt(countRes.rows[0].count, 10)
     const totalPages = Math.ceil(total / lim) || 0
 
+    const total      = parseInt(countRes.rows[0].count, 10)
+    const totalPages = Math.ceil(total / lim) || 0
+
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = dataRes.rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'getByCountry:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
     return res.json({
       success: true,
-      data:    dataRes.rows.map(serialize),
+      data:    destinations,
       pagination: {
-        total, page: pg, limit: lim, total_pages: totalPages,
+        total,
+        page: pg,
+        limit: lim,
+        total_pages: totalPages,
         has_next: pg < totalPages, has_prev: pg > 1,
       },
       country: {
@@ -1413,6 +1624,60 @@ exports.search = async (req, res, next) => {
 
     const total      = parseInt(countRes.rows[0].count, 10)
     const totalPages = Math.ceil(total / lim) || 0
+
+    // Check if we need to include gallery/images data
+    const raw      = String(req.query.include || '')
+    const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
+    const all      = includes.includes('all')
+    const includeGallery = all || includes.includes('gallery') || includes.includes('images')
+
+    let destinations = dataRes.rows.map(serialize)
+    
+    // If gallery/images data is requested, fetch and attach it
+    if (includeGallery && destinations.length > 0) {
+      const destinationIds = destinations.map(d => d.id)
+      const placeholder = destinationIds.map((_, i) => `$${i + 1}`).join(', ')
+      
+      const imagesRows = await safeQuery(
+        `SELECT * FROM destination_images
+         WHERE destination_id IN (${placeholder}) AND is_active = true
+         ORDER BY destination_id, is_primary DESC, sort_order ASC`,
+        destinationIds,
+        'search:gallery',
+      )
+      
+      // Group images by destination_id
+      const imagesByDestination = {}
+      imagesRows.rows.forEach(img => {
+        const destId = img.destination_id
+        if (!imagesByDestination[destId]) {
+          imagesByDestination[destId] = []
+        }
+        imagesByDestination[destId].push(img)
+      })
+      
+      // Attach gallery data to each destination
+      destinations = destinations.map(dest => {
+        const images = imagesByDestination[dest.id] || []
+        return {
+          ...dest,
+          gallery: images.map(serializeImage)
+        }
+      })
+    }
+
+    return res.json({
+      success: true,
+      data:    destinations,
+      pagination: {
+        total,
+        page: pg,
+        limit: lim,
+        total_pages: totalPages,
+        has_next: pg < totalPages, has_prev: pg > 1,
+      },
+      query: q,
+    })
 
     return res.json({
       success: true,
@@ -2714,15 +2979,32 @@ exports.addImages = async (req, res, next) => {
     }
     const added = []
     const urls  = []
+    const imageMeta = parseJson(req.body.image_meta, [])
+    const existingPrimary = await safeQuery(
+      `SELECT 1 FROM destination_images
+       WHERE destination_id = $1 AND is_active = true AND is_primary = true
+       LIMIT 1`,
+      [id], 'addImages:primary',
+    )
+    let primaryAssigned = existingPrimary.length > 0
 
-    const insertImage = async (url) => {
+    const insertImage = async (url, meta = {}) => {
       if (!remaining || !isSafeImageUrl(url)) return
       order++
+      const isPrimary = !primaryAssigned && toBool(meta.is_primary)
+      if (isPrimary) primaryAssigned = true
       const { rows } = await query(
         `INSERT INTO destination_images
-         (destination_id, image_url, sort_order, caption, uploaded_by)
-         VALUES ($1,$2,$3,$4,$5) RETURNING *`,
-        [id, url, order, req.body.caption || null, req.user?.id || null],
+         (destination_id, image_url, sort_order, caption, is_primary, uploaded_by)
+         VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
+        [
+          id,
+          url,
+          order,
+          meta.caption || req.body.caption || null,
+          isPrimary,
+          req.user?.id || null,
+        ],
       )
       added.push(rows[0])
       urls.push(url)
@@ -2730,10 +3012,23 @@ exports.addImages = async (req, res, next) => {
     }
 
     if (req.files?.length) {
-      for (const f of req.files) await insertImage(getUploadedFileUrl(f))
+      for (const [index, f] of req.files.entries()) {
+        await insertImage(getUploadedFileUrl(f), imageMeta[index] || {})
+      }
     }
     if (req.body.image_urls) {
-      for (const url of toArr(req.body.image_urls)) await insertImage(url)
+      for (const [index, url] of toArr(req.body.image_urls).entries()) {
+        await insertImage(url, imageMeta[index] || {})
+      }
+    }
+
+    if (added.length && !existingPrimary.length && !added.some(image => toBool(image.is_primary))) {
+      await query(
+        `UPDATE destination_images SET is_primary = true
+         WHERE id = $1`,
+        [added[0].id],
+      )
+      added[0].is_primary = true
     }
 
     if (urls.length) {
