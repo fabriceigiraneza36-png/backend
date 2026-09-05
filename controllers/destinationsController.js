@@ -591,6 +591,11 @@ const BASE_SELECT = `
     c.flag_url  AS country_flag_url,
     c.continent AS country_continent,
     c.region    AS country_region,
+    (SELECT di.image_url
+     FROM destination_images di
+     WHERE di.destination_id = d.id AND di.is_active = true
+     ORDER BY di.is_primary DESC, di.sort_order ASC, di.id ASC
+     LIMIT 1) AS gallery_image_url,
     (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
     (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
   FROM destinations d
@@ -620,7 +625,7 @@ const REVIEW_AGG_SQL = `
 const serialize = (row) => {
   if (!row) return null
   const images  = urlsOnly(row.image_urls)
-  const mainImg = images[0] || row.image_url || null
+  const mainImg = images[0] || row.image_url || row.gallery_image_url || null
 
   return {
     id:               row.id,
