@@ -1087,7 +1087,7 @@ exports.getAll = async (req, res, next) => {
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
@@ -1177,7 +1177,7 @@ const rows = await safeQuery(
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
@@ -1248,7 +1248,7 @@ const rows = await safeQuery(
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
@@ -1311,7 +1311,7 @@ exports.getNew = async (req, res, next) => {
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
@@ -1407,7 +1407,7 @@ exports.getByCountry = async (req, res, next) => {
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
@@ -1648,7 +1648,7 @@ exports.search = async (req, res, next) => {
       
       // Group images by destination_id
       const imagesByDestination = {}
-      imagesRows.rows.forEach(img => {
+      imagesRows.forEach(img => {
         const destId = img.destination_id
         if (!imagesByDestination[destId]) {
           imagesByDestination[destId] = []
