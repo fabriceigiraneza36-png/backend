@@ -81,7 +81,7 @@ router.post("/:id/restore", protect, adminOnly, ctrl.restore);
 router.patch("/bulk", protect, adminOnly, ctrl.bulkUpdate);
 
 // Images Management
-router.post("/:id/images", protect, adminOnly, upload.array("images", 10), ctrl.addImages);
+router.post("/:id/images", protect, adminOnly, upload.array("images", 20), ctrl.addImages);
 router.put("/:id/images/:imageId", protect, adminOnly, ctrl.updateImage);
 router.delete("/:id/images/:imageId", protect, adminOnly, ctrl.removeImage);
 router.put("/:id/images/reorder", protect, adminOnly, ctrl.reorderImages);

@@ -6,7 +6,7 @@ const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 
-const MAX_DESTINATION_IMAGES = 10 // Prevent ReferenceError crashes
+const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
 
 let sendDestinationAlertEmail = null
 try {
