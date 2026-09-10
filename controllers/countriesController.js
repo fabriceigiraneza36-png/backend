@@ -209,6 +209,15 @@ const getOne = async (req, res, next) => {
         d.slug,
         d.short_description,
         d.image_url,
+        d.image_urls,
+        d.hero_image,
+        d.thumbnail_url,
+        d.cover_image_url,
+        COALESCE((
+          SELECT ARRAY_AGG(di.image_url ORDER BY di.is_primary DESC, di.sort_order ASC, di.id ASC)
+          FROM destination_images di
+          WHERE di.destination_id = d.id AND di.is_active = true
+        ), ARRAY[]::TEXT[]) AS gallery,
         d.difficulty,
         COALESCE(d.duration_display, d.duration_days::TEXT, 'N/A') AS duration,
         d.duration_days,
