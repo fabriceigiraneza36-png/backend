@@ -1380,6 +1380,10 @@ exports.getByCountry = async (req, res, next) => {
 
     const total      = parseInt(countRes.rows[0].count, 10)
     const totalPages = Math.ceil(total / lim) || 0
+
+    const total      = parseInt(countRes.rows[0].count, 10)
+    const totalPages = Math.ceil(total / lim) || 0
+
     // Check if we need to include gallery/images data
     const raw      = String(req.query.include || '')
     const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
@@ -2048,13 +2052,7 @@ exports.create = async (req, res, next) => {
 
     const slug = await createUniqueSlug(data.name.trim())
 
-    let uploadedImg = null
-    if (req.file) {
-      const tempImg = getUploadedFileUrl(req.file)
-      if (isSafeImageUrl(tempImg)) {
-        uploadedImg = tempImg
-      }
-    }
+    const uploadedImg = req.file ? getUploadedFileUrl(req.file) : null
     let   imageUrls   = urlsOnly(data.image_urls)
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
     imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
@@ -2204,17 +2202,26 @@ exports.update = async (req, res, next) => {
       delete fields.name
     }
 
+    if (fields.country_id && parseInt(fields.country_id, 10) !== parseInt(current.country_id, 10)) {
+      const newCountry = await resolveCountry(fields.country_id)
+      if (!newCountry) {
+        return res.status(400).json({ success: false, error: 'Invalid country_id' })
+      }
+      fields.country_id = newCountry.id
+    }
+
     if (req.file) {
       const url         = getUploadedFileUrl(req.file)
-      if (isSafeImageUrl(url)) {
-        fields.image_url  = url
-        const existing    = toArr(data.image_urls || current.image_urls)
-        fields.image_urls = [url, ...existing.filter(u => u !== url)]
-      }
-      // If not safe, we do nothing (so the existing images remain)
+      fields.image_url  = url
+      const existing    = toArr(data.image_urls || current.image_urls)
+      fields.image_urls = [url, ...existing.filter(u => u !== url)]
     } else if (fields.image_urls) {
       fields.image_urls = urlsOnly(fields.image_urls)
       if (fields.image_urls.length) fields.image_url = fields.image_urls[0]
+    }
+
+    for (const field of ['image_url', 'hero_image', 'thumbnail_url', 'cover_image_url']) {
+      if (fields[field] !== undefined) fields[field] = safeMediaValue(fields[field])
     }
 
     if (fields.attractions !== undefined) {
@@ -2984,7 +2991,7 @@ exports.addImages = async (req, res, next) => {
     const insertImage = async (url, meta = {}) => {
       if (!remaining || !isSafeImageUrl(url)) return
       order++
-      const isPrimary = !primaryAssigned && toBool(meta.is_primary)
+      const isPrimary = !primaryAssigned && (meta.is_primary !== undefined && toBool(meta.is_primary))
       if (isPrimary) primaryAssigned = true
       const { rows } = await query(
         `INSERT INTO destination_images
