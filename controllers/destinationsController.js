@@ -1381,9 +1381,6 @@ exports.getByCountry = async (req, res, next) => {
     const total      = parseInt(countRes.rows[0].count, 10)
     const totalPages = Math.ceil(total / lim) || 0
 
-    const total      = parseInt(countRes.rows[0].count, 10)
-    const totalPages = Math.ceil(total / lim) || 0
-
     // Check if we need to include gallery/images data
     const raw      = String(req.query.include || '')
     const includes = raw ? raw.split(',').map(s => s.trim().toLowerCase()) : []
@@ -2980,6 +2977,13 @@ exports.addImages = async (req, res, next) => {
     const added = []
     const urls  = []
     const imageMeta = parseJson(req.body.image_meta, [])
+    const existingRows = await safeQuery(
+      `SELECT image_url FROM destination_images
+       WHERE destination_id = $1 AND is_active = true`,
+      [id], 'addImages:existing',
+    )
+    const existingUrls = new Set(existingRows.map(row => String(row.image_url).trim()))
+    const pendingUrls = new Set()
     const existingPrimary = await safeQuery(
       `SELECT 1 FROM destination_images
        WHERE destination_id = $1 AND is_active = true AND is_primary = true
@@ -2989,7 +2993,9 @@ exports.addImages = async (req, res, next) => {
     let primaryAssigned = existingPrimary.length > 0
 
     const insertImage = async (url, meta = {}) => {
-      if (!remaining || !isSafeImageUrl(url)) return
+      const normalizedUrl = typeof url === 'string' ? url.trim() : ''
+      if (!remaining || !isSafeImageUrl(normalizedUrl) || existingUrls.has(normalizedUrl) || pendingUrls.has(normalizedUrl)) return
+      pendingUrls.add(normalizedUrl)
       order++
       const isPrimary = !primaryAssigned && (meta.is_primary !== undefined && toBool(meta.is_primary))
       if (isPrimary) primaryAssigned = true
@@ -2999,7 +3005,7 @@ exports.addImages = async (req, res, next) => {
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING *`,
         [
           id,
-          url,
+          normalizedUrl,
           order,
           meta.caption || req.body.caption || null,
           isPrimary,
@@ -3007,7 +3013,7 @@ exports.addImages = async (req, res, next) => {
         ],
       )
       added.push(rows[0])
-      urls.push(url)
+      urls.push(normalizedUrl)
       remaining--
     }
 
@@ -3034,7 +3040,10 @@ exports.addImages = async (req, res, next) => {
     if (urls.length) {
       await query(
         `UPDATE destinations
-         SET image_urls = COALESCE(image_urls, '{}'::TEXT[]) || $2::TEXT[],
+         SET image_urls = ARRAY(
+               SELECT DISTINCT image_url
+               FROM unnest(COALESCE(image_urls, '{}'::TEXT[]) || $2::TEXT[]) AS image_url
+             ),
              image_url  = COALESCE(image_url, $3),
              updated_at = NOW()
          WHERE id = $1`,
