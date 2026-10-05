@@ -39,7 +39,9 @@ const bookingDetail = async (id) => {
   const { rows } = await query(
     `SELECT b.*,
             COALESCE(d.name,b.destination_name,'') AS destination_name,
-            COALESCE(c.name,b.country_name,b.country,'') AS country_name
+            COALESCE(c.name,b.country_name,b.country,'') AS country_name,
+            to_jsonb(d) AS destination_details,
+            to_jsonb(c) AS country_details
        FROM bookings b
        LEFT JOIN destinations d ON d.id=b.destination_id
        LEFT JOIN countries c ON c.id=COALESCE(b.country_id,d.country_id)
