@@ -1695,7 +1695,8 @@ exports.getSuggestions = async (req, res, next) => {
 
     const lim  = Math.min(parseInt(limit, 10) || 10, 20)
     const rows = await safeQuery(
-      `SELECT d.id, d.name, d.slug, d.category, d.image_url, d.rating,
+      `SELECT d.id, d.name, d.slug, d.category, d.image_url, d.image_urls,
+              d.hero_image, d.cover_image_url, d.rating,
               c.name AS country_name, c.slug AS country_slug, c.flag AS country_flag
        FROM destinations d
        LEFT JOIN countries c ON c.id = d.country_id
@@ -1714,7 +1715,10 @@ exports.getSuggestions = async (req, res, next) => {
         name:     r.name,
         slug:     r.slug,
         category: r.category,
-        imageUrl: r.image_url,
+        imageUrl: r.hero_image || r.image_url || (urlsOnly(r.image_urls)[0] || null),
+        heroImage: r.hero_image || null,
+        coverImageUrl: r.cover_image_url || null,
+        images: urlsOnly(r.image_urls),
         rating:   toNum(r.rating),
         country:  { name: r.country_name, slug: r.country_slug, flag: r.country_flag },
         type:     'destination',
