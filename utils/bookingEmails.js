@@ -937,6 +937,7 @@ const sendBookingConfirmation = async (booking) => {
     heroBadge: statusPill("confirmed"),
     heroTitle: "Your adventure is confirmed",
     heroSubtitle: `Pack your bags — ${dest} is waiting for you.`,
+    heroImage: booking.destination_image_url || booking.country_image_url || ENV.heroImage,
     body: `
       ${greet(booking.full_name)}
       ${para(`Wonderful news — your safari to <strong style="color:${T.g700};">${esc(dest)}</strong>
