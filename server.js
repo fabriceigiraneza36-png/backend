@@ -120,6 +120,7 @@ const destinationRatingsRouter  = require('./routes/destinationRatings')
 const notificationsRouter       = require('./routes/notifications')
 const maintenanceRouter         = require('./routes/maintenance')   // ? v7.1
 const pushRouter                = require('./routes/push')            // ? push notifications
+const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
 
 // -------------------------------------------------------------------------------
@@ -802,6 +803,7 @@ app.get('/api/routes', (req, res) => {
 app.use('/api/admin/auth',           adminAuthRouter)
 app.use('/api/users',                usersRouter)
 app.use('/api/bookings',             bookingsRouter)
+app.use('/api/itineraries',          itineraryRouter)
 app.use('/api/reviews',              reviewsRouter)
 app.use('/api/countries',            countriesRouter)
 app.use('/api/hero-slides',          require('./routes/heroSlides'))
