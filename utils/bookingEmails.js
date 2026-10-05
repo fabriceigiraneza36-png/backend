@@ -1285,6 +1285,7 @@ const sendItineraryEmail = async (booking, itinerary = {}) => {
     heroBadge: statusPill("confirmed"),
     heroTitle: "Your personalized itinerary is ready",
     heroSubtitle: `A day-by-day plan prepared by Altuvera for ${destination}.`,
+    heroImage: booking.destination_image_url || booking.country_image_url || ENV.heroImage,
     body: `
       ${greet(booking.full_name)}
       ${para(`Your itinerary for <strong style="color:${T.g700};">${esc(destination)}</strong> is now available in your Altuvera dashboard. Review it and approve it, or send us a change request.`)}
