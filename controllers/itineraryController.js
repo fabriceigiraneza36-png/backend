@@ -9,9 +9,10 @@ try {
 } catch {}
 
 let sendItineraryEmail = null;
+let sendAdminItineraryNotification = null;
 let sendBookingConfirmation = null;
 try {
-  ({ sendItineraryEmail, sendBookingConfirmation } = require("../utils/bookingEmails"));
+  ({ sendItineraryEmail, sendAdminItineraryNotification, sendBookingConfirmation } = require("../utils/bookingEmails"));
 } catch {}
 
 let getIO = () => null;
@@ -170,6 +171,7 @@ exports.publish = async (req,res,next) => {
 
     await Promise.allSettled([
       sendItineraryEmail ? sendItineraryEmail(full,itinerary) : Promise.resolve(),
+      sendAdminItineraryNotification ? sendAdminItineraryNotification(full,itinerary) : Promise.resolve(),
       createNotificationInternal({
         userId: full.user_id || null,
         userEmail: full.email || null,
