@@ -866,23 +866,6 @@ exports.create = async (req, res, next) => {
     const booking = rows[0];
     const full = (await getBookingDetail(booking.id)) || booking;
 
-    // Package requests need an immediate persistent admin alert with a direct
-    // link back to the package workspace. This is intentionally separate from
-    // the general booking activity aggregation.
-    if (String(booking.booking_type || '').toLowerCase() === 'package' && booking.package_id) {
-      asyncNoThrow(
-        notifyPackageBookingCreated(
-          full,
-          {
-            id: booking.package_id,
-            title: full.package_name || full.package_title || body.package_title || 'Travel package',
-          },
-          req,
-        ),
-        "notifyPackageBookingCreated",
-      );
-    }
-
     // Do not notify the admin or start operational work until the traveller
     // confirms the request from their real inbox. Logged-in users also receive
     // the secure confirmation action in their dashboard.
@@ -979,19 +962,22 @@ exports.verifyEmail = async (req, res) => {
 
     logger.info(`[Bookings] ✅ Email verified: ${booking.booking_number}`);
 
-    if (String(req.query?.json || "") === "1") {
-      return res.json({
-        success: true,
-        data: { booking_number: booking.booking_number, booking_id: booking.id },
-        message: "Booking request confirmed successfully.",
-      });
-    }
-
     const full = (await getBookingDetail(booking.id)) || booking;
 
     if (sendBookingReceivedEmail) {
       asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail after verify");
     }
+    if (String(full.booking_type || '').toLowerCase() === 'package' && full.package_id) {
+      asyncNoThrow(
+        notifyPackageBookingCreated(
+          full,
+          { id: full.package_id, title: full.package_name || full.package_title || 'Travel package' },
+          req,
+        ),
+        "notifyPackageBookingCreated after verify",
+      );
+    }
+
 
     if (sendAdminBookingNotification) {
       asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification after verify");
@@ -1009,6 +995,14 @@ exports.verifyEmail = async (req, res) => {
     }
 
     await logActivity(booking.id, "email_verified", "Customer verified email address");
+
+    if (String(req.query?.json || "") === "1") {
+      return res.json({
+        success: true,
+        data: { booking_number: booking.booking_number, booking_id: booking.id },
+        message: "Booking request confirmed successfully.",
+      });
+    }
 
     return res.redirect(
       `${frontendUrl}/booking/verify?status=success&ref=${booking.booking_number}`,
