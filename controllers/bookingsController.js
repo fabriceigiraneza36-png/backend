@@ -764,6 +764,22 @@ exports.create = async (req, res, next) => {
       });
     }
 
+    // Link a guest booking to an existing Altuvera account when the same
+    // verified email is already registered. This lets the booking and its
+    // itinerary appear in the user's dashboard even when the booking began
+    // from the public form.
+    if (!body.user_id && body.email) {
+      try {
+        const { rows: existingUser } = await query(
+          "SELECT id FROM users WHERE LOWER(email) = LOWER($1) AND is_active = true LIMIT 1",
+          [body.email],
+        );
+        if (existingUser[0]) body.user_id = existingUser[0].id;
+      } catch (linkErr) {
+        logger.warn("[Bookings] Existing account lookup skipped:", linkErr.message);
+      }
+    }
+
     const bookingNumber = generateBookingNumber();
     // The traveller must confirm this booking request from their real inbox.
     // This is an ownership check for the booking request, not a generic account
