@@ -106,8 +106,9 @@ try {
 ═════════════════════════════════════════════════════════════════════ */
 let createNotificationInternal = async () => null;
 let notifyPackageBookingCreated = async () => null;
+let notifyAdminsImmediately = async () => null;
 try {
-  ({ createNotificationInternal, notifyPackageBookingCreated } = require("./notificationsController"));
+  ({ createNotificationInternal, notifyPackageBookingCreated, notifyAdminsImmediately } = require("./notificationsController"));
 } catch (err) {
   logger.warn("[Bookings] notificationsController not found:", err.message);
 }
@@ -895,6 +896,24 @@ exports.create = async (req, res, next) => {
       );
 
       pingAdminNewRequest(full);
+
+      asyncNoThrow(
+        notifyAdminsImmediately({
+          type: "booking_created",
+          category: "booking",
+          title: "New booking received 📅",
+          message: `${safe(booking.full_name, "A traveller")} submitted booking ${bookingNumber}.`,
+          actionUrl: `/bookings?bookingId=${encodeURIComponent(booking.id)}`,
+          actionLabel: "Open booking",
+          metadata: {
+            bookingId: booking.id,
+            bookingNumber,
+            destinationId: booking.destination_id || null,
+          },
+          priority: "high",
+        }),
+        "notifyAdminsImmediately(booking)",
+      );
 
       if (startBookingConversation) {
         asyncNoThrow(
