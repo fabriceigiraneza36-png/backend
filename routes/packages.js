@@ -174,10 +174,10 @@ router.get('/', optionalAuth, async (req, res) => {
     const offsetIdx  = dataVals.push(parsedOffset)
 
     const destinationSelect = _hasDestinationId
-      ? 'd.name AS destination_name, d.slug AS destination_slug'
-      : 'p.destination AS destination_name, NULL AS destination_slug'
+      ? 'd.name AS destination_name, d.slug AS destination_slug, d.country_id AS destination_country_id, co.name AS country_name, co.slug AS country_slug'
+      : 'p.destination AS destination_name, NULL AS destination_slug, NULL AS destination_country_id, p.country AS country_name, NULL AS country_slug'
     const destinationJoin = _hasDestinationId
-      ? 'LEFT JOIN destinations d ON d.id = p.destination_id'
+      ? 'LEFT JOIN destinations d ON d.id = p.destination_id LEFT JOIN countries co ON co.id = d.country_id'
       : ''
 
     const dataRes   = await db(
