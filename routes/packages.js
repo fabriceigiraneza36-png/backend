@@ -4,6 +4,7 @@ const router   = express.Router()
 const { query: db } = require('../config/db')
 const { authenticate, optionalAuth, requireAdmin } = require('../middleware/auth')
 const logger   = require('../utils/logger')
+const { notifyPackageBookingCreated } = require('../controllers/notificationsController')
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: EMAIL SERVICE (for booking notifications)
@@ -519,6 +520,12 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     if (sendAdminBookingNotification) {
       asyncNoThrow(sendAdminBookingNotification(enrichedBooking), 'sendAdminBookingNotification')
     }
+
+    // Persist + emit an instant admin notification with a direct package request target.
+    asyncNoThrow(
+      notifyPackageBookingCreated(booking, p, req),
+      'notifyPackageBookingCreated',
+    )
 
     // Notify via socket.io
     try {
