@@ -706,7 +706,7 @@ const sendBookingVerificationLink = async (booking, token) => {
     logger.info(`[BookingEmails] Verification link → ${verifyUrl}`);
 
     const html = shell({
-      preheader: `Confirm your email to complete your ${destination} booking.`,
+      preheader: `Confirm that you personally requested your ${destination} booking.`,
       heroBadge: `<span style="display:inline-block;padding:7px 18px;
         background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
         border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
@@ -714,11 +714,11 @@ const sendBookingVerificationLink = async (booking, token) => {
         ✉️ Verify Your Email
       </span>`,
       heroTitle: "Confirm your booking",
-      heroSubtitle: "One quick click and our team can start planning your adventure.",
+      heroSubtitle: "One quick click confirms that you personally requested this booking from your real inbox.",
       body: `
         ${greet(displayName)}
-        ${para(`Thanks for booking <strong style="color:${T.g700};">${esc(destination)}</strong>
-          with us. Please confirm your email address so we can start planning your journey.`)}
+        ${para(`Thanks for requesting <strong style="color:${T.g700};">${esc(destination)}</strong>
+          with us. Please confirm that you personally made this booking request from your real email inbox. Altuvera will begin operational planning only after you confirm.`)}
 
         ${infoTable("Booking Reference", [
           row("Reference", bookingRef, true),
