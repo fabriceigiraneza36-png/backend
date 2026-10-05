@@ -100,6 +100,8 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
   }
 };
 
+
+
 const sendAdminEmail = async (subject, html) => {
   if (!sendEmail) return;
 
@@ -196,6 +198,60 @@ const insertNotification = async ({
     ],
   );
   return result.rows[0];
+};
+
+const escapeAdminHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  """: "&quot;",
+}[char]));
+
+const notifyAdminsImmediately = async ({
+  type,
+  category,
+  title,
+  message,
+  actionUrl = "/notifications",
+  actionLabel = "Open in Admin",
+  metadata = {},
+  priority = "high",
+}) => {
+  const notif = await insertNotification({
+    senderType: "system",
+    senderName: "Altuvera",
+    type,
+    category,
+    title,
+    message,
+    actionUrl,
+    actionLabel,
+    priority,
+    targetScope: "admin",
+    metadata,
+  });
+
+  emitNotification(null, { ...notif, target_scope: "admin" });
+
+  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  const absoluteUrl = actionUrl && /^https?:\/\//i.test(actionUrl)
+    ? actionUrl
+    : `${frontendUrl.replace(/\/$/, "")}${actionUrl.startsWith("/") ? actionUrl : `/${actionUrl}`}`;
+
+  await sendAdminEmail(
+    title,
+    `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#0f172a;">
+      <div style="border-radius:14px;background:#ecfdf5;padding:20px;border:1px solid #a7f3d0;">
+        <p style="margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#059669;">Altuvera Safaris Admin</p>
+        <h2 style="margin:0 0 10px;color:#047857;">${escapeAdminHtml(title)}</h2>
+        <p style="margin:0;font-size:15px;line-height:1.6;color:#334155;">${escapeAdminHtml(message)}</p>
+      </div>
+      <a href="${escapeAdminHtml(absoluteUrl)}" style="display:inline-block;margin-top:20px;padding:12px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:9px;font-weight:700;">${escapeAdminHtml(actionLabel)}</a>
+      <p style="margin-top:24px;font-size:12px;color:#94a3b8;">This notification is linked directly to the relevant Altuvera admin workspace.</p>
+    </div>`,
+  ).catch((err) => logger.warn("[Notifications] admin email failed:", err.message));
+
+  return notif;
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -391,29 +447,32 @@ const createNotificationInternal = async ({
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Booking created — notify the user + aggregate to admins */
-const notifyBookingCreated = (booking, user) =>
-  createNotificationInternal({
-    userId:    user?.id,
+const notifyBookingCreated = async (booking, user) => {
+  const bookingId = booking?.id || booking?.booking_id || booking?.booking_number || "";
+  const actionUrl = `/bookings?bookingId=${encodeURIComponent(bookingId)}`;
+  const userNotif = await createNotificationInternal({
+    userId: user?.id,
     userEmail: user?.email,
-    type:      "booking_created",
-    category:  "booking",
-    title:     "Booking Received! 🎉",
-    message:   `Your booking ${booking?.booking_number || ""} is pending review.`,
-    actionUrl:    "/my-bookings",
-    actionLabel:  "Track Booking",
-    priority:  "normal",
-    actor:     user,
-    adminActivity: {
-      key: "booking_created",
-      type: "booking_created",
-      category: "booking",
-      template: {
-        title:    (n) => `${n} new booking${n > 1 ? "s" : ""} received`,
-        message:  (names, n) =>
-          `${n} travellers just requested bookings${n > 1 ? ` (${names})` : ""}.`,
-      },
-    },
+    type: "booking_created",
+    category: "booking",
+    title: "Booking Received! 🎉",
+    message: `Your booking ${booking?.booking_number || ""} is pending review.`,
+    actionUrl: "/my-bookings",
+    actionLabel: "Track Booking",
+    priority: "normal",
+    actor: user,
   });
+  await notifyAdminsImmediately({
+    type: "booking_created",
+    category: "booking",
+    title: "New booking received 📅",
+    message: `${booking?.full_name || booking?.email || "A traveller"} submitted booking ${booking?.booking_number || bookingId || ""}.`,
+    actionUrl,
+    actionLabel: "Open booking",
+    metadata: { bookingId: booking?.id || null, bookingNumber: booking?.booking_number || null },
+  });
+  return userNotif;
+};
 
 /* Package request — notify every admin immediately with a direct workspace target. */
 const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
@@ -472,73 +531,81 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
   return notif;
 };
 /* Review posted — notify the user + aggregate to admins */
-const notifyReviewPosted = (review, user) =>
-  createNotificationInternal({
-    userId:    user?.id,
+const notifyReviewPosted = async (review, user) => {
+  const reviewId = review?.id || review?.review_id || null;
+  const userNotif = await createNotificationInternal({
+    userId: user?.id,
     userEmail: user?.email,
-    type:      "review_posted",
-    category:  "review",
-    title:     "Review submitted ✓",
-    message:   `Thanks! Your review for "${review?.title || "your experience"}" was posted.`,
-    actionUrl:    "/reviews",
-    actionLabel:  "View",
-    actor:     user,
-    adminActivity: {
-      key: "review_posted",
-      type: "review_posted",
-      category: "review",
-      template: {
-        title:    (n) => `${n} new review${n > 1 ? "s" : ""} posted`,
-        message:  (names, n) => `${n} customers left reviews${n > 1 ? ` (${names})` : ""}.`,
-      },
-    },
+    type: "review_posted",
+    category: "review",
+    title: "Review submitted ✓",
+    message: `Thanks! Your review for "${review?.title || "your experience"}" was posted.`,
+    actionUrl: "/reviews",
+    actionLabel: "View",
+    actor: user,
   });
+  await notifyAdminsImmediately({
+    type: "review_posted",
+    category: "review",
+    title: "New review submitted ✍️",
+    message: `${user?.name || user?.email || "A traveller"} submitted a new review.`,
+    actionUrl: reviewId ? `/comments?commentId=${encodeURIComponent(reviewId)}` : "/comments",
+    actionLabel: "Open review",
+    metadata: { reviewId },
+  });
+  return userNotif;
+};
 
 /* User registered — welcome the user + notify admins */
-const notifyUserRegistered = (user) =>
-  createNotificationInternal({
-    userId:    user?.id,
+const notifyUserRegistered = async (user) => {
+  const userNotif = await createNotificationInternal({
+    userId: user?.id,
     userEmail: user?.email,
-    type:      "user_registered",
-    category:  "user",
-    title:     "Welcome to Altuvera! 🌍",
-    message:   "Your account is ready. Start exploring unforgettable adventures.",
-    actionUrl:    "/",
-    actionLabel:  "Explore",
-    actor:     user,
-    adminActivity: {
-      key: "user_registered",
-      type: "user_registered",
-      category: "user",
-      template: {
-        title:    (n) => `${n} new user${n > 1 ? "s" : ""} registered`,
-        message:  (names, n) => `${n} new travellers joined${n > 1 ? ` (${names})` : ""}.`,
-      },
-    },
+    type: "user_registered",
+    category: "user",
+    title: "Welcome to Altuvera! 🌍",
+    message: "Your account is ready. Start exploring unforgettable adventures.",
+    actionUrl: "/",
+    actionLabel: "Explore",
+    actor: user,
   });
+  await notifyAdminsImmediately({
+    type: "user_registered",
+    category: "user",
+    title: "New traveller registered 👤",
+    message: `${user?.name || user?.email || "A traveller"} created an Altuvera account.`,
+    actionUrl: user?.id ? `/users?userId=${encodeURIComponent(user.id)}` : "/users",
+    actionLabel: "Open traveller",
+    metadata: { userId: user?.id || null },
+  });
+  return userNotif;
+};
 
 /* Contact message — notify the user + admins (always single, high priority) */
-const notifyContactMessage = (contact, user) =>
-  createNotificationInternal({
-    userId:    user?.id,
+const notifyContactMessage = async (contact, user) => {
+  const contactId = contact?.id || contact?.message_id || null;
+  const userNotif = await createNotificationInternal({
+    userId: user?.id,
     userEmail: user?.email,
-    type:      "contact_message",
-    category:  "contact",
-    title:     "Message received 💬",
-    message:   "We got your message and will reply within 24 hours.",
-    actionUrl:    "/contact",
-    actionLabel:  "View",
-    actor:     user,
-    adminActivity: {
-      key: "contact_message",
-      type: "contact_message",
-      category: "contact",
-      template: {
-        title:    (n) => `${n} new contact message${n > 1 ? "s" : ""}`,
-        message:  (names, n) => `${n} new enquiries arrived${n > 1 ? ` (${names})` : ""}.`,
-      },
-    },
+    type: "contact_message",
+    category: "contact",
+    title: "Message received 💬",
+    message: "We got your message and will reply within 24 hours.",
+    actionUrl: "/contact",
+    actionLabel: "View",
+    actor: user,
   });
+  await notifyAdminsImmediately({
+    type: "contact_message",
+    category: "contact",
+    title: "New contact enquiry 💬",
+    message: `${user?.name || user?.email || "A visitor"} sent a new contact message${contact?.subject ? ` about "${contact.subject}"` : ""}.`,
+    actionUrl: contactId ? `/contact?messageId=${encodeURIComponent(contactId)}` : "/contact",
+    actionLabel: "Open message",
+    metadata: { contactId },
+  });
+  return userNotif;
+};
 
 /* Admin broadcast (single, to a scope) */
 const broadcastNotification = async ({
