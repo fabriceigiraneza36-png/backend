@@ -979,6 +979,14 @@ exports.verifyEmail = async (req, res) => {
 
     logger.info(`[Bookings] ✅ Email verified: ${booking.booking_number}`);
 
+    if (String(req.query?.json || "") === "1") {
+      return res.json({
+        success: true,
+        data: { booking_number: booking.booking_number, booking_id: booking.id },
+        message: "Booking request confirmed successfully.",
+      });
+    }
+
     const full = (await getBookingDetail(booking.id)) || booking;
 
     if (sendBookingReceivedEmail) {
