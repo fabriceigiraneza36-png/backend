@@ -282,6 +282,7 @@ const shell = ({
   heroBadge = "",
   heroTitle = "",
   heroSubtitle = "",
+  heroImage = ENV.heroImage,
 }) => `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office">
 <head>
@@ -364,7 +365,7 @@ const shell = ({
   <div class="wrap">
     <div class="card">
       ${showHero ? `
-      <div class="hero" style="background-image:url('${ENV.heroImage}');
+      <div class="hero" style="background-image:url('${esc(heroImage || ENV.heroImage)}');
         background-size:cover;background-position:center;background-color:#022c22;">
         <div class="hero-overlay">
           <div class="hero-inner" style="padding:56px 40px;text-align:center;">
@@ -1295,7 +1296,7 @@ const sendItineraryEmail = async (booking, itinerary = {}) => {
         row("Travelers", booking.number_of_travelers),
       ])}
       ${dayRows || notice("info", "Itinerary", "Your coordinator will contact you with the detailed schedule.")}
-      ${ctaBlock("View & Approve Itinerary", `${ENV.frontendUrl}/my-bookings`, "Message Altuvera", `${ENV.frontendUrl}/messages`)}
+      ${ctaBlock("View & Download Itinerary", `${ENV.frontendUrl}/my-bookings`, "Message Altuvera", `${ENV.frontendUrl}/messages`)}
     `,
   });
 
@@ -1306,6 +1307,17 @@ const sendItineraryEmail = async (booking, itinerary = {}) => {
     "sendItineraryEmail",
   );
 };
+const sendAdminItineraryNotification = async (booking, itinerary = {}) => {
+  const adminEmail = ENV.adminEmail;
+  if (!adminEmail) return { success: false };
+  const destination = tripName(booking);
+  const image = booking.destination_image_url || booking.country_image_url || ENV.heroImage;
+  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
+  const body = greet("Altuvera Admin") + para("A new itinerary has been sent to <strong style='color:"+T.g700+";'>"+esc(booking.full_name)+"</strong> for "+esc(destination)+".") + infoTable("Itinerary delivery", [row("Booking", booking.booking_number, true),row("Traveller", booking.full_name),row("Email", booking.email),row("Destination", destination),row("Version", booking.itinerary_version),row("Days", days.length)]) + ctaBlock("Open Booking", ENV.frontendUrl+"/my-bookings", "Admin panel", (process.env.ADMIN_FRONTEND_URL || "https://admin.altuverasafaris.com")+"/bookings/"+booking.id);
+  const html = shell({preheader:"Itinerary sent — "+destination,heroBadge:statusPill("confirmed"),heroTitle:"Itinerary sent to traveller",heroSubtitle:"Planned journey: "+destination,heroImage:image,body});
+  return safeSend(adminEmail, "Itinerary Sent — "+safe(booking.booking_number)+" | "+ENV.appName, html, "sendAdminItineraryNotification");
+};
+
 /* ════════════════════════════════════════════════════════════════════════════
    EXPORTS
 ════════════════════════════════════════════════════════════════════════════ */
@@ -1319,5 +1331,6 @@ module.exports = {
   sendTripCountdownEmail,
   sendCancellationRequestAck,
   sendItineraryEmail,
+  sendAdminItineraryNotification,
   buildVerificationLink,   // exported for testing
 };  
