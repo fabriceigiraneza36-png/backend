@@ -582,11 +582,10 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
       booking_type:     'package',
     }
 
+    // The package-specific notification sends the admin inbox email and creates
+    // the direct admin workspace alert. Keep the traveller receipt separate.
     if (sendBookingReceivedEmail) {
       asyncNoThrow(sendBookingReceivedEmail(enrichedBooking), 'sendBookingReceivedEmail')
-    }
-    if (sendAdminBookingNotification) {
-      asyncNoThrow(sendAdminBookingNotification(enrichedBooking), 'sendAdminBookingNotification')
     }
 
     // Persist + emit an instant admin notification with a direct package request target.
