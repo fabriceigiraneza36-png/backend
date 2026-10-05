@@ -3,10 +3,10 @@ const router = express.Router();
 const controller = require("../controllers/itineraryController");
 const { optionalAuth } = require("../middleware/auth");
 
-router.get("/:id", optionalAuth, controller.get);
-router.post("/:id/draft", optionalAuth, controller.saveDraft);
-router.post("/:id/publish", optionalAuth, controller.publish);
-router.post("/:id/approve", optionalAuth, controller.approve);
-router.post("/:id/change-request", optionalAuth, controller.requestChange);
+router.get("/:id", protect, controller.get);
+router.post("/:id/draft", adminOnly, controller.saveDraft);
+router.post("/:id/publish", adminOnly, controller.publish);
+router.post("/:id/approve", protect, controller.approve);
+router.post("/:id/change-request", protect, controller.requestChange);
 
 module.exports = router;
