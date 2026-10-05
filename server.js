@@ -119,7 +119,8 @@ const destinationCommentsRouter = require('./routes/destinationComments')
 const destinationRatingsRouter  = require('./routes/destinationRatings')
 const notificationsRouter       = require('./routes/notifications')
 const maintenanceRouter         = require('./routes/maintenance')   // ? v7.1
-const pushRouter                = require('./routes/push')            // ? push
+const pushRouter                = require('./routes/push')            // ? push notifications
+const seoRouter                 = require('./routes/seo')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
@@ -832,7 +833,8 @@ app.use('/api/notifications',        notificationsRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
 app.use('/api/maintenance',          maintenanceRouter)   // ? v7.1 ?
-app.use('/api/push',                pushRouter)           // ? push notifications
+app.use('/api/push',                pushRouter)
+app.use('/api/seo',                 seoRouter)           // ? push notifications
 
 // -- Dev-only test routes ------------------------------------------------------
 if (!IS_PROD) {
