@@ -57,12 +57,11 @@ const packageImage = (body = {}) => String(
 
 const packagePayload = (body = {}, existing = {}) => ({
   title: String(body.title || existing.title || 'Travel package').trim().slice(0, 255),
-  slug: existing.slug || `${slugify(body.title || 'travel-package')}-${Date.now()}`,
+  slug: existing.slug || slugify(body.title || 'travel-package') + '-' + Date.now(),
   cover_image_url: packageImage(body) || existing.cover_image_url || '',
-  is_published: body.is_published === undefined
-    ? (existing.is_published ?? false) : Boolean(body.is_published),
-  is_featured: body.is_featured === undefined
-    ? (existing.is_featured ?? false) : Boolean(body.is_featured),
+  destination_id: body.destination_id === undefined ? (existing.destination_id ?? null) : (body.destination_id ? Number(body.destination_id) : null),
+  is_published: body.is_published === undefined ? (existing.is_published ?? false) : Boolean(body.is_published),
+  is_featured: body.is_featured === undefined ? (existing.is_featured ?? false) : Boolean(body.is_featured),
 })
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -255,9 +254,9 @@ router.post('/', requireAdmin, async (req, res) => {
       return res.status(400).json({ success: false, error: 'A package poster image is required' })
     }
     const result = await db(
-      `INSERT INTO packages (title, slug, cover_image_url, is_published, is_featured)
-       VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [payload.title, payload.slug, payload.cover_image_url, payload.is_published, payload.is_featured],
+      `INSERT INTO packages (title, slug, cover_image_url, destination_id, is_published, is_featured)
+       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
+      [payload.title, payload.slug, payload.cover_image_url, payload.destination_id, payload.is_published, payload.is_featured],
     )
     return res.status(201).json({ success: true, data: result.rows[0] })
   } catch (err) {
@@ -277,9 +276,9 @@ router.patch('/:id', requireAdmin, async (req, res) => {
     }
     const result = await db(
       `UPDATE packages
-       SET cover_image_url = $1, is_published = $2, is_featured = $3, updated_at = NOW()
-       WHERE id = $4 RETURNING *`,
-      [payload.cover_image_url, payload.is_published, payload.is_featured, req.params.id],
+       SET cover_image_url = $1, destination_id = $2, is_published = $3, is_featured = $4, updated_at = NOW()
+       WHERE id = $5 RETURNING *`,
+      [payload.cover_image_url, payload.destination_id, payload.is_published, payload.is_featured, req.params.id],
     )
     const row = result.rows[0]
     return res.json({
@@ -460,7 +459,7 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
 
     // Load package
     const pkg = await db(
-      `SELECT id, title, price, currency, destination_id, is_published
+      `SELECT id, title, price, currency, destination_id, is_published, cover_image_url
        FROM packages WHERE id = $1`,
       [pkgId],
     )
@@ -471,6 +470,9 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
 
     if (p.is_published === false) {
       return res.status(400).json({ success: false, error: 'Package is not available for booking' })
+    }
+    if (!p.destination_id) {
+      return res.status(409).json({ success: false, error: 'This package is not linked to a destination yet. Please select its destination in the admin panel before accepting requests.' })
     }
 
     // Normalize input
