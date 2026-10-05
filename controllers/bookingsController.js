@@ -105,8 +105,9 @@ try {
    SAFE REQUIRE: NOTIFICATIONS / MESSAGING / SOCKET
 ═════════════════════════════════════════════════════════════════════ */
 let createNotificationInternal = async () => null;
+let notifyPackageBookingCreated = async () => null;
 try {
-  ({ createNotificationInternal } = require("./notificationsController"));
+  ({ createNotificationInternal, notifyPackageBookingCreated } = require("./notificationsController"));
 } catch (err) {
   logger.warn("[Bookings] notificationsController not found:", err.message);
 }
@@ -851,6 +852,23 @@ exports.create = async (req, res, next) => {
 
     const booking = rows[0];
     const full = (await getBookingDetail(booking.id)) || booking;
+
+    // Package requests need an immediate persistent admin alert with a direct
+    // link back to the package workspace. This is intentionally separate from
+    // the general booking activity aggregation.
+    if (String(booking.booking_type || '').toLowerCase() === 'package' && booking.package_id) {
+      asyncNoThrow(
+        notifyPackageBookingCreated(
+          full,
+          {
+            id: booking.package_id,
+            title: full.package_name || full.package_title || body.package_title || 'Travel package',
+          },
+          req,
+        ),
+        "notifyPackageBookingCreated",
+      );
+    }
 
     if (emailVerified) {
       if (sendBookingReceivedEmail) {
