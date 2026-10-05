@@ -148,6 +148,12 @@ exports.publish = async (req,res,next) => {
     if (!booking.email_verified) {
       return res.status(409).json({success:false,error:"Traveller has not confirmed this booking request from their email yet."});
     }
+    if (booking.status !== "confirmed") {
+      return res.status(409).json({success:false,error:"Confirm the traveller and booking before sending the itinerary."});
+    }
+    if (booking.identity_portrait_status && booking.identity_portrait_status !== "verified") {
+      return res.status(409).json({success:false,error:"Traveller identity portrait must be verified before the itinerary can be sent."});
+    }
 
     const itinerary = normalizeItinerary(req.body?.itinerary || req.body || {});
     if (!itinerary.days.length) {
@@ -211,8 +217,6 @@ exports.approve = async (req,res,next) => {
       `UPDATE bookings
           SET itinerary_status='approved',
               itinerary_approved_at=NOW(),
-              status=CASE WHEN status='pending' THEN 'confirmed' ELSE status END,
-              confirmed_at=CASE WHEN status='pending' THEN NOW() ELSE confirmed_at END,
               updated_at=NOW()
         WHERE id=$1 RETURNING *`,[id]);
     const full=(await bookingDetail(id))||rows[0];
