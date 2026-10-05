@@ -455,6 +455,8 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
       travel_date, startDate,
       end_date, endDate,
       special_requests, specialRequests,
+      nationality, country_of_residence, preferred_contact_method,
+      accommodation_preference, trip_style, budget_range,
     } = req.body
 
     // Load package
@@ -481,7 +483,16 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     const finalPhone   = String(guest_phone || phone || '').trim() || null
     const finalTravel  = travel_date || startDate || null
     const finalEnd     = end_date  || endDate  || null
-    const finalReqs    = (special_requests || specialRequests || '').toString().trim() || null
+    const requestProfile = [
+      special_requests || specialRequests,
+      nationality && `Nationality: ${nationality}`,
+      country_of_residence && `Residence: ${country_of_residence}`,
+      preferred_contact_method && `Preferred contact: ${preferred_contact_method}`,
+      accommodation_preference && `Accommodation: ${accommodation_preference}`,
+      trip_style && `Trip style: ${trip_style}`,
+      budget_range && `Budget range: ${budget_range}`,
+    ].filter(Boolean).join('\n')
+    const finalReqs = requestProfile || null
 
     // Validate
     const errors = []
