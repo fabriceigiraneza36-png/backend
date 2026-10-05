@@ -1881,7 +1881,7 @@ exports.updateStatus = async (req, res, next) => {
       if (!latest.email_verified) {
         return res.status(409).json({ success:false, error:"Traveller must confirm the booking from their real email inbox before confirmation." });
       }
-      if (latest.identity_portrait_status === "requested" || latest.identity_portrait_status === "uploaded") {
+      if (latest.identity_portrait_status !== "verified") {
         return res.status(409).json({ success:false, error:"Traveller identity portrait must be uploaded and verified before booking confirmation." });
       }
     }
