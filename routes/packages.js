@@ -223,13 +223,20 @@ router.get('/stats', requireAdmin, async (req, res) => {
              COALESCE(SUM(booking_count), 0)::INTEGER AS bookings
       FROM packages
     `)
+    const pendingResult = await db(`
+      SELECT COUNT(*)::INTEGER AS pending
+      FROM bookings
+      WHERE booking_type = 'package'
+        AND status = 'pending'
+    `).catch(() => ({ rows: [{ pending: 0 }] }))
     const row = result.rows[0]
+    const pending = Number(pendingResult.rows?.[0]?.pending || 0)
     return res.json({
       success: true,
       data: {
         ...row,
         packages: { total: row.total, published: row.published, featured: row.featured },
-        bookings: { total: row.bookings, pending: 0 },
+        bookings: { total: row.bookings, pending },
         messages: { unread: 0 },
       },
     })
@@ -313,6 +320,41 @@ router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) =>
   } catch (err) {
     logger.error('[Packages] publish error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to update package status' })
+  }
+})
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GET /api/packages/slug/:slug
+   Public slug lookup used by the website package detail pages.
+═══════════════════════════════════════════════════════════════════════════ */
+router.get('/slug/:slug', optionalAuth, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    const slug = String(req.params.slug || '').trim().toLowerCase()
+    if (!slug) return res.status(400).json({ success: false, error: 'Package slug is required' })
+
+    const pkg = await db(
+      `SELECT p.*,
+              d.name AS destination_name,
+              d.slug AS destination_slug
+       FROM packages p
+       LEFT JOIN destinations d ON d.id = p.destination_id
+       WHERE LOWER(p.slug) = $1
+       LIMIT 1`,
+      [slug],
+    )
+
+    if (!pkg.rows.length) {
+      return res.status(404).json({ success: false, error: 'Package not found' })
+    }
+
+    db('UPDATE packages SET view_count = COALESCE(view_count,0) + 1 WHERE id = $1', [pkg.rows[0].id])
+      .catch(() => {})
+
+    return res.json({ success: true, data: pkg.rows[0] })
+  } catch (err) {
+    logger.error('[Packages] fetch slug error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to fetch package' })
   }
 })
 
@@ -453,6 +495,32 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     const adultsNum   = Math.max(1, parseInt(adults, 10)   || 1)
     const childrenNum = Math.max(0, parseInt(children, 10) || 0)
     const travelersNum = parseInt(travelers_count, 10) || (adultsNum + childrenNum)
+
+    if (travelersNum < 1 || travelersNum > 500) {
+      errors.push('Number of travelers must be between 1 and 500')
+    }
+    if (finalTravel) {
+      const start = new Date(finalTravel)
+      if (Number.isNaN(start.getTime())) {
+        errors.push('Invalid travel date')
+      } else {
+        const today = new Date()
+        today.setHours(0, 0, 0, 0)
+        if (start < today) errors.push('Travel date cannot be in the past')
+      }
+    }
+    if (finalTravel && finalEnd) {
+      const start = new Date(finalTravel)
+      const end = new Date(finalEnd)
+      if (Number.isNaN(end.getTime())) {
+        errors.push('Invalid return date')
+      } else if (!Number.isNaN(start.getTime()) && end < start) {
+        errors.push('Return date must be on or after the travel date')
+      }
+    }
+    if (errors.length) {
+      return res.status(400).json({ success: false, message: 'Validation failed', errors })
+    }
 
     // Generate unique booking reference
     let bookingNumber = genBookingRef(p.id)
