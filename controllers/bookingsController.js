@@ -37,6 +37,7 @@ try {
    EMAIL SERVICE
 ═════════════════════════════════════════════════════════════════════ */
 let sendBookingReceivedEmail = null;
+let sendBookingVerificationLink = null;
 let sendAdminBookingNotification = null;
 let sendBookingConfirmation = null;
 let sendBookingStatusUpdate = null;
@@ -48,6 +49,7 @@ try {
   const bookingEmails = require("../utils/bookingEmails");
 
   sendBookingReceivedEmail = bookingEmails.sendBookingReceivedEmail || null;
+  sendBookingVerificationLink = bookingEmails.sendBookingVerificationLink || null;
   sendAdminBookingNotification = bookingEmails.sendAdminBookingNotification || null;
   sendBookingConfirmation = bookingEmails.sendBookingConfirmation || null;
   sendBookingStatusUpdate = bookingEmails.sendBookingStatusUpdate || null;
@@ -72,6 +74,8 @@ try {
 
       sendBookingReceivedEmail =
         sendBookingReceivedEmail || mod.sendBookingReceivedEmail || null;
+      sendBookingVerificationLink =
+        sendBookingVerificationLink || mod.sendBookingVerificationLink || null;
       sendAdminBookingNotification =
         sendAdminBookingNotification || mod.sendAdminBookingNotification || null;
       sendBookingConfirmation =
@@ -684,6 +688,14 @@ const SCHEMA_COLUMNS = [
   "source VARCHAR(100) DEFAULT 'website'",
   "status VARCHAR(50) DEFAULT 'pending'",
   "is_active BOOLEAN DEFAULT true",
+  "email_verified_at TIMESTAMPTZ",
+  "itinerary_status VARCHAR(40) DEFAULT 'not_started'",
+  "itinerary JSONB DEFAULT '{}'::JSONB",
+  "itinerary_version INTEGER DEFAULT 0",
+  "itinerary_published_at TIMESTAMPTZ",
+  "itinerary_approved_at TIMESTAMPTZ",
+  "itinerary_change_request TEXT",
+  "itinerary_author_id INTEGER",
 ];
 
 let _schemaReadyPromise = null;
@@ -749,11 +761,12 @@ exports.create = async (req, res, next) => {
     }
 
     const bookingNumber = generateBookingNumber();
-    // Email confirmation is obsolete: a submitted booking is immediately valid
-    // for processing. Keep legacy DB columns populated for backward compatibility.
-    const verificationToken = null;
-    const tokenExpiry = null;
-    const emailVerified = true;
+    // The traveller must confirm this booking request from their real inbox.
+    // This is an ownership check for the booking request, not a generic account
+    // email-verification flow.
+    const verificationToken = crypto.randomBytes(48).toString("hex");
+    const tokenExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
+    const emailVerified = false;
 
     const { rows } = await query(
       `INSERT INTO bookings (
@@ -770,7 +783,7 @@ exports.create = async (req, res, next) => {
           group_type, marketing_source, newsletter_opt_in,
           preferred_contact_method, preferred_contact_time, pickup_location,
           source, status, payment_status,
-          email_verified, verification_token, verification_token_exp,
+          email_verified, email_verified_at, verification_token, verification_token_exp,
           created_at, updated_at
         ) VALUES (
           $1,
@@ -786,7 +799,7 @@ exports.create = async (req, res, next) => {
           $33,$34,$35,
           $36,$37,$38,
           $39,'pending','pending',
-          $40,$41,$42,
+          $40,$41,$42,$43,
           NOW(),NOW()
         )
         RETURNING *`,
@@ -843,9 +856,10 @@ exports.create = async (req, res, next) => {
 
         body.source || "website",
 
-        emailVerified: true,
-        emailVerified ? null : verificationToken,
-        emailVerified ? null : tokenExpiry,
+        emailVerified,
+        null,
+        verificationToken,
+        tokenExpiry,
       ],
     );
 
@@ -869,100 +883,25 @@ exports.create = async (req, res, next) => {
       );
     }
 
-    if (emailVerified) {
-      if (sendBookingReceivedEmail) {
-        asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail");
-      }
-
-      asyncNoThrow(
-        notifyUserBookingEvent({
-          user: { id: req.user.id, email: req.user.email || body.email },
-          booking: full,
-          title: "Booking Request Received! 🎉",
-          message: `We've received your booking request ${bookingNumber}. We'll reply within 24 hours.`,
-          actionUrl: "/my-bookings",
-          actionLabel: "Track Booking",
-        }),
-        "notifyUserBookingEvent",
-      );
-
-      if (String(booking.booking_type || '').toLowerCase() !== 'package') {
-        asyncNoThrow(
-          notifyAdminsImmediately({
-          type: "booking_created",
-          category: "booking",
-          title: "New booking received 📅",
-          message: `${safe(booking.full_name, "A traveller")} submitted booking ${bookingNumber}.`,
-          actionUrl: `/bookings?bookingId=${encodeURIComponent(booking.id)}`,
-          actionLabel: "Open booking",
-          metadata: {
-            bookingId: booking.id,
-            bookingNumber,
-            destinationId: booking.destination_id || null,
-          },
-          priority: "high",
-        }),
-          "notifyAdminsImmediately(booking)",
-        );
-      }
-
-      if (startBookingConversation) {
-        asyncNoThrow(
-          startBookingConversation(full, {
-            ipAddress: req.ip || req.headers["x-forwarded-for"],
-          }),
-          "startBookingConversation",
-        );
-      }
-    } else {
-      asyncNoThrow(
-        sendBookingReceivedEmail
-          ? sendBookingReceivedEmail(full)
-          : Promise.resolve(),
-        "sendBookingReceivedEmail(guest)",
-      );
-
-      asyncNoThrow(
-        notifyUserBookingEvent({
-          user: { id: null, email: booking.email },
-          booking: full,
-          title: "Booking Request Received! 🎉",
-          message: `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. We'll reply within 24 hours.`,
-          actionUrl: "/my-bookings",
-          actionLabel: "Track Booking",
-        }),
-        "notifyUserBookingEvent(guest)",
-      );
-
-      if (String(booking.booking_type || '').toLowerCase() !== 'package') {
-        asyncNoThrow(
-          notifyAdminsImmediately({
-            type: "booking_created",
-            category: "booking",
-            title: "New booking received 📅",
-            message: `${safe(booking.full_name, "A traveller")} submitted booking ${bookingNumber}.`,
-            actionUrl: `/bookings?bookingId=${encodeURIComponent(booking.id)}`,
-            actionLabel: "Open booking",
-            metadata: {
-              bookingId: booking.id,
-              bookingNumber,
-              destinationId: booking.destination_id || null,
-            },
-            priority: "high",
-          }),
-          "notifyAdminsImmediately(guest booking)",
-        );
-      }
-
-      if (startBookingConversation) {
-        asyncNoThrow(
-          startBookingConversation(full, {
-            ipAddress: req.ip || req.headers["x-forwarded-for"],
-          }),
-          "startBookingConversation(guest)",
-        );
-      }
+    // Do not notify the admin or start operational work until the traveller
+    // confirms the request from their real inbox. Logged-in users also receive
+    // the secure confirmation action in their dashboard.
+    const verificationUrl = `/booking/verify?token=${encodeURIComponent(verificationToken)}`;
+    if (sendBookingVerificationLink) {
+      asyncNoThrow(sendBookingVerificationLink(full, verificationToken), "sendBookingVerificationLink");
     }
+    asyncNoThrow(
+      notifyUserBookingEvent({
+        user: { id: req.user?.id || body.user_id || null, email: req.user?.email || body.email },
+        booking: full,
+        title: "Confirm your booking request ✉️",
+        message: `Please confirm that you requested booking ${bookingNumber} from your real email inbox. Your request enters Altuvera's planning queue after confirmation.`,
+        actionUrl: verificationUrl,
+        actionLabel: "Confirm my booking",
+        priority: "high",
+      }),
+      "notifyUserBookingEvent(verification)",
+    );
 
     await logActivity(
       booking.id,
@@ -982,7 +921,8 @@ exports.create = async (req, res, next) => {
       },
       bookingRef: bookingNumber,
       emailVerified,
-      message: "Booking submitted successfully! We will contact you within 24 hours.",
+      requiresEmailConfirmation: true,
+      message: "Booking request submitted. Please confirm that you made this request from your real email inbox.",
     });
   } catch (err) {
     logger.error("[Bookings] create:", err.message);
