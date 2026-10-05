@@ -2146,6 +2146,36 @@ exports.create = async (req, res, next) => {
       values
     )
 
+    // Persist the images supplied by the create form in the dedicated gallery
+    // table as well as destinations.image_urls. This makes a newly-created
+    // destination immediately render its full visual story on the public
+    // detail page, even if the admin client cannot make the follow-up
+    // addImages request. Existing destinations are not modified by this path.
+    const createdImageUrls = urlsOnly(data.image_urls)
+      .filter(isSafeImageUrl)
+      .slice(0, MAX_DESTINATION_IMAGES)
+
+    if (createdImageUrls.length) {
+      const imageMeta = parseJson(data.image_meta, [])
+      for (const [index, imageUrl] of createdImageUrls.entries()) {
+        const meta = Array.isArray(imageMeta) ? (imageMeta[index] || {}) : {}
+        await query(
+          `INSERT INTO destination_images
+             (destination_id, image_url, sort_order, caption, is_primary, uploaded_by)
+           VALUES ($1, $2, $3, $4, $5, $6)
+           ON CONFLICT DO NOTHING`,
+          [
+            rows[0].id,
+            imageUrl,
+            index,
+            meta.caption || null,
+            index === 0 || toBool(meta.is_primary),
+            req.user?.id || null,
+          ],
+        )
+      }
+    }
+
     await syncCountryDestCount(country.id)
      
     // Send destination alert email to subscribers
