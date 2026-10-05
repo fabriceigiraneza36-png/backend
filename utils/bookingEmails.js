@@ -1253,6 +1253,56 @@ const sendCancellationRequestAck = async (booking, requestType = "cancellation")
   );
 };
 
+/* ─────────────────────────────────────────────────────────────────────────
+   9. PERSONALIZED ITINERARY
+───────────────────────────────────────────────────────────────────────── */
+const sendItineraryEmail = async (booking, itinerary = {}) => {
+  if (!booking?.email) return { success: false };
+  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
+  const destination = tripName(booking);
+  const dayRows = days.map((day, index) => `
+      <div style="border:1px solid #d1fae5;border-radius:14px;padding:18px 20px;margin:0 0 14px;background:#f8fffb;">
+        <div style="font-size:10px;font-weight:800;color:#047857;letter-spacing:.12em;text-transform:uppercase;">
+          Day ${index + 1}${day.date ? ` · ${esc(fmtDate(day.date))}` : ""}
+        </div>
+        <h3 style="margin:6px 0 4px;font-family:'Playfair Display',Georgia,serif;font-size:19px;color:#0f172a;">
+          ${esc(day.title || day.location || "Adventure day")}
+        </h3>
+        ${day.location ? `<p style="margin:0 0 8px;color:#047857;font-weight:700;font-size:12px;">📍 ${esc(day.location)}</p>` : ""}
+        ${activities.length ? `<ul style="margin:8px 0;padding-left:18px;color:#475569;line-height:1.65;">${activities.map(a => `<li>${esc(typeof a === "string" ? a : a.title || a.name || "")}</li>`).join("")}</ul>` : ""}
+        ${day.transport ? `<p style="margin:7px 0;color:#475569;font-size:12px;"><strong>Transport:</strong> ${esc(day.transport)}</p>` : ""}
+        ${day.accommodation ? `<p style="margin:7px 0;color:#475569;font-size:12px;"><strong>Stay:</strong> ${esc(day.accommodation)}</p>` : ""}
+        ${day.meals ? `<p style="margin:7px 0;color:#475569;font-size:12px;"><strong>Meals:</strong> ${esc(day.meals)}</p>` : ""}
+        ${day.notes ? `<p style="margin:10px 0 0;padding-top:9px;border-top:1px solid #dcfce7;color:#64748b;font-size:12px;">${esc(day.notes)}</p>` : ""}
+      </div>`).join("");
+
+  const html = shell({
+    preheader: `Your personalized itinerary for ${destination} is ready.`,
+    heroBadge: statusPill("confirmed"),
+    heroTitle: "Your personalized itinerary is ready",
+    heroSubtitle: `A day-by-day plan prepared by Altuvera for ${destination}.`,
+    body: `
+      ${greet(booking.full_name)}
+      ${para(`Your itinerary for <strong style="color:${T.g700};">${esc(destination)}</strong> is now available in your Altuvera dashboard. Review it and approve it, or send us a change request.`)}
+      ${infoTable("Trip", [
+        row("Reference", booking.booking_number, true),
+        row("Destination", booking.destination_name || destination),
+        row("Country", booking.country_name),
+        row("Travel dates", `${fmtDate(booking.travel_date)} → ${fmtDate(booking.return_date)}`),
+        row("Travelers", booking.number_of_travelers),
+      ])}
+      ${dayRows || notice("info", "Itinerary", "Your coordinator will contact you with the detailed schedule.")}
+      ${ctaBlock("View & Approve Itinerary", `${ENV.frontendUrl}/my-bookings`, "Message Altuvera", `${ENV.frontendUrl}/messages`)}
+    `,
+  });
+
+  return safeSend(
+    booking.email,
+    `Your Itinerary Is Ready — ${safe(booking.booking_number)} | ${ENV.appName}`,
+    html,
+    "sendItineraryEmail",
+  );
+};
 /* ════════════════════════════════════════════════════════════════════════════
    EXPORTS
 ════════════════════════════════════════════════════════════════════════════ */
@@ -1265,5 +1315,6 @@ module.exports = {
   sendBookingCancellation,
   sendTripCountdownEmail,
   sendCancellationRequestAck,
+  sendItineraryEmail,
   buildVerificationLink,   // exported for testing
 };  
