@@ -875,7 +875,10 @@ exports.create = async (req, res, next) => {
         asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail");
       }
 
-      if (sendAdminBookingNotification) {
+      // Package requests already send their dedicated admin email/alert
+      // through notifyPackageBookingCreated above. Avoid sending a second generic
+      // admin email for the same request.
+      if (sendAdminBookingNotification && String(booking.booking_type || '').toLowerCase() !== 'package') {
         asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
       }
 
