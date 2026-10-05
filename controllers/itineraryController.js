@@ -83,6 +83,14 @@ const normalizeItinerary = (raw = {}) => {
     })),
     inclusions: Array.isArray(src.inclusions) ? src.inclusions.map(String).map(s=>s.trim()).filter(Boolean) : [],
     essentials: Array.isArray(src.essentials) ? src.essentials.map(String).map(s=>s.trim()).filter(Boolean) : [],
+    planningChecklist: Array.isArray(src.planningChecklist)
+      ? src.planningChecklist.map((item, index) => ({
+          key: String(item?.key || `item_${index + 1}`).trim(),
+          label: String(item?.label || "").trim(),
+          done: Boolean(item?.done),
+          note: String(item?.note || "").trim(),
+        })).filter(item => item.label)
+      : [],
     contactNote: String(src.contactNote || "").trim(),
   };
 };
