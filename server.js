@@ -1467,6 +1467,33 @@ io.on('connection', (socket) => {
       })
 
       const serialized = serializeConvMessage(msg)
+
+      // Persistent in-app notification for the user when their inbox is not open.
+      // The notification contains a direct reply link to this conversation.
+      try {
+        const { createNotificationInternal } = require('./controllers/notificationsController')
+        if (conv.user_id) {
+          await createNotificationInternal({
+            userId: conv.user_id,
+            userEmail: conv.guest_email || null,
+            type: 'message_received',
+            category: 'message',
+            title: 'New message from Altuvera 💬',
+            message: `${msg.sender_name || 'Altuvera Support'} sent you a new message.`,
+            actionUrl: `/messages?conversationId=${encodeURIComponent(conv.id)}`,
+            actionLabel: 'Reply now',
+            priority: 'high',
+            senderType: 'admin',
+            senderId: socket.data.userId,
+            senderName: msg.sender_name || 'Altuvera Support',
+            targetScope: 'individual',
+            metadata: { conversationId: conv.id, messageId: msg.id },
+          })
+        }
+      } catch (notificationError) {
+        logger.warn('[Socket] admin message notification failed:', notificationError.message)
+      }
+
       broadcastConversationMessage({
         io,
         conversationId: conv.id,
