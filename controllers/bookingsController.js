@@ -985,6 +985,19 @@ exports.verifyEmail = async (req, res) => {
 
     pingAdminNewRequest(full);
 
+    asyncNoThrow(
+      notifyUserBookingEvent({
+        user: { id: full.user_id || null, email: full.email || null },
+        booking: full,
+        title: "Booking request confirmed ✓",
+        message: `Your booking ${full.booking_number} has been confirmed from your real inbox. Altuvera can now begin planning your itinerary.`,
+        actionUrl: "/my-bookings",
+        actionLabel: "View my booking",
+        priority: "high",
+      }),
+      "notifyUserBookingEvent(verified)",
+    );
+
     if (startBookingConversation) {
       asyncNoThrow(
         startBookingConversation(full, {
