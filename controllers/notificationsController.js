@@ -204,7 +204,7 @@ const escapeAdminHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char)
   "&": "&amp;",
   "<": "&lt;",
   ">": "&gt;",
-  """: "&quot;",
+  '"': "&quot;",
 }[char]));
 
 const notifyAdminsImmediately = async ({
