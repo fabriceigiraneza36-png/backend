@@ -233,10 +233,13 @@ const notifyAdminsImmediately = async ({
 
   emitNotification(null, { ...notif, target_scope: "admin" });
 
-  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  const adminPanelUrl =
+    process.env.ADMIN_PANEL_URL ||
+    process.env.ADMIN_URL ||
+    "https://admin.altuverasafaris.com";
   const absoluteUrl = actionUrl && /^https?:\/\//i.test(actionUrl)
     ? actionUrl
-    : `${frontendUrl.replace(/\/$/, "")}${actionUrl.startsWith("/") ? actionUrl : `/${actionUrl}`}`;
+    : `${adminPanelUrl.replace(/\/$/, "")}${actionUrl.startsWith("/") ? actionUrl : `/${actionUrl}`}`;
 
   await sendAdminEmail(
     title,
@@ -501,8 +504,11 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
   });
 
   // Send the same request immediately to the configured admin inbox.
-  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
-  const actionUrl = `${frontendUrl.replace(/\/$/, "")}${actionPath}`;
+  const adminPanelUrl =
+    process.env.ADMIN_PANEL_URL ||
+    process.env.ADMIN_URL ||
+    "https://admin.altuverasafaris.com";
+  const actionUrl = `${adminPanelUrl.replace(/\/$/, "")}${actionPath}`;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
     "&": "&amp;",
     "<": "&lt;",
