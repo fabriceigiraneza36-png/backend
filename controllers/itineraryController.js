@@ -54,6 +54,13 @@ const safeId = (v) => {
   return Number.isFinite(n) && n > 0 ? n : null;
 };
 
+const canUserAccess = (req, booking) => {
+  if (req.userType === "admin" || req.admin) return true;
+  const uid = req.user?.id ? Number(req.user.id) : null;
+  const email = req.user?.email ? String(req.user.email).toLowerCase() : null;
+  return Boolean((uid && Number(booking.user_id) === uid) || (email && String(booking.email || "").toLowerCase() === email));
+};
+
 const normalizeItinerary = (raw = {}) => {
   const src = raw && typeof raw === "object" ? raw : {};
   const days = Array.isArray(src.days) ? src.days : [];
@@ -87,6 +94,7 @@ exports.get = async (req,res,next) => {
     if (!id) return res.status(400).json({success:false,error:"Invalid booking id"});
     const booking = await bookingDetail(id);
     if (!booking) return res.status(404).json({success:false,error:"Booking not found"});
+    if (!canUserAccess(req, booking)) return res.status(403).json({success:false,error:"You do not have access to this itinerary."});
     return res.json({success:true,data:{booking,itinerary:booking.itinerary || {},itinerary_status:booking.itinerary_status || "not_started"}});
   } catch(e) { logger.error("[Itinerary] get:",e.message); next(e); }
 };
@@ -180,6 +188,7 @@ exports.approve = async (req,res,next) => {
     const id=safeId(req.params.id);
     const booking=await bookingDetail(id);
     if(!booking) return res.status(404).json({success:false,error:"Booking not found"});
+    if(!canUserAccess(req, booking)) return res.status(403).json({success:false,error:"You do not have access to this itinerary."});
     if(!["sent","change_requested"].includes(booking.itinerary_status)) return res.status(409).json({success:false,error:"There is no itinerary awaiting approval."});
     const {rows}=await query(
       `UPDATE bookings
@@ -219,6 +228,7 @@ exports.requestChange = async (req,res,next) => {
     const id=safeId(req.params.id);
     const booking=await bookingDetail(id);
     if(!booking) return res.status(404).json({success:false,error:"Booking not found"});
+    if(!canUserAccess(req, booking)) return res.status(403).json({success:false,error:"You do not have access to this itinerary."});
     const reason=String(req.body?.reason || "").trim();
     if(!reason) return res.status(400).json({success:false,error:"Please describe the change you need."});
     const {rows}=await query(
