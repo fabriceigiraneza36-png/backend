@@ -102,8 +102,15 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
 
 const sendAdminEmail = async (subject, html) => {
   if (!sendEmail) return;
+
   const admins = await getAdminRecipients();
-  await Promise.all(admins.map((a) =>
+  const recipients = admins.length
+    ? admins
+    : ((process.env.ADMIN_EMAIL || process.env.SMTP_USER)
+        ? [{ email: process.env.ADMIN_EMAIL || process.env.SMTP_USER, full_name: "Admin" }]
+        : []);
+
+  await Promise.all(recipients.map((a) =>
     sendEmail({
       to:      a.email,
       subject,
@@ -409,25 +416,61 @@ const notifyBookingCreated = (booking, user) =>
   });
 
 /* Package request — notify every admin immediately with a direct workspace target. */
-const notifyPackageBookingCreated = (booking, pkg, req = null) =>
-  createNotificationInternal({
-    type:        "package_request",
-    category:    "package",
-    title:       "New package request 📦",
-    message:     `${booking?.full_name || booking?.email || "A traveller"} requested "${pkg?.title || "a package"}"${booking?.special_requests ? " with special requests." : "."}`,
-    actionUrl:   `/packages?packageId=${encodeURIComponent(booking?.package_id || pkg?.id || "")}&requestId=${encodeURIComponent(booking?.id || "")}`,
+const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
+  const traveller = booking?.full_name || booking?.email || "A traveller";
+  const packageTitle = pkg?.title || "a package";
+  const hasSpecialRequests = Boolean(booking?.special_requests);
+  const actionPath = `/packages?packageId=${encodeURIComponent(booking?.package_id || pkg?.id || "")}&requestId=${encodeURIComponent(booking?.id || "")}`;
+
+  const notif = await createNotificationInternal({
+    type: "package_request",
+    category: "package",
+    title: "New package request 📦",
+    message: `${traveller} requested "${packageTitle}"${hasSpecialRequests ? " with special requests." : "."}`,
+    actionUrl: actionPath,
     actionLabel: "Open package request",
-    priority:    "high",
+    priority: "high",
     targetScope: "admin",
     metadata: {
-      packageId:     booking?.package_id || pkg?.id || null,
-      bookingId:     booking?.id || null,
+      packageId: booking?.package_id || pkg?.id || null,
+      bookingId: booking?.id || null,
       bookingNumber: booking?.booking_number || null,
-      requestType:   "package_booking",
-      hasSpecialRequests: Boolean(booking?.special_requests),
+      requestType: "package_booking",
+      hasSpecialRequests,
     },
     req,
   });
+
+  // Send the same request immediately to the configured admin inbox.
+  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  const actionUrl = `${frontendUrl.replace(/\/$/, "")}${actionPath}`;
+  const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    "\"": "&quot;",
+  }[char]));
+
+  sendAdminEmail(
+    `New package request 📦 — ${packageTitle}`,
+    `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#0f172a;">
+      <div style="border-radius:14px;background:#ecfdf5;padding:20px;border:1px solid #a7f3d0;">
+        <h2 style="margin:0 0 8px;color:#047857;">New Package Request 📦</h2>
+        <p style="margin:0;font-size:15px;color:#334155;">{{name}}, a traveller has submitted a new package request.</p>
+      </div>
+      <div style="padding:20px 4px;">
+        <p><strong>Traveller:</strong> ${escapeHtml(traveller)}</p>
+        <p><strong>Package:</strong> ${escapeHtml(packageTitle)}</p>
+        <p><strong>Booking reference:</strong> ${escapeHtml(booking?.booking_number || booking?.id || "Pending")}</p>
+        <p><strong>Special requests:</strong> ${hasSpecialRequests ? escapeHtml(booking.special_requests) : "None"}</p>
+      </div>
+      <a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:9px;font-weight:700;">Open package request</a>
+      <p style="margin-top:24px;font-size:12px;color:#94a3b8;">Altuvera Safaris — Admin notification</p>
+    </div>`,
+  ).catch((err) => logger.warn("[Notifications] package admin email failed:", err.message));
+
+  return notif;
+};
 /* Review posted — notify the user + aggregate to admins */
 const notifyReviewPosted = (review, user) =>
   createNotificationInternal({
