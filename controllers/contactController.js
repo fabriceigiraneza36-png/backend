@@ -220,9 +220,9 @@ exports.create = async (req, res, next) => {
 
     /* ── In-app + admin notification ── */
     notifyContactMessage(
-      { subject },
+      { id: saved.id, subject },
       { id: req.user?.id ?? null, email, name },
-    ).catch(() => {});
+    ).catch((err) => console.warn("[Contact] notification failed:", err.message));
 
     return res.status(201).json({
       success: true,
