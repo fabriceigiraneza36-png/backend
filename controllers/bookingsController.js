@@ -36,7 +36,6 @@ try {
 /* ═════════════════════════════════════════════════════════════════════
    EMAIL SERVICE
 ═════════════════════════════════════════════════════════════════════ */
-let sendBookingVerificationLink = null;
 let sendBookingReceivedEmail = null;
 let sendAdminBookingNotification = null;
 let sendBookingConfirmation = null;
@@ -48,7 +47,6 @@ let sendCancellationRequestAck = null;
 try {
   const bookingEmails = require("../utils/bookingEmails");
 
-  sendBookingVerificationLink = bookingEmails.sendBookingVerificationLink || null;
   sendBookingReceivedEmail = bookingEmails.sendBookingReceivedEmail || null;
   sendAdminBookingNotification = bookingEmails.sendAdminBookingNotification || null;
   sendBookingConfirmation = bookingEmails.sendBookingConfirmation || null;
@@ -72,8 +70,6 @@ try {
     try {
       const mod = require(p);
 
-      sendBookingVerificationLink =
-        sendBookingVerificationLink || mod.sendBookingVerificationLink || null;
       sendBookingReceivedEmail =
         sendBookingReceivedEmail || mod.sendBookingReceivedEmail || null;
       sendAdminBookingNotification =
@@ -753,9 +749,11 @@ exports.create = async (req, res, next) => {
     }
 
     const bookingNumber = generateBookingNumber();
-    const verificationToken = crypto.randomBytes(48).toString("hex");
-    const tokenExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
-    const emailVerified = !!req.user?.id;
+    // Email confirmation is obsolete: a submitted booking is immediately valid
+    // for processing. Keep legacy DB columns populated for backward compatibility.
+    const verificationToken = null;
+    const tokenExpiry = null;
+    const emailVerified = true;
 
     const { rows } = await query(
       `INSERT INTO bookings (
@@ -845,7 +843,7 @@ exports.create = async (req, res, next) => {
 
         body.source || "website",
 
-        emailVerified,
+        emailVerified: true,
         emailVerified ? null : verificationToken,
         emailVerified ? null : tokenExpiry,
       ],
@@ -917,23 +915,21 @@ exports.create = async (req, res, next) => {
         );
       }
     } else {
-      if (sendBookingVerificationLink) {
-        asyncNoThrow(
-          sendBookingVerificationLink(full, verificationToken),
-          "sendBookingVerificationLink",
-        );
-      } else {
-        logger.warn("[Bookings] sendBookingVerificationLink not available — skipped");
-      }
+      asyncNoThrow(
+        sendBookingReceivedEmail
+          ? sendBookingReceivedEmail(full)
+          : Promise.resolve(),
+        "sendBookingReceivedEmail(guest)",
+      );
 
       asyncNoThrow(
         notifyUserBookingEvent({
           user: { id: null, email: booking.email },
           booking: full,
           title: "Booking Request Received! 🎉",
-          message: `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. Please confirm your email so our team can start planning.`,
-          actionUrl: "/booking/verify",
-          actionLabel: "Confirm Email",
+          message: `Thanks ${safe(booking.full_name, "traveller")}! We've received your booking request ${bookingNumber}. We'll reply within 24 hours.`,
+          actionUrl: "/my-bookings",
+          actionLabel: "Track Booking",
         }),
         "notifyUserBookingEvent(guest)",
       );
@@ -986,9 +982,7 @@ exports.create = async (req, res, next) => {
       },
       bookingRef: bookingNumber,
       emailVerified,
-      message: emailVerified
-        ? "Booking submitted successfully! We will contact you within 24 hours."
-        : "Booking created! Please check your email and click the confirmation link.",
+      message: "Booking submitted successfully! We will contact you within 24 hours.",
     });
   } catch (err) {
     logger.error("[Bookings] create:", err.message);
