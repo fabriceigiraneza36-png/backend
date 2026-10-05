@@ -122,6 +122,7 @@ const maintenanceRouter         = require('./routes/maintenance')   // ? v7.1
 const pushRouter                = require('./routes/push')            // ? push notifications
 const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
+const bookingIdentityRouter     = require('./routes/bookingIdentity')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
@@ -832,6 +833,7 @@ app.use('/api/destination-likes',    destinationLikesRouter)
 app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
+app.use('/api/booking-identity',     bookingIdentityRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
 app.use('/api/maintenance',          maintenanceRouter)   // ? v7.1 ?
