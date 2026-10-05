@@ -408,6 +408,26 @@ const notifyBookingCreated = (booking, user) =>
     },
   });
 
+/* Package request — notify every admin immediately with a direct workspace target. */
+const notifyPackageBookingCreated = (booking, pkg, req = null) =>
+  createNotificationInternal({
+    type:        "package_request",
+    category:    "package",
+    title:       "New package request 📦",
+    message:     `${booking?.full_name || booking?.email || "A traveller"} requested "${pkg?.title || "a package"}"${booking?.special_requests ? " with special requests." : "."}`,
+    actionUrl:   `/packages?packageId=${encodeURIComponent(booking?.package_id || pkg?.id || "")}&requestId=${encodeURIComponent(booking?.id || "")}`,
+    actionLabel: "Open package request",
+    priority:    "high",
+    targetScope: "admin",
+    metadata: {
+      packageId:     booking?.package_id || pkg?.id || null,
+      bookingId:     booking?.id || null,
+      bookingNumber: booking?.booking_number || null,
+      requestType:   "package_booking",
+      hasSpecialRequests: Boolean(booking?.special_requests),
+    },
+    req,
+  });
 /* Review posted — notify the user + aggregate to admins */
 const notifyReviewPosted = (review, user) =>
   createNotificationInternal({
@@ -520,6 +540,7 @@ module.exports = {
   createNotificationInternal,
   broadcastNotification,
   notifyBookingCreated,
+  notifyPackageBookingCreated,
   notifyReviewPosted,
   notifyUserRegistered,
   notifyContactMessage,
