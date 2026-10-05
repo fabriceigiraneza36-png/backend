@@ -117,6 +117,20 @@ const ensurePackagesSchema = async () => {
     `).catch(() => ({ rows: [] }))
     _hasDestinationId = destinationColumn.rows.length > 0
 
+    // Image-based packages are the current public package workflow. Repair legacy
+    // rows that were created as drafts by the old admin form so visible package
+    // cards are actually requestable. Packages without an image or destination
+    // remain untouched and therefore cannot be published accidentally.
+    await db(`
+      UPDATE packages
+      SET is_published = true, updated_at = NOW()
+      WHERE COALESCE(is_published, false) = false
+        AND NULLIF(TRIM(COALESCE(cover_image_url, '')), '') IS NOT NULL
+        AND destination_id IS NOT NULL
+    `).catch((repairErr) => {
+      logger.warn('[Packages] Legacy publish repair skipped:', repairErr.message)
+    })
+
     logger.info('[Packages] ✅ Schema verified')
   } catch (err) {
     logger.warn('[Packages] Schema check failed:', err.message)
