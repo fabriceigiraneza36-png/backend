@@ -654,6 +654,7 @@ module.exports = {
   notifyReviewPosted,
   notifyUserRegistered,
   notifyContactMessage,
+  notifyAdminsImmediately,
   flushAdminBatch,
   ADMIN_BATCH_THRESHOLD,
 };
