@@ -114,6 +114,9 @@ exports.saveDraft = async (req,res,next) => {
     if (!id) return res.status(400).json({success:false,error:"Invalid booking id"});
     const booking = await bookingDetail(id);
     if (!booking) return res.status(404).json({success:false,error:"Booking not found"});
+    if (!booking.email_verified) {
+      return res.status(409).json({success:false,error:"Traveller must confirm this booking from their real email inbox before operational planning can begin."});
+    }
     const itinerary = normalizeItinerary(req.body?.itinerary || req.body || {});
     const authorId = req.admin?.id || req.user?.id || null;
     const { rows } = await query(
