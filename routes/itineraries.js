@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const controller = require("../controllers/itineraryController");
-const { optionalAuth } = require("../middleware/auth");
+const { protect, adminOnly } = require("../middleware/auth");
 
 router.get("/:id", protect, controller.get);
 router.post("/:id/draft", adminOnly, controller.saveDraft);
