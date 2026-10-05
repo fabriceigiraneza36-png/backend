@@ -1260,7 +1260,9 @@ const sendItineraryEmail = async (booking, itinerary = {}) => {
   if (!booking?.email) return { success: false };
   const days = Array.isArray(itinerary.days) ? itinerary.days : [];
   const destination = tripName(booking);
-  const dayRows = days.map((day, index) => `
+  const dayRows = days.map((day, index) => {
+    const activities = Array.isArray(day.activities) ? day.activities : [];
+    return `
       <div style="border:1px solid #d1fae5;border-radius:14px;padding:18px 20px;margin:0 0 14px;background:#f8fffb;">
         <div style="font-size:10px;font-weight:800;color:#047857;letter-spacing:.12em;text-transform:uppercase;">
           Day ${index + 1}${day.date ? ` · ${esc(fmtDate(day.date))}` : ""}
@@ -1274,7 +1276,8 @@ const sendItineraryEmail = async (booking, itinerary = {}) => {
         ${day.accommodation ? `<p style="margin:7px 0;color:#475569;font-size:12px;"><strong>Stay:</strong> ${esc(day.accommodation)}</p>` : ""}
         ${day.meals ? `<p style="margin:7px 0;color:#475569;font-size:12px;"><strong>Meals:</strong> ${esc(day.meals)}</p>` : ""}
         ${day.notes ? `<p style="margin:10px 0 0;padding-top:9px;border-top:1px solid #dcfce7;color:#64748b;font-size:12px;">${esc(day.notes)}</p>` : ""}
-      </div>`).join("");
+      </div>`;
+  }).join("");
 
   const html = shell({
     preheader: `Your personalized itinerary for ${destination} is ready.`,
