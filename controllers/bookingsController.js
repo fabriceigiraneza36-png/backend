@@ -876,13 +876,6 @@ exports.create = async (req, res, next) => {
         asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail");
       }
 
-      // Package requests already send their dedicated admin email/alert
-      // through notifyPackageBookingCreated above. Avoid sending a second generic
-      // admin email for the same request.
-      if (sendAdminBookingNotification && String(booking.booking_type || '').toLowerCase() !== 'package') {
-        asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
-      }
-
       asyncNoThrow(
         notifyUserBookingEvent({
           user: { id: req.user.id, email: req.user.email || body.email },
@@ -895,10 +888,9 @@ exports.create = async (req, res, next) => {
         "notifyUserBookingEvent",
       );
 
-      pingAdminNewRequest(full);
-
-      asyncNoThrow(
-        notifyAdminsImmediately({
+      if (String(booking.booking_type || '').toLowerCase() !== 'package') {
+        asyncNoThrow(
+          notifyAdminsImmediately({
           type: "booking_created",
           category: "booking",
           title: "New booking received 📅",
@@ -912,8 +904,9 @@ exports.create = async (req, res, next) => {
           },
           priority: "high",
         }),
-        "notifyAdminsImmediately(booking)",
-      );
+          "notifyAdminsImmediately(booking)",
+        );
+      }
 
       if (startBookingConversation) {
         asyncNoThrow(
@@ -945,7 +938,25 @@ exports.create = async (req, res, next) => {
         "notifyUserBookingEvent(guest)",
       );
 
-      pingAdminNewRequest(full);
+      if (String(booking.booking_type || '').toLowerCase() !== 'package') {
+        asyncNoThrow(
+          notifyAdminsImmediately({
+            type: "booking_created",
+            category: "booking",
+            title: "New booking received 📅",
+            message: `${safe(booking.full_name, "A traveller")} submitted booking ${bookingNumber}.`,
+            actionUrl: `/bookings?bookingId=${encodeURIComponent(booking.id)}`,
+            actionLabel: "Open booking",
+            metadata: {
+              bookingId: booking.id,
+              bookingNumber,
+              destinationId: booking.destination_id || null,
+            },
+            priority: "high",
+          }),
+          "notifyAdminsImmediately(guest booking)",
+        );
+      }
 
       if (startBookingConversation) {
         asyncNoThrow(
