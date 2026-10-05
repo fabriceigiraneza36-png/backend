@@ -63,6 +63,7 @@ router.post("/:id/upload",protect,upload.single("portrait"),async(req,res)=>{
   await query("UPDATE bookings SET identity_portrait_url=$1,identity_portrait_public_id=$2,identity_portrait_status='uploaded',identity_portrait_uploaded_at=NOW(),updated_at=NOW() WHERE id=$3",[req.file.secure_url,req.file.cloudinary?.public_id||null,id]);
   const full=await getBooking(id);
   await notifyAdmins(full,"Traveller portrait received",(full.full_name||"A traveller")+" uploaded the requested portrait for "+(full.booking_number||"a booking"),"/bookings/"+id,"Review traveller");
+  try { req.app?.get?.("io")?.to?.("admins")?.emit?.("notification:new", { type:"identity_portrait_received", category:"booking", title:"Traveller portrait received", message:(full.full_name||"A traveller")+" uploaded the requested portrait for "+(full.booking_number||"a booking"), action_url:"/bookings/"+id, action_label:"Review traveller", priority:"high", metadata:{bookingId:id,bookingNumber:full.booking_number} }); } catch {}
   const adminEmail=process.env.ADMIN_EMAIL||process.env.SUPPORT_EMAIL||"info@altuverasafaris.com";
   await email(adminEmail,"Portrait received — "+(full.booking_number||"Booking"),"<div style='font-family:Arial,sans-serif;max-width:620px;margin:auto;padding:24px'><h2 style='color:#047857'>Traveller portrait received</h2><p><strong>"+esc(full.full_name)+"</strong> has uploaded the requested portrait for <strong>"+esc(full.booking_number)+"</strong>.</p><img src='"+esc(full.identity_portrait_url)+"' alt='Traveller portrait' style='width:140px;height:140px;object-fit:cover;border-radius:18px;display:block;margin:18px 0'/><a href='"+(process.env.ADMIN_FRONTEND_URL||"https://admin.altuverasafaris.com")+"/bookings/"+id+"' style='display:inline-block;padding:12px 18px;background:#059669;color:#fff;text-decoration:none;border-radius:9px;font-weight:700'>Open booking in admin</a></div>");
   return res.json({success:true,data:full,message:"Portrait uploaded. Altuvera has been notified."});
@@ -80,6 +81,7 @@ router.post("/:id/confirm",protect,adminOnly,async(req,res)=>{
   const full=await getBooking(id);
   try{const emails=require("../utils/bookingEmails");if(typeof emails.sendBookingConfirmation==="function")await emails.sendBookingConfirmation(full)}catch{}
   await notifyUser(full,"Your booking is confirmed 🎉","Your identity details have been confirmed and your journey to "+(full.destination_name||"your destination")+" is now confirmed.","/my-bookings","View confirmed booking");
+  try { req.app?.get?.("io")?.to?.("user-"+full.user_id)?.emit?.("notification:new", { type:"booking_confirmed", category:"booking", title:"Your booking is confirmed 🎉", message:"Your journey to "+(full.destination_name||"your destination")+" is now confirmed.", action_url:"/my-bookings", action_label:"View confirmed booking", priority:"high" }); } catch {}
   return res.json({success:true,data:full,message:"Traveller verified and booking confirmed."});
  }catch(e){logger.error("[Identity] confirm:",e.message);return res.status(500).json({success:false,message:"Failed to confirm booking"})}
 });
