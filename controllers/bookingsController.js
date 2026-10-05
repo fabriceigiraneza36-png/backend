@@ -975,6 +975,11 @@ exports.verifyEmail = async (req, res) => {
               email_verified_at = NOW(),
               verification_token = NULL,
               verification_token_exp = NULL,
+              -- Email ownership confirmation is the gate into operational planning.
+              itinerary_status = CASE
+                WHEN COALESCE(itinerary_status, 'not_started') = 'not_started' THEN 'planning'
+                ELSE itinerary_status
+              END,
               updated_at = NOW()
         WHERE id = $1`,
       [booking.id],
