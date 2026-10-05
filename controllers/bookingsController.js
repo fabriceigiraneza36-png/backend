@@ -590,13 +590,17 @@ const getBookingDetail = async (identifier, type = "id") => {
               COALESCE(d.name, b.destination_name) AS destination_name,
               d.slug AS destination_slug,
               COALESCE(d.image_url, d.thumbnail_url) AS destination_image,
-              COALESCE(c.name, b.country_name, b.country) AS country_name,
               c.slug AS country_slug,
               s.title AS service_name,
               s.slug AS service_slug,
               p.title AS package_name,
               u.full_name AS user_name,
-              u.email AS user_email
+              u.email AS user_email,
+              to_jsonb(d) AS destination_details,
+              to_jsonb(c) AS country_details,
+              to_jsonb(s) AS service_details,
+              to_jsonb(p) AS package_details,
+              COALESCE(c.name, b.country_name, b.country) AS country_name
          FROM bookings b
          LEFT JOIN destinations d ON b.destination_id = d.id
          LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
