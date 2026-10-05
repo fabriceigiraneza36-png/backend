@@ -9,8 +9,9 @@ try {
 } catch {}
 
 let sendItineraryEmail = null;
+let sendBookingConfirmation = null;
 try {
-  ({ sendItineraryEmail } = require("../utils/bookingEmails"));
+  ({ sendItineraryEmail, sendBookingConfirmation } = require("../utils/bookingEmails"));
 } catch {}
 
 let getIO = () => null;
@@ -189,6 +190,22 @@ exports.approve = async (req,res,next) => {
               updated_at=NOW()
         WHERE id=$1 RETURNING *`,[id]);
     const full=(await bookingDetail(id))||rows[0];
+    await Promise.allSettled([
+      sendBookingConfirmation ? sendBookingConfirmation(full) : Promise.resolve(),
+      createNotificationInternal({
+        userId: full.user_id || null,
+        userEmail: full.email || null,
+        type: "booking_confirmed",
+        category: "booking",
+        title: "Your trip is confirmed 🎉",
+        message: `Your itinerary for ${full.destination_name || "your trip"} has been approved and your booking is now confirmed.`,
+        actionUrl: "/my-bookings",
+        actionLabel: "View confirmed trip",
+        priority: "high",
+        senderType: "admin",
+        metadata: { bookingId: full.id, bookingNumber: full.booking_number },
+      }),
+    ]);
     try {
       const io=getIO(); io?.to?.(`user:${full.user_id}`)?.emit?.("itinerary:approved",{bookingId:full.id});
     } catch {}
