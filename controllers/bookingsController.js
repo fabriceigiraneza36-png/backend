@@ -1874,6 +1874,18 @@ exports.updateStatus = async (req, res, next) => {
 
     const current = ex[0].status;
 
+    // Booking confirmation now requires the traveller identity-portrait step when requested.
+    if (status === "confirmed") {
+      await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS identity_portrait_status VARCHAR(30) DEFAULT 'not_requested'").catch(() => {});
+      const latest = (await query("SELECT email_verified, identity_portrait_status FROM bookings WHERE id=$1", [id])).rows[0] || {};
+      if (!latest.email_verified) {
+        return res.status(409).json({ success:false, error:"Traveller must confirm the booking from their real email inbox before confirmation." });
+      }
+      if (latest.identity_portrait_status === "requested" || latest.identity_portrait_status === "uploaded") {
+        return res.status(409).json({ success:false, error:"Traveller identity portrait must be uploaded and verified before booking confirmation." });
+      }
+    }
+
     if (!isValidTransition(current, status)) {
       return res.status(400).json({
         success: false,
