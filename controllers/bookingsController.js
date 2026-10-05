@@ -700,6 +700,13 @@ const SCHEMA_COLUMNS = [
   "itinerary_approved_at TIMESTAMPTZ",
   "itinerary_change_request TEXT",
   "itinerary_author_id INTEGER",
+  "identity_portrait_url TEXT",
+  "identity_portrait_public_id TEXT",
+  "identity_portrait_status VARCHAR(30) DEFAULT 'not_requested'",
+  "identity_portrait_requested_at TIMESTAMPTZ",
+  "identity_portrait_uploaded_at TIMESTAMPTZ",
+  "identity_portrait_verified_at TIMESTAMPTZ",
+  "identity_portrait_requested_by INTEGER",
 ];
 
 let _schemaReadyPromise = null;
