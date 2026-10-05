@@ -41,6 +41,8 @@ const bookingDetail = async (id) => {
     `SELECT b.*,
             COALESCE(d.name,b.destination_name,'') AS destination_name,
             COALESCE(c.name,b.country_name,b.country,'') AS country_name,
+            COALESCE(d.image_url,d.cover_image_url,c.image_url,c.cover_image_url) AS destination_image_url,
+            COALESCE(c.image_url,c.cover_image_url,d.image_url,d.cover_image_url) AS country_image_url,
             to_jsonb(d) AS destination_details,
             to_jsonb(c) AS country_details
        FROM bookings b
