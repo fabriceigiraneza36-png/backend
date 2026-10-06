@@ -927,8 +927,8 @@ exports.create = async (req, res, next) => {
       },
       bookingRef: bookingNumber,
       emailVerified,
-      requiresEmailConfirmation: true,
-      message: "Booking request submitted. Please confirm that you made this request from your real email inbox.",
+      requiresEmailConfirmation: false,
+      message: "Booking request submitted successfully. Check your email for your booking details.",
     });
   } catch (err) {
     logger.error("[Bookings] create:", err.message);
@@ -940,166 +940,20 @@ exports.create = async (req, res, next) => {
    VERIFY EMAIL
 ═════════════════════════════════════════════════════════════════════ */
 exports.verifyEmail = async (req, res) => {
-  try {
-    const { token } = req.params;
-    const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
-
-    if (!token || token.length < 32) {
-      return res.redirect(`${frontendUrl}/booking/verify?status=invalid`);
-    }
-
-    const { rows } = await query(
-      `SELECT * FROM bookings
-        WHERE verification_token = $1
-          AND email_verified = false
-          AND verification_token_exp > NOW()
-        LIMIT 1`,
-      [token],
-    );
-
-    if (!rows[0]) {
-      const { rows: used } = await query(
-        `SELECT id, email_verified FROM bookings WHERE verification_token = $1 LIMIT 1`,
-        [token],
-      );
-
-      if (used[0]?.email_verified) {
-        return res.redirect(`${frontendUrl}/booking/verify?status=already_verified`);
-      }
-
-      return res.redirect(`${frontendUrl}/booking/verify?status=expired`);
-    }
-
-    const booking = rows[0];
-
-    await query(
-      `UPDATE bookings
-          SET email_verified = true,
-              email_verified_at = NOW(),
-              verification_token = NULL,
-              verification_token_exp = NULL,
-              -- Email ownership confirmation is the gate into operational planning.
-              itinerary_status = CASE
-                WHEN COALESCE(itinerary_status, 'not_started') = 'not_started' THEN 'planning'
-                ELSE itinerary_status
-              END,
-              updated_at = NOW()
-        WHERE id = $1`,
-      [booking.id],
-    );
-
-    logger.info(`[Bookings] ✅ Email verified: ${booking.booking_number}`);
-
-    const full = (await getBookingDetail(booking.id)) || booking;
-
-    if (sendBookingReceivedEmail) {
-      asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail after verify");
-    }
-    if (String(full.booking_type || '').toLowerCase() === 'package' && full.package_id) {
-      asyncNoThrow(
-        notifyPackageBookingCreated(
-          full,
-          { id: full.package_id, title: full.package_name || full.package_title || 'Travel package' },
-          req,
-        ),
-        "notifyPackageBookingCreated after verify",
-      );
-    }
-
-
-    if (sendAdminBookingNotification) {
-      asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification after verify");
-    }
-
-    pingAdminNewRequest(full);
-
-    asyncNoThrow(
-      notifyUserBookingEvent({
-        user: { id: full.user_id || null, email: full.email || null },
-        booking: full,
-        title: "Booking request confirmed ✓",
-        message: `Your booking ${full.booking_number} has been confirmed from your real inbox. Altuvera can now begin planning your itinerary.`,
-        actionUrl: "/my-bookings",
-        actionLabel: "View my booking",
-        priority: "high",
-      }),
-      "notifyUserBookingEvent(verified)",
-    );
-
-    if (startBookingConversation) {
-      asyncNoThrow(
-        startBookingConversation(full, {
-          ipAddress: req.ip || req.headers["x-forwarded-for"],
-        }),
-        "startBookingConversation verify",
-      );
-    }
-
-    await logActivity(booking.id, "email_verified", "Customer verified email address");
-
-    if (String(req.query?.json || "") === "1") {
-      return res.json({
-        success: true,
-        data: { booking_number: booking.booking_number, booking_id: booking.id },
-        message: "Booking request confirmed successfully.",
-      });
-    }
-
-    return res.redirect(
-      `${frontendUrl}/booking/verify?status=success&ref=${booking.booking_number}`,
-    );
-  } catch (err) {
-    logger.error("[Bookings] verifyEmail:", err.message);
-    const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
-    return res.redirect(`${frontendUrl}/booking/verify?status=error`);
-  }
+  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  // Legacy endpoint retained only so old links fail safely. New bookings no
+  // longer use email verification and never generate verification emails.
+  return res.redirect(`${frontendUrl}/booking/verify?status=not_required`);
 };
 
 /* ═════════════════════════════════════════════════════════════════════
    RESEND VERIFICATION
 ═════════════════════════════════════════════════════════════════════ */
-exports.resendVerification = async (req, res, next) => {
-  try {
-    const id = safeId(req.params.id);
-
-    const { rows } = await query(
-      `SELECT * FROM bookings WHERE id = $1 AND email_verified = false`,
-      [id],
-    );
-
-    if (!rows[0]) {
-      return res.status(404).json({
-        success: false,
-        error: "Booking not found or already verified",
-      });
-    }
-
-    const newToken = crypto.randomBytes(48).toString("hex");
-    const newExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
-
-    await query(
-      `UPDATE bookings
-          SET verification_token = $1,
-              verification_token_exp = $2,
-              updated_at = NOW()
-        WHERE id = $3`,
-      [newToken, newExpiry, id],
-    );
-
-    const full = await getBookingDetail(id);
-
-    if (sendBookingVerificationLink && full) {
-      await sendBookingVerificationLink(full, newToken);
-    }
-
-    return res.json({
-      success: true,
-      message: "Verification link resent. Please check your email.",
-    });
-  } catch (err) {
-    logger.error("[Bookings] resendVerification:", err.message);
-    next(err);
-  }
+exports.resendVerification = async (req, res) => {
+  return res.status(410).json({
+    success: false,
+    error: "Booking email verification is no longer required.",
+  });
 };
 
 /* ═════════════════════════════════════════════════════════════════════
