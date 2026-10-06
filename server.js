@@ -1355,7 +1355,15 @@ io.on('connection', (socket) => {
   })
 
   socket.on('msg:leave-conversation', ({ conversationId } = {}) => {
-    if (conversationId) socket.leave(`conv:${conversationId}`)
+    if (conversationId) {
+      const cid = Number(conversationId)
+      if (socket.data.conversationId && Number(socket.data.conversationId) === cid) {
+        emitConversationPresence(io, cid, socket.data.isAdmin ? 'admin' : 'user', false, socket)
+        socket.data.conversationId = null
+        socket.data.activeConversation = null
+      }
+      socket.leave(`conv:${conversationId}`)
+    }
   })
 
   socket.on('msg:send', async (payload = {}, cb) => {
