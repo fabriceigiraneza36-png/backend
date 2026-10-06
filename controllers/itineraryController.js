@@ -148,8 +148,8 @@ exports.publish = async (req,res,next) => {
     if (!booking.email_verified) {
       return res.status(409).json({success:false,error:"Traveller has not confirmed this booking request from their email yet."});
     }
-    if (booking.status !== "confirmed") {
-      return res.status(409).json({success:false,error:"Confirm the traveller and booking before sending the itinerary."});
+    if (!["under_review","itinerary_preparing","revision_requested","itinerary_sent","awaiting_confirmation"].includes(booking.status)) {
+      return res.status(409).json({success:false,error:"This booking is not ready for itinerary preparation."});
     }
     if (booking.identity_portrait_status && booking.identity_portrait_status !== "verified") {
       return res.status(409).json({success:false,error:"Traveller identity portrait must be verified before the itinerary can be sent."});
@@ -165,6 +165,7 @@ exports.publish = async (req,res,next) => {
       `UPDATE bookings
           SET itinerary=$1::jsonb,
               itinerary_status='sent',
+              status='awaiting_confirmation',
               itinerary_version=$2,
               itinerary_published_at=NOW(),
               itinerary_approved_at=NULL,
@@ -216,6 +217,7 @@ exports.approve = async (req,res,next) => {
     const {rows}=await query(
       `UPDATE bookings
           SET itinerary_status='approved',
+              status='confirmed',
               itinerary_approved_at=NOW(),
               updated_at=NOW()
         WHERE id=$1 RETURNING *`,[id]);
@@ -253,7 +255,7 @@ exports.requestChange = async (req,res,next) => {
     const reason=String(req.body?.reason || "").trim();
     if(!reason) return res.status(400).json({success:false,error:"Please describe the change you need."});
     const {rows}=await query(
-      `UPDATE bookings SET itinerary_status='change_requested', itinerary_change_request=$1, updated_at=NOW()
+      `UPDATE bookings SET itinerary_status='change_requested', status='revision_requested', itinerary_change_request=$1, updated_at=NOW()
         WHERE id=$2 RETURNING *`,[reason,id]);
     const full=(await bookingDetail(id))||rows[0];
     await createNotificationInternal({
