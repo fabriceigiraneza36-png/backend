@@ -1527,11 +1527,11 @@ io.on('connection', (socket) => {
           // Only create a dashboard notification when the user's chat is not
           // currently open. The personal user room can contain multiple tabs,
           // so one open conversation tab is enough to suppress the notification.
-          const room = io.sockets.adapter.rooms.get(`conv:${conv.id}`)
-          const userSocketOpen = room && [...room].some(socketId => {
-            const s = io.sockets.sockets.get(socketId)
-            return s?.data?.userId && String(s.data.userId) === String(conv.user_id) && s?.data?.messagesPageOpen === true
-          })
+          const userSocketOpen = [...io.sockets.sockets.values()].some(s =>
+            s?.data?.userId &&
+            String(s.data.userId) === String(conv.user_id) &&
+            s?.data?.messagesPageOpen === true
+          )
           if (userSocketOpen) {
             // The live socket message is enough while the conversation is open.
           } else {
