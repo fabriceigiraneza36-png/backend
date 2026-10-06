@@ -1182,6 +1182,12 @@ io.on('connection', (socket) => {
     logger.info(`[Socket] Admin online (total: ${connectedAdmins.size})`)
   }
 
+  // The public Messages page reports when its inbox UI is open. This lets
+  // server-side message notifications avoid duplicating an in-app live message.
+  socket.on('msg:inbox-open', ({ open = true } = {}) => {
+    socket.data.messagesPageOpen = Boolean(open)
+  })
+
   // -- Notifications --------------------------------------------------------
   socket.on('notification:get-unread', async (_, cb) => {
     try {
@@ -1524,7 +1530,7 @@ io.on('connection', (socket) => {
           const room = io.sockets.adapter.rooms.get(`conv:${conv.id}`)
           const userSocketOpen = room && [...room].some(socketId => {
             const s = io.sockets.sockets.get(socketId)
-            return s?.data?.userId && String(s.data.userId) === String(conv.user_id)
+            return s?.data?.userId && String(s.data.userId) === String(conv.user_id) && s?.data?.messagesPageOpen === true
           })
           if (userSocketOpen) {
             // The live socket message is enough while the conversation is open.
