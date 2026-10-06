@@ -1452,6 +1452,18 @@ io.on('connection', (socket) => {
       socket.data.sessionId = conv.session_id
       emitConversationPresence(io, conv.id, 'admin', true, socket)
 
+      // If the user was already active before the admin opened the chat,
+      // immediately send the current presence state to this admin socket.
+      const currentUserPresence = conversationPresence.get(String(conv.id) + ':user')
+      if (currentUserPresence) {
+        socket.emit('msg:presence', {
+          conversationId: Number(conv.id),
+          senderType: 'user',
+          active: true,
+          activeSince: currentUserPresence.since,
+        })
+      }
+
       await Promise.all([
         query(
           `UPDATE messages SET is_read=true, read_at=NOW(), updated_at=NOW()
