@@ -9,6 +9,7 @@
 
 const { query }  = require('../config/db');
 const logger     = require('../utils/logger');
+const { createNotificationInternal } = require('./notificationsController');
 
 // ── Safe require: paginate helper ─────────────────────────────────────────────
 let paginate;
@@ -574,12 +575,51 @@ exports.sendNewsletter = async (req, res, next) => {
       if (subs.length > 10) await new Promise((r) => setTimeout(r, 120));
     }
 
+    // Mirror the newsletter into the user's in-app notification center for
+    // subscribers who are linked to a registered account. The notification is
+    // persisted first and emitted through the existing realtime notification
+    // channel, so users can see it immediately while also retaining a history.
+    let notified = 0;
+    let notificationFailed = 0;
+    try {
+      const { rows: linkedSubscribers } = await query(
+        `SELECT user_id, email, name
+           FROM subscribers
+          WHERE is_active = true
+            AND user_id IS NOT NULL`,
+      );
+      const results = await Promise.allSettled(
+        linkedSubscribers.map((sub) => createNotificationInternal({
+          userId: sub.user_id,
+          userEmail: sub.email,
+          type: 'newsletter',
+          category: 'newsletter',
+          title: cleanSubject,
+          message: textBody.slice(0, 500),
+          actionUrl: '/notifications',
+          actionLabel: 'Read newsletter',
+          priority: 'normal',
+          metadata: {
+            newsletter: true,
+            subject: cleanSubject,
+            source: 'subscriber_newsletter',
+          },
+          skipUserEmail: true,
+        })),
+      );
+      notified = results.filter((r) => r.status === 'fulfilled').length;
+      notificationFailed = results.filter((r) => r.status === 'rejected').length;
+      logger.info(`[Subscribers] Newsletter in-app notifications: ${notified} delivered, ${notificationFailed} failed`);
+    } catch (notificationErr) {
+      logger.warn('[Subscribers] Newsletter in-app notification batch failed:', notificationErr.message);
+    }
+
     logger.info(`[Subscribers] Newsletter sent: ${sent} ok, ${failed} failed`);
 
     return res.json({
       success: true,
       message: `Newsletter sent to ${sent} subscriber(s).`,
-      sent, failed, total: subs.length,
+      sent, failed, total: subs.length,\n      notified, notificationFailed,
       errors: failed ? errors : undefined,
     });
   } catch (err) {
