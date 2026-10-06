@@ -412,14 +412,10 @@ const ensureBookingsSchema = async () => {
 
         -- Status
         status               VARCHAR(50)  DEFAULT 'pending',
-        payment_status       VARCHAR(50)  DEFAULT 'pending',
 
         -- Pricing
         package_title        VARCHAR(500),
         package_price        DECIMAL(12,2),
-        total_price          DECIMAL(12,2),
-        currency             VARCHAR(10)  DEFAULT 'USD',
-        deposit_paid         DECIMAL(12,2) DEFAULT 0,
 
         -- Misc
         pickup_location      VARCHAR(500),
@@ -539,7 +535,7 @@ const ensurePackagesSchema = async () => {
         country           VARCHAR(100),
         price             DECIMAL(12,2) DEFAULT 0,
         price_label       VARCHAR(100)  DEFAULT 'per person',
-        currency          VARCHAR(10)   DEFAULT 'USD',
+
         pricing_tiers     JSONB         DEFAULT '[]'::JSONB,
         discount_percent  INTEGER       DEFAULT 0,
         is_price_visible  BOOLEAN       DEFAULT true,
@@ -642,10 +638,7 @@ const ensurePackagesSchema = async () => {
         special_requests TEXT,
         dietary_needs    TEXT,
         pickup_location  VARCHAR(500),
-        total_price      DECIMAL(12,2),
-        currency         VARCHAR(10)   DEFAULT 'USD',
-        deposit_paid     DECIMAL(12,2) DEFAULT 0,
-        payment_status   VARCHAR(50)   DEFAULT 'pending',
+
         status           VARCHAR(50)   DEFAULT 'pending'
                          CHECK (status IN (
                            'pending','needs_info','confirmed',
