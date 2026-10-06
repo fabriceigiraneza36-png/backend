@@ -133,6 +133,21 @@ const NODE_ENV = process.env.NODE_ENV || 'development'
 const IS_PROD  = NODE_ENV === 'production'
 
 const connectedAdmins = new Map()
+const conversationPresence = new Map()
+
+const emitConversationPresence = (io, conversationId, senderType, active, socket = null) => {
+  if (!conversationId) return
+  const key = String(conversationId) + ':' + senderType
+  if (active) {
+    const since = new Date().toISOString()
+    conversationPresence.set(key, { since, socketId: socket?.id || null })
+    io.to('conv:' + conversationId).emit('msg:presence', { conversationId: Number(conversationId), senderType, active: true, activeSince: since })
+  } else {
+    const current = conversationPresence.get(key)
+    if (!current || !socket || current.socketId === socket.id) conversationPresence.delete(key)
+    io.to('conv:' + conversationId).emit('msg:presence', { conversationId: Number(conversationId), senderType, active: false, activeSince: null, lastSeenAt: new Date().toISOString() })
+  }
+}
 
 // -------------------------------------------------------------------------------
 // ALLOWED ORIGINS
@@ -1329,6 +1344,9 @@ io.on('connection', (socket) => {
       socket.data.sessionId = conv.session_id
       socket.join(`conv:${conv.id}`)
       if (conv.session_id) socket.join(`session:${conv.session_id}`)
+      socket.data.conversationId = conv.id
+      socket.data.sessionId = conv.session_id
+      emitConversationPresence(io, conv.id, 'user', true, socket)
       if (typeof cb === 'function') cb({ success: true, conversationId: conv.id })
     } catch (err) {
       logger.warn('[Socket] msg:client-join failed:', err.message)
@@ -1422,6 +1440,9 @@ io.on('connection', (socket) => {
       socket.join(`conv:${conv.id}`)
       if (conv.session_id) socket.join(`session:${conv.session_id}`)
       socket.data.activeConversation = conv.id
+      socket.data.conversationId = conv.id
+      socket.data.sessionId = conv.session_id
+      emitConversationPresence(io, conv.id, 'admin', true, socket)
 
       await Promise.all([
         query(
@@ -1574,9 +1595,15 @@ io.on('connection', (socket) => {
         ])
       }
 
+      const { rows: readRows } = await query(
+        'SELECT id, read_at FROM messages WHERE conversation_id=$1 AND is_read=true ORDER BY read_at DESC NULLS LAST LIMIT 80',
+        [convId],
+      )
       io.to(`conv:${convId}`).emit('msg:read', {
         conversationId: parseInt(convId, 10),
         readBy: socket.data.isAdmin ? 'admin' : 'user',
+        readAt: new Date().toISOString(),
+        messageIds: readRows.map(r => r.id),
       })
       if (typeof cb === 'function') cb({ success: true })
     } catch (err) {
@@ -1852,6 +1879,7 @@ io.on('connection', (socket) => {
       if (connectedAdmins.size === 0) io.emit('msg:admin-online', { online: false })
     }
 
+    if (socket.data.conversationId) emitConversationPresence(io, socket.data.conversationId, socket.data.isAdmin ? 'admin' : 'user', false, socket)
     query(`DELETE FROM typing_indicators WHERE socket_id=$1`, [socket.id]).catch(() => {})
   })
 })
