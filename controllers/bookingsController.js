@@ -128,21 +128,35 @@ try {
    CONSTANTS
 ═════════════════════════════════════════════════════════════════════ */
 const BOOKING_STATUS = {
-  PENDING: "pending",
+  NEW: "new",
+  UNDER_REVIEW: "under_review",
+  NEEDS_INFORMATION: "needs_information",
+  ITINERARY_PREPARING: "itinerary_preparing",
+  ITINERARY_SENT: "itinerary_sent",
+  REVISION_REQUESTED: "revision_requested",
+  AWAITING_CONFIRMATION: "awaiting_confirmation",
   CONFIRMED: "confirmed",
-  CANCELLED: "cancelled",
+  IN_PROGRESS: "in_progress",
   COMPLETED: "completed",
-  ON_HOLD: "on-hold",
-  REFUNDED: "refunded",
+  CANCELLED: "cancelled",
+  DECLINED: "declined",
+  EXPIRED: "expired",
 };
 
 const STATUS_TRANSITIONS = {
-  pending: ["confirmed", "cancelled", "on-hold"],
-  confirmed: ["completed", "cancelled", "on-hold"],
-  "on-hold": ["confirmed", "cancelled", "pending"],
-  completed: ["refunded"],
-  cancelled: ["pending"],
-  refunded: [],
+  new: ["under_review", "declined", "cancelled"],
+  under_review: ["needs_information", "itinerary_preparing", "declined", "cancelled"],
+  needs_information: ["under_review", "itinerary_preparing", "cancelled", "expired"],
+  itinerary_preparing: ["itinerary_sent", "needs_information", "cancelled"],
+  itinerary_sent: ["revision_requested", "awaiting_confirmation", "cancelled"],
+  revision_requested: ["itinerary_preparing", "cancelled"],
+  awaiting_confirmation: ["revision_requested", "confirmed", "expired", "cancelled"],
+  confirmed: ["in_progress", "cancelled"],
+  in_progress: ["completed", "cancelled"],
+  completed: [],
+  cancelled: [],
+  declined: [],
+  expired: [],
 };
 
 const CANCEL_REQUEST_STATUS = {
@@ -1089,8 +1103,7 @@ exports.getAll = async (req, res, next) => {
     };
 
     if (status) push("b.status=?", status);
-    if (payment_status) push("b.payment_status=?", payment_status);
-    if (booking_type) push("b.booking_type=?", booking_type);
+        if (booking_type) push("b.booking_type=?", booking_type);
     if (destination_id) push("b.destination_id=?", safeId(destination_id));
     if (service_id) push("b.service_id=?", safeId(service_id));
     if (date_from) push("b.created_at>=?", date_from);
