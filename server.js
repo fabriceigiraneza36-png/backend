@@ -889,7 +889,7 @@ const getOrCreateConversation = async ({
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
         WHERE c.user_id    = $1
-          AND c.status    IN ('open','pending')
+          AND c.status    IN ('open','pending','closed','resolved')
           AND c.deleted_at IS NULL
         ORDER BY c.last_message_at DESC NULLS LAST, c.created_at DESC
         LIMIT 1`,
@@ -1518,6 +1518,17 @@ io.on('connection', (socket) => {
       try {
         const { createNotificationInternal } = require('./controllers/notificationsController')
         if (conv.user_id) {
+          // Only create a dashboard notification when the user's chat is not
+          // currently open. The personal user room can contain multiple tabs,
+          // so one open conversation tab is enough to suppress the notification.
+          const room = io.sockets.adapter.rooms.get(`conv:${conv.id}`)
+          const userSocketOpen = room && [...room].some(socketId => {
+            const s = io.sockets.sockets.get(socketId)
+            return s?.data?.userId && String(s.data.userId) === String(conv.user_id)
+          })
+          if (userSocketOpen) {
+            // The live socket message is enough while the conversation is open.
+          } else {
           await createNotificationInternal({
             userId: conv.user_id,
             userEmail: conv.guest_email || null,
@@ -1534,6 +1545,7 @@ io.on('connection', (socket) => {
             targetScope: 'individual',
             metadata: { conversationId: conv.id, messageId: msg.id },
           })
+          }
         }
       } catch (notificationError) {
         logger.warn('[Socket] admin message notification failed:', notificationError.message)
