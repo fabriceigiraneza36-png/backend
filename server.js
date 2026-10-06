@@ -204,7 +204,7 @@ const ensurePackagesSchema = async () => {
       country            VARCHAR(100),
       price              NUMERIC(12,2) DEFAULT 0,
       price_label        VARCHAR(100)  DEFAULT 'per person',
-      currency           VARCHAR(10)   DEFAULT 'USD',
+
       pricing_tiers      JSONB         DEFAULT '[]'::JSONB,
       discount_percent   INTEGER       DEFAULT 0,
       is_price_visible   BOOLEAN       DEFAULT true,
@@ -269,10 +269,7 @@ const ensurePackagesSchema = async () => {
       special_requests TEXT,
       dietary_needs    TEXT,
       pickup_location  VARCHAR(255),
-      total_price      NUMERIC(12,2),
-      currency         VARCHAR(10)   DEFAULT 'USD',
-      deposit_paid     NUMERIC(12,2) DEFAULT 0,
-      payment_status   VARCHAR(30)   DEFAULT 'unpaid',
+
       status           VARCHAR(30)   DEFAULT 'pending',
       priority         VARCHAR(20)   DEFAULT 'normal',
       admin_notes      TEXT,
