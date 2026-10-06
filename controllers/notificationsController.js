@@ -587,6 +587,22 @@ const notifyUserRegistered = async (user) => {
   return userNotif;
 };
 
+/* Admin message — notify the user and deep-link directly to the conversation */
+const notifyAdminMessage = async (conversationId, user, admin, messageBody) => {
+  return createNotificationInternal({
+    userId: user?.id,
+    userEmail: user?.email,
+    type: "admin_message",
+    category: "messages",
+    title: `New message from ${admin?.full_name || admin?.name || "Altuvera Team"} 💬`,
+    message: String(messageBody || "You have a new message from the Altuvera team.").slice(0, 500),
+    actionUrl: conversationId ? `/messages?conversationId=${encodeURIComponent(conversationId)}` : "/messages",
+    actionLabel: "Open message",
+    actor: admin,
+    metadata: { conversationId: conversationId || null },
+  });
+};
+
 /* Contact message — notify the user + admins (always single, high priority) */
 const notifyContactMessage = async (contact, user) => {
   const contactId = contact?.id || contact?.message_id || null;
@@ -660,6 +676,7 @@ module.exports = {
   notifyReviewPosted,
   notifyUserRegistered,
   notifyContactMessage,
+  notifyAdminMessage,
   notifyAdminsImmediately,
   flushAdminBatch,
   ADMIN_BATCH_THRESHOLD,
