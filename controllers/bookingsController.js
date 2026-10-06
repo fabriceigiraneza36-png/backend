@@ -698,9 +698,9 @@ const SCHEMA_COLUMNS = [
   "admin_notes TEXT",
   "internal_notes TEXT",
 
-  "payment_status VARCHAR(50) DEFAULT 'pending'",
+  "payment_status VARCHAR(50) DEFAULT 'new'",
   "source VARCHAR(100) DEFAULT 'website'",
-  "status VARCHAR(50) DEFAULT 'pending'",
+  "status VARCHAR(50) DEFAULT 'new'",
   "is_active BOOLEAN DEFAULT true",
   "email_verified_at TIMESTAMPTZ",
   "itinerary_status VARCHAR(40) DEFAULT 'not_started'",
@@ -734,7 +734,7 @@ const ensureSchemaColumns = async () => {
         full_name VARCHAR(255) NOT NULL,
         email VARCHAR(255) NOT NULL,
         phone VARCHAR(50),
-        status VARCHAR(50) DEFAULT 'pending',
+        status VARCHAR(50) DEFAULT 'new',
         created_at TIMESTAMP DEFAULT NOW(),
         updated_at TIMESTAMP DEFAULT NOW()
       )
@@ -818,7 +818,7 @@ exports.create = async (req, res, next) => {
           children_ages, travelers_details, emergency_contact,
           group_type, marketing_source, newsletter_opt_in,
           preferred_contact_method, preferred_contact_time, pickup_location,
-          source, status, payment_status,
+          source, status,
           email_verified, email_verified_at, verification_token, verification_token_exp,
           created_at, updated_at
         ) VALUES (
@@ -1078,7 +1078,6 @@ exports.getAll = async (req, res, next) => {
       page = 1,
       limit = 20,
       status,
-      payment_status,
       booking_type,
       destination_id,
       service_id,
@@ -1489,7 +1488,7 @@ exports.getStats = async (req, res, next) => {
             COUNT(*) FILTER (WHERE status='on-hold')::INTEGER AS on_hold,
             COUNT(*) FILTER (WHERE email_verified=true)::INTEGER AS email_verified,
             COUNT(*) FILTER (WHERE email_verified=false)::INTEGER AS awaiting_verification,
-            COUNT(*) FILTER (WHERE payment_status='paid')::INTEGER AS paid,
+            COUNT(*) FILTER (WHERE )::INTEGER AS paid,
             COALESCE(SUM(number_of_travelers),0)::INTEGER AS total_travelers,
             COUNT(*) FILTER (WHERE created_at>=NOW()-INTERVAL '24 hours')::INTEGER AS last_24h,
             COUNT(*) FILTER (WHERE created_at>=NOW()-INTERVAL '7 days')::INTEGER AS last_7_days,
