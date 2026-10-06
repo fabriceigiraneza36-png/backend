@@ -16,6 +16,7 @@
 const router = require("express").Router();
 const { query }  = require("../config/db");
 const logger     = require("../utils/logger");
+const { notifyAdminMessage } = require("../controllers/notificationsController");
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE MIDDLEWARE IMPORTS
@@ -956,7 +957,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
 router.patch("/conversations/:id/read", protect, async (req, res) => {
   try {
     const convCheck = await query(
-      `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT c.id, c.user_id, u.email AS user_email, u.full_name AS user_full_name FROM conversations c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = $1 AND c.deleted_at IS NULL`,
       [req.params.id],
     );
     if (!convCheck.rows[0]) {
@@ -1182,6 +1183,14 @@ function setupMessageSockets(io) {
             conversationId,
             message: shaped,
           });
+
+          // Persist a notification so the user sees it from any page.
+          notifyAdminMessage(
+            conversationId,
+            { id: userId, email: convCheck.rows[0].user_email, full_name: convCheck.rows[0].user_full_name },
+            adminUser,
+            body.trim(),
+          ).catch((err) => logger.warn("[Messages] admin notification failed:", err.message));
         }
 
         // Acknowledge to sender
