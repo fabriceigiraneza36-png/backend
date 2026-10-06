@@ -35,7 +35,7 @@ async function getOrCreateConversation({
       `SELECT * FROM conversations
         WHERE user_id = $1
           AND deleted_at IS NULL
-          AND status IN ('open','pending')
+          AND status IN ('open','pending','closed','resolved')
         ORDER BY last_message_at DESC NULLS LAST, created_at DESC
         LIMIT 1`,
       [userId]
@@ -46,7 +46,7 @@ async function getOrCreateConversation({
       `SELECT * FROM conversations
         WHERE session_id = $1
           AND deleted_at IS NULL
-          AND status IN ('open','pending')
+          AND status IN ('open','pending','closed','resolved')
         ORDER BY last_message_at DESC NULLS LAST, created_at DESC
         LIMIT 1`,
       [sessionId]
