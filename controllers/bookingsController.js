@@ -896,6 +896,7 @@ exports.create = async (req, res, next) => {
     if (sendAdminBookingNotification) {
       asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
     }
+    pingAdminNewRequest(full);
     asyncNoThrow(
       notifyUserBookingEvent({
         user: { id: req.user?.id || body.user_id || null, email: req.user?.email || body.email },
