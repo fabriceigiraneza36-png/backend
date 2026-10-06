@@ -37,7 +37,6 @@ try {
    EMAIL SERVICE
 ═════════════════════════════════════════════════════════════════════ */
 let sendBookingReceivedEmail = null;
-let sendBookingVerificationLink = null;
 let sendAdminBookingNotification = null;
 let sendBookingConfirmation = null;
 let sendBookingStatusUpdate = null;
@@ -49,7 +48,6 @@ try {
   const bookingEmails = require("../utils/bookingEmails");
 
   sendBookingReceivedEmail = bookingEmails.sendBookingReceivedEmail || null;
-  sendBookingVerificationLink = bookingEmails.sendBookingVerificationLink || null;
   sendAdminBookingNotification = bookingEmails.sendAdminBookingNotification || null;
   sendBookingConfirmation = bookingEmails.sendBookingConfirmation || null;
   sendBookingStatusUpdate = bookingEmails.sendBookingStatusUpdate || null;
@@ -74,8 +72,6 @@ try {
 
       sendBookingReceivedEmail =
         sendBookingReceivedEmail || mod.sendBookingReceivedEmail || null;
-      sendBookingVerificationLink =
-        sendBookingVerificationLink || mod.sendBookingVerificationLink || null;
       sendAdminBookingNotification =
         sendAdminBookingNotification || mod.sendAdminBookingNotification || null;
       sendBookingConfirmation =
@@ -788,12 +784,11 @@ exports.create = async (req, res, next) => {
     }
 
     const bookingNumber = generateBookingNumber();
-    // The traveller must confirm this booking request from their real inbox.
-    // This is an ownership check for the booking request, not a generic account
-    // email-verification flow.
-    const verificationToken = crypto.randomBytes(48).toString("hex");
-    const tokenExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 3600000);
-    const emailVerified = false;
+    // The booking form already establishes the traveller's active request.
+    // Do not send a second redundant "confirm your booking" email.
+    const verificationToken = null;
+    const tokenExpiry = null;
+    const emailVerified = true;
 
     const { rows } = await query(
       `INSERT INTO bookings (
@@ -893,24 +888,25 @@ exports.create = async (req, res, next) => {
     const booking = rows[0];
     const full = (await getBookingDetail(booking.id)) || booking;
 
-    // Do not notify the admin or start operational work until the traveller
-    // confirms the request from their real inbox. Logged-in users also receive
-    // the secure confirmation action in their dashboard.
-    const verificationUrl = `/booking/verify?token=${encodeURIComponent(verificationToken)}`;
-    if (sendBookingVerificationLink) {
-      asyncNoThrow(sendBookingVerificationLink(full, verificationToken), "sendBookingVerificationLink");
+    // One clear booking email goes to the traveller, while a separate
+    // personalized operational email goes to the admin.
+    if (sendBookingReceivedEmail) {
+      asyncNoThrow(sendBookingReceivedEmail(full), "sendBookingReceivedEmail");
+    }
+    if (sendAdminBookingNotification) {
+      asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
     }
     asyncNoThrow(
       notifyUserBookingEvent({
         user: { id: req.user?.id || body.user_id || null, email: req.user?.email || body.email },
         booking: full,
-        title: "Confirm your booking request ✉️",
-        message: `Please confirm that you requested booking ${bookingNumber} from your real email inbox. Your request enters Altuvera's planning queue after confirmation.`,
-        actionUrl: verificationUrl,
-        actionLabel: "Confirm my booking",
-        priority: "high",
+        title: "Booking request received",
+        message: `We received your booking request for ${tripName(full)}. Our travel team will review it and contact you within 24 hours.`,
+        actionUrl: "/my-bookings",
+        actionLabel: "View my booking",
+        priority: "normal",
       }),
-      "notifyUserBookingEvent(verification)",
+      "notifyUserBookingEvent(received)",
     );
 
     await logActivity(
@@ -920,7 +916,7 @@ exports.create = async (req, res, next) => {
       req.admin?.id || req.user?.id || null,
     );
 
-    logger.info(`[Bookings] ✅ Created: ${bookingNumber} | emailVerified=${emailVerified}`);
+    logger.info(`[Bookings] ✅ Created: ${bookingNumber} | emailVerified=${emailVerified} | admin notified`);
 
     return res.status(201).json({
       success: true,
