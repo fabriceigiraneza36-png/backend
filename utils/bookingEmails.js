@@ -688,85 +688,6 @@ const safeSend = async (to, subject, html, label = "") => {
 /* ─────────────────────────────────────────────────────────────────────────
    1. VERIFICATION LINK
 ───────────────────────────────────────────────────────────────────────── */
-const sendBookingVerificationLink = async (booking, token) => {
-  try {
-    if (!booking?.email) {
-      logger.warn("[BookingEmails] sendBookingVerificationLink: booking.email missing");
-      return { success: false, error: "No email" };
-    }
-    if (!token) {
-      logger.warn("[BookingEmails] sendBookingVerificationLink: token missing");
-      return { success: false, error: "No token" };
-    }
-
-    const verifyUrl   = buildVerificationLink(token);
-    const displayName = safe(booking.full_name, "traveller");
-    const destination = tripName(booking);
-    const bookingRef  = safe(booking.booking_number);
-
-    logger.info(`[BookingEmails] Verification link → ${verifyUrl}`);
-
-    const html = shell({
-      preheader: `Confirm that you personally requested your ${destination} booking.`,
-      heroBadge: `<span style="display:inline-block;padding:7px 18px;
-        background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
-        border-radius:100px;color:#ffffff;font-family:'Inter',sans-serif;
-        font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
-        ✉️ Verify Your Email
-      </span>`,
-      heroTitle: "Confirm your booking",
-      heroSubtitle: "One quick click confirms that you personally requested this booking from your real inbox.",
-      body: `
-        ${greet(displayName)}
-        ${para(`Thanks for requesting <strong style="color:${T.g700};">${esc(destination)}</strong>
-          with us. Please confirm that you personally made this booking request from your real email inbox. Altuvera will begin operational planning only after you confirm.`)}
-
-        ${infoTable("Booking Reference", [
-          row("Reference", bookingRef, true),
-          row("Destination", destination !== "Your Trip" ? destination : null),
-        ])}
-
-        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:28px 0;">
-          <tr><td align="center">
-            <a href="${esc(verifyUrl)}"
-              style="display:inline-block;padding:16px 44px;
-                background:linear-gradient(135deg,#10b981,#047857);
-                color:#ffffff !important;text-decoration:none;border-radius:100px;
-                font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
-                box-shadow:0 8px 24px rgba(5,150,105,.35);">
-              ✅ Confirm My Booking
-            </a>
-          </td></tr>
-        </table>
-
-        <p style="margin:20px 0 8px;font-family:'Inter',sans-serif;font-size:12px;
-          color:${T.n500};line-height:1.6;">
-          If the button doesn't work, copy and paste this link into your browser:
-        </p>
-        <div style="padding:12px 14px;background:${T.n50};border:1px solid ${T.n200};
-          border-radius:10px;font-family:monospace;font-size:12px;color:${T.n700};
-          word-break:break-all;line-height:1.5;margin-bottom:20px;">
-          ${esc(verifyUrl)}
-        </div>
-
-        ${notice("warning", "Link expires in 24 hours",
-          "For security, this verification link is valid for 24 hours. " +
-          "If it expires, you can request a new one from the confirmation page.")}
-      `,
-    });
-
-    return safeSend(
-      booking.email,
-      `Confirm Your Booking — ${destination} | ${ENV.appName}`,
-      html,
-      "sendBookingVerificationLink",
-    );
-  } catch (err) {
-    logger.error(`[BookingEmails] sendBookingVerificationLink failed: ${err.message}`);
-    return { success: false, error: err.message };
-  }
-};
-
 /* ─────────────────────────────────────────────────────────────────────────
    2. BOOKING RECEIVED
 ───────────────────────────────────────────────────────────────────────── */
@@ -825,15 +746,15 @@ const sendAdminBookingNotification = async (booking) => {
   const travelers = Number(booking.number_of_travelers) || 1;
 
   const html = shell({
-    preheader: `New booking: ${name} → ${dest} (${safe(booking.booking_number)})`,
+    preheader: `${name} has confirmed their booking for ${dest} (${safe(booking.booking_number)})`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(245,158,11,.25);border:1.5px solid rgba(251,191,36,.6);
       border-radius:100px;color:#fef3c7;font-family:'Inter',sans-serif;
       font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
       🔔 Action Required
     </span>`,
-    heroTitle: "New Verified Booking",
-    heroSubtitle: `${name} has submitted a booking for ${dest}. Ready for your review.`,
+    heroTitle: "Booking Confirmed by Traveller",
+    heroSubtitle: `${name} has confirmed their booking for ${dest}. The request is ready for your review and planning.`,
     body: `
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
         <tr>
@@ -1324,7 +1245,6 @@ const sendAdminItineraryNotification = async (booking, itinerary = {}) => {
    EXPORTS
 ════════════════════════════════════════════════════════════════════════════ */
 module.exports = {
-  sendBookingVerificationLink,
   sendBookingReceivedEmail,
   sendAdminBookingNotification,
   sendBookingConfirmation,
