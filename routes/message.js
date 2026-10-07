@@ -514,6 +514,32 @@ const isAdminUser = (req) =>
   ADMIN_ROLES.has(req.user?.role || "") ||
   req.user?.type === "admin";
 
+async function canAccessConversation(req, conversationId) {
+  const result = await query(
+    `SELECT id, user_id, group_id FROM conversations
+      WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+    [conversationId],
+  );
+  const conv = result.rows[0];
+  if (!conv) return { allowed: false, conv: null };
+
+  if (isAdminUser(req)) return { allowed: true, conv };
+
+  if (conv.user_id && String(conv.user_id) === String(req.user.id)) {
+    return { allowed: true, conv };
+  }
+
+  if (conv.group_id) {
+    const member = await query(
+      `SELECT 1 FROM message_group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+      [conv.group_id, req.user.id],
+    );
+    if (member.rows[0]) return { allowed: true, conv };
+  }
+
+  return { allowed: false, conv };
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    ROUTES
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -649,6 +675,204 @@ router.get("/users-list", adminProtect, async (req, res) => {
   } catch (err) {
     logger.error(`[Messages] GET /users-list: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to fetch users list" });
+  }
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GROUP CHAT ADMINISTRATION
+═══════════════════════════════════════════════════════════════════════════ */
+
+router.get("/groups", adminProtect, async (_req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT g.*,
+              COUNT(DISTINCT gm.user_id)::INT AS member_count,
+              c.id AS conversation_id,
+              c.last_message,
+              c.last_message_at
+         FROM message_groups g
+         LEFT JOIN message_group_members gm ON gm.group_id = g.id
+         LEFT JOIN conversations c ON c.group_id = g.id AND c.deleted_at IS NULL
+        WHERE g.is_active = true
+        GROUP BY g.id, c.id
+        ORDER BY COALESCE(c.last_message_at, g.created_at) DESC`,
+    );
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    logger.error(`[Messages] GET /groups: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to fetch message groups" });
+  }
+});
+
+router.post("/groups", adminProtect, async (req, res) => {
+  try {
+    const name = String(req.body.name || "").trim();
+    const description = String(req.body.description || "").trim() || null;
+    const userIds = [...new Set((Array.isArray(req.body.userIds) ? req.body.userIds : [])
+      .map(v => parseInt(v, 10)).filter(Number.isInteger))];
+    const firstMessage = String(req.body.firstMessage || "").trim();
+
+    if (!name) return res.status(400).json({ success: false, message: "Group name is required" });
+    if (!userIds.length) return res.status(400).json({ success: false, message: "Select at least one traveler" });
+
+    const validUsers = await query(
+      `SELECT id FROM users WHERE id = ANY($1::int[]) AND is_active = true`,
+      [userIds],
+    );
+    const validIds = validUsers.rows.map(r => r.id);
+    if (!validIds.length) return res.status(400).json({ success: false, message: "No active travelers selected" });
+
+    const groupRes = await query(
+      `INSERT INTO message_groups (name, description, created_by, is_active)
+       VALUES ($1,$2,$3,true) RETURNING *`,
+      [name, description, req.user.id],
+    );
+    const group = groupRes.rows[0];
+
+    await query(
+      `INSERT INTO message_group_members (group_id, user_id)
+       SELECT $1, UNNEST($2::int[])
+       ON CONFLICT (group_id, user_id) DO NOTHING`,
+      [group.id, validIds],
+    );
+
+    const convRes = await query(
+      `INSERT INTO conversations
+        (session_id, user_id, guest_name, subject, channel, source, priority,
+         group_id, conversation_type, status, unread_user, unread_admin, metadata, created_at, updated_at)
+       VALUES (NULL,NULL,$1,$1,'group_chat','admin','normal',$2,'group','open',0,0,$3,NOW(),NOW())
+       RETURNING *`,
+      [name, group.id, JSON.stringify({ groupId: group.id, groupName: name })],
+    );
+    const conv = convRes.rows[0];
+
+    let message = null;
+    if (firstMessage) {
+      message = await insertMessage({
+        conversationId: conv.id,
+        senderType: "admin",
+        senderId: req.user.id,
+        senderName: req.user.full_name || req.user.username || "Admin",
+        senderEmail: req.user.email,
+        senderAvatar: req.user.avatar_url || null,
+        body: firstMessage,
+        metadata: { source: "admin-group" },
+      });
+      const shaped = reshapeMessage(message);
+      const io = req.app.get("io");
+      if (io) {
+        io.to(`conversation-${conv.id}`).emit("msg:message", shaped);
+        io.to(`group-${group.id}`).emit("msg:group-message", {
+          conversationId: conv.id, groupId: group.id, groupName: name, message: shaped,
+        });
+        for (const uid of validIds) {
+          io.to(`user-${uid}`).emit("msg:group-message", {
+            conversationId: conv.id, groupId: group.id, groupName: name, message: shaped,
+          });
+        }
+      }
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: { ...group, conversationId: conv.id, memberCount: validIds.length, message: message ? reshapeMessage(message) : null },
+    });
+  } catch (err) {
+    logger.error(`[Messages] POST /groups: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to create message group" });
+  }
+});
+
+router.put("/groups/:id/members", adminProtect, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.id, 10);
+    const userIds = [...new Set((Array.isArray(req.body.userIds) ? req.body.userIds : [])
+      .map(v => parseInt(v, 10)).filter(Number.isInteger))];
+    if (!groupId) return res.status(400).json({ success: false, message: "Invalid group id" });
+
+    await query(`DELETE FROM message_group_members WHERE group_id = $1`, [groupId]);
+    if (userIds.length) {
+      await query(
+        `INSERT INTO message_group_members (group_id, user_id)
+         SELECT $1, UNNEST($2::int[])
+         ON CONFLICT (group_id, user_id) DO NOTHING`,
+        [groupId, userIds],
+      );
+    }
+    const io = req.app.get("io");
+    if (io) {
+      for (const uid of userIds) io.to(`user-${uid}`).emit("msg:groups-updated", { groupId });
+    }
+    return res.json({ success: true, memberCount: userIds.length });
+  } catch (err) {
+    logger.error(`[Messages] PUT /groups/:id/members: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to update group members" });
+  }
+});
+
+router.patch("/groups/:id", adminProtect, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.id, 10);
+    const name = req.body.name !== undefined ? String(req.body.name).trim() : null;
+    const description = req.body.description !== undefined ? String(req.body.description).trim() : null;
+    const active = req.body.isActive !== undefined ? Boolean(req.body.isActive) : null;
+    const { rows } = await query(
+      `UPDATE message_groups
+          SET name = COALESCE($1,name),
+              description = COALESCE($2,description),
+              is_active = COALESCE($3,is_active),
+              updated_at = NOW()
+        WHERE id=$4 RETURNING *`,
+      [name || null, description, active, groupId],
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, message: "Group not found" });
+    return res.json({ success: true, data: rows[0] });
+  } catch (err) {
+    logger.error(`[Messages] PATCH /groups/:id: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to update message group" });
+  }
+});
+
+router.post("/groups/:id/messages", adminProtect, async (req, res) => {
+  try {
+    const groupId = parseInt(req.params.id, 10);
+    const body = String(req.body.body || "").trim();
+    if (!groupId || !body) return res.status(400).json({ success: false, message: "Group and message are required" });
+
+    const groupRes = await query(
+      `SELECT g.*, c.id AS conversation_id
+         FROM message_groups g
+         LEFT JOIN conversations c ON c.group_id = g.id AND c.deleted_at IS NULL
+        WHERE g.id = $1 AND g.is_active = true
+        LIMIT 1`,
+      [groupId],
+    );
+    const group = groupRes.rows[0];
+    if (!group?.conversation_id) return res.status(404).json({ success: false, message: "Group not found" });
+
+    const msg = await insertMessage({
+      conversationId: group.conversation_id,
+      senderType: "admin",
+      senderId: req.user.id,
+      senderName: req.user.full_name || req.user.username || "Admin",
+      senderEmail: req.user.email,
+      senderAvatar: req.user.avatar_url || null,
+      body,
+      replyToId: req.body.replyToId ? parseInt(req.body.replyToId, 10) : null,
+      metadata: { source: "admin-group" },
+    });
+    const shaped = reshapeMessage(msg);
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`conversation-${group.conversation_id}`).emit("msg:message", shaped);
+      io.to(`group-${groupId}`).emit("msg:group-message", {
+        conversationId: group.conversation_id, groupId, groupName: group.name, message: shaped,
+      });
+    }
+    return res.json({ success: true, data: shaped });
+  } catch (err) {
+    logger.error(`[Messages] POST /groups/:id/messages: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to send group message" });
   }
 });
 
@@ -918,7 +1142,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     }
 
     const convCheck = await query(
-      `SELECT id, user_id FROM conversations
+      `SELECT id, user_id, group_id FROM conversations
         WHERE id = $1 AND deleted_at IS NULL`,
       [id],
     );
@@ -983,7 +1207,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
 router.patch("/conversations/:id/read", protect, async (req, res) => {
   try {
     const convCheck = await query(
-      `SELECT c.id, c.user_id, u.email AS user_email, u.full_name AS user_full_name FROM conversations c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = $1 AND c.deleted_at IS NULL`,
+      `SELECT c.id, c.user_id, c.group_id, u.email AS user_email, u.full_name AS user_full_name FROM conversations c LEFT JOIN users u ON u.id = c.user_id WHERE c.id = $1 AND c.deleted_at IS NULL`,
       [req.params.id],
     );
     if (!convCheck.rows[0]) {
@@ -1104,6 +1328,129 @@ router.patch(
     }
   },
 );
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   MESSAGE LIFECYCLE
+═══════════════════════════════════════════════════════════════════════════ */
+
+router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
+  try {
+    const { cid, mid } = req.params;
+    const body = String(req.body.body || "").trim();
+    if (!body) return res.status(400).json({ success: false, message: "Message body is required" });
+
+    const access = await canAccessConversation(req, cid);
+    if (!access.allowed) return res.status(403).json({ success: false, message: "Access denied" });
+
+    const msgRes = await query(
+      `SELECT * FROM messages WHERE id=$1 AND conversation_id=$2 AND deleted=false`,
+      [mid, cid],
+    );
+    const msg = msgRes.rows[0];
+    if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
+
+    const admin = isAdminUser(req);
+    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "You can only edit your own messages" });
+    }
+    if (!admin && Date.now() - new Date(msg.created_at).getTime() > 15 * 60 * 1000) {
+      return res.status(403).json({ success: false, message: "Messages can only be edited within 15 minutes" });
+    }
+
+    const { rows } = await query(
+      `UPDATE messages
+          SET body=$1, edited=true, edited_at=NOW(), updated_at=NOW()
+        WHERE id=$2 AND conversation_id=$3
+        RETURNING *`,
+      [body, mid, cid],
+    );
+    const shaped = reshapeMessage(rows[0]);
+    const io = req.app.get("io");
+    if (io) io.to(`conversation-${cid}`).emit("msg:message-edited", shaped);
+    return res.json({ success: true, data: shaped });
+  } catch (err) {
+    logger.error(`[Messages] PATCH message: ${err.message}`);
+    return res.status(err.status || 500).json({ success: false, message: err.message || "Failed to edit message" });
+  }
+});
+
+router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => {
+  try {
+    const { cid, mid } = req.params;
+    const access = await canAccessConversation(req, cid);
+    if (!access.allowed) return res.status(403).json({ success: false, message: "Access denied" });
+
+    const msgRes = await query(
+      `SELECT * FROM messages WHERE id=$1 AND conversation_id=$2 AND deleted=false`,
+      [mid, cid],
+    );
+    const msg = msgRes.rows[0];
+    if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
+
+    const admin = isAdminUser(req);
+    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+      return res.status(403).json({ success: false, message: "You can only unsend your own messages" });
+    }
+    if (!admin && Date.now() - new Date(msg.created_at).getTime() > 24 * 60 * 60 * 1000) {
+      return res.status(403).json({ success: false, message: "Messages can only be unsent within 24 hours" });
+    }
+
+    const { rows } = await query(
+      `UPDATE messages
+          SET deleted=true, deleted_at=NOW(), deleted_by=$1,
+              body='This message was unsent', edited=false, updated_at=NOW()
+        WHERE id=$2 AND conversation_id=$3
+        RETURNING *`,
+      [req.user.id, mid, cid],
+    );
+    const shaped = reshapeMessage(rows[0]);
+    const io = req.app.get("io");
+    if (io) io.to(`conversation-${cid}`).emit("msg:message-deleted", shaped);
+    return res.json({ success: true, data: shaped });
+  } catch (err) {
+    logger.error(`[Messages] DELETE message: ${err.message}`);
+    return res.status(err.status || 500).json({ success: false, message: err.message || "Failed to unsend message" });
+  }
+});
+
+for (const [pathSuffix, column, eventName] of [
+  ["pin", "is_pinned", "msg:message-pinned"],
+  ["highlight", "is_highlighted", "msg:message-highlighted"],
+]) {
+  router.patch(`/conversations/:cid/messages/:mid/${pathSuffix}`, protect, async (req, res) => {
+    try {
+      const { cid, mid } = req.params;
+      const access = await canAccessConversation(req, cid);
+      if (!access.allowed) return res.status(403).json({ success: false, message: "Access denied" });
+
+      const msgRes = await query(
+        `SELECT * FROM messages WHERE id=$1 AND conversation_id=$2 AND deleted=false`,
+        [mid, cid],
+      );
+      const msg = msgRes.rows[0];
+      if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
+
+      const admin = isAdminUser(req);
+      if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+        return res.status(403).json({ success: false, message: "You can only manage your own message" });
+      }
+
+      const requested = req.body.value === undefined ? !Boolean(msg[column]) : Boolean(req.body.value);
+      const { rows } = await query(
+        `UPDATE messages SET ${column}=$1, updated_at=NOW()
+          WHERE id=$2 AND conversation_id=$3 RETURNING *`,
+        [requested, mid, cid],
+      );
+      const shaped = reshapeMessage(rows[0]);
+      const io = req.app.get("io");
+      if (io) io.to(`conversation-${cid}`).emit(eventName, shaped);
+      return res.json({ success: true, data: shaped });
+    } catch (err) {
+      logger.error(`[Messages] PATCH ${pathSuffix}: ${err.message}`);
+      return res.status(err.status || 500).json({ success: false, message: err.message || "Failed to update message" });
+    }
+  });
+}
 
 /* ── DELETE /conversations/:id — soft delete ────────────────────────────── */
 router.delete("/conversations/:id", adminProtect, async (req, res) => {
