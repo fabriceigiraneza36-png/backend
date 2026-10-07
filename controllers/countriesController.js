@@ -189,10 +189,21 @@ const getOne = async (req, res, next) => {
   try {
     const { slug } = req.params;
 
-    const isNumeric = /^\d+$/.test(slug);
-    const whereClause = isNumeric ? "id = $1" : "slug = $1";
+    const rawSlug = String(slug || "").trim();
+    const normalizedSlug = rawSlug.toLowerCase();
 
-    const countryQuery = await query(`SELECT * FROM countries WHERE ${whereClause} AND is_active = true`, [slug]);
+    // Public country URLs are slug-based. Resolve them case-insensitively and
+    // also accept the country name as a safe recovery for legacy records.
+    // Numeric IDs remain supported for existing consumers.
+    const isNumeric = /^\d+$/.test(rawSlug);
+    const whereClause = isNumeric
+      ? "id = $1"
+      : "(LOWER(TRIM(slug)) = $1 OR LOWER(TRIM(name)) = $1)";
+
+    const countryQuery = await query(
+      `SELECT * FROM countries WHERE ${whereClause} AND is_active = true`,
+      [isNumeric ? rawSlug : normalizedSlug]
+    );
     if (!countryQuery.rows.length) {
       return res.status(404).json({ error: "Country not found" });
     }
