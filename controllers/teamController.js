@@ -6,7 +6,7 @@
  * Full CRUD operations for team members.
  * Frontend TeamCard expects:
  *   id, name, role, department, image_url, bio, expertise[],
- *   location, linkedin_url, twitter_url, email, is_featured, is_active
+ *   linkedin_url, twitter_url, email, is_featured, is_active
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
@@ -73,7 +73,6 @@ const formatMemberResponse = (member) => {
   // Guarantee arrays
   json.expertise = Array.isArray(json.expertise) ? json.expertise : [];
   json.languages = Array.isArray(json.languages) ? json.languages : [];
-  json.certifications = Array.isArray(json.certifications) ? json.certifications : [];
 
   return json;
 };
@@ -130,7 +129,6 @@ exports.getAllTeamMembers = catchAsync(async (req, res) => {
       { role: { [Op.iLike]: `%${search}%` } },
       { department: { [Op.iLike]: `%${search}%` } },
       { bio: { [Op.iLike]: `%${search}%` } },
-      { location: { [Op.iLike]: `%${search}%` } },
     ];
   }
 
@@ -284,18 +282,13 @@ exports.getDepartments = catchAsync(async (req, res) => {
  * @access  Public
  */
 exports.getTeamStats = catchAsync(async (req, res) => {
-  const [totalMembers, totalDepartments, totalCountries, totalExperience] =
+  const [totalMembers, totalDepartments, totalExperience] =
     await Promise.all([
       TeamMember.count({ where: { is_active: true } }),
       TeamMember.count({
         where: { is_active: true, department: { [Op.ne]: null } },
         distinct: true,
         col: "department",
-      }),
-      TeamMember.count({
-        where: { is_active: true, country: { [Op.ne]: null } },
-        distinct: true,
-        col: "country",
       }),
       TeamMember.sum("years_experience", { where: { is_active: true } }),
     ]);
@@ -305,7 +298,6 @@ exports.getTeamStats = catchAsync(async (req, res) => {
     data: {
       total_members: totalMembers || 0,
       total_departments: totalDepartments || 0,
-      countries_covered: totalCountries || 0,
       combined_experience: totalExperience || 0,
     },
   });
@@ -359,7 +351,6 @@ exports.getAllTeamMembersAdmin = catchAsync(async (req, res) => {
       { department: { [Op.iLike]: `%${search}%` } },
       { bio: { [Op.iLike]: `%${search}%` } },
       { email: { [Op.iLike]: `%${search}%` } },
-      { location: { [Op.iLike]: `%${search}%` } },
     ];
   }
 
@@ -419,10 +410,7 @@ exports.createTeamMember = catchAsync(async (req, res, next) => {
     website_url,
     expertise,
     languages,
-    certifications,
     years_experience,
-    location,
-    country,
     display_order,
     is_featured,
     is_active,
@@ -474,10 +462,7 @@ exports.createTeamMember = catchAsync(async (req, res, next) => {
     website_url: website_url || null,
     expertise: parseArray(expertise),
     languages: parseArray(languages),
-    certifications: parseArray(certifications),
     years_experience: parseInt(years_experience) || 0,
-    location: location ? location.trim() : null,
-    country: country ? country.trim() : null,
     display_order: orderValue,
     is_featured: parseBool(is_featured, false),
     is_active: parseBool(is_active, true),
@@ -521,8 +506,6 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
     "twitter_url",
     "instagram_url",
     "website_url",
-    "location",
-    "country",
     "meta_title",
     "meta_description",
     "joined_date",
@@ -571,7 +554,7 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
   }
 
   // Array fields
-  const arrayFields = ["expertise", "languages", "certifications"];
+  const arrayFields = ["expertise", "languages"];
   arrayFields.forEach((field) => {
     if (req.body[field] !== undefined) {
       updateData[field] = parseArray(req.body[field]);
