@@ -619,7 +619,8 @@ exports.sendNewsletter = async (req, res, next) => {
     return res.json({
       success: true,
       message: `Newsletter sent to ${sent} subscriber(s).`,
-      sent, failed, total: subs.length,\n      notified, notificationFailed,
+      sent, failed, total: subs.length,
+      notified, notificationFailed,
       errors: failed ? errors : undefined,
     });
   } catch (err) {
