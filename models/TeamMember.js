@@ -118,12 +118,6 @@ const TeamMember = sequelize.define(
       defaultValue: [],
     },
 
-    certifications: {
-      type: DataTypes.JSONB,
-      allowNull: true,
-      defaultValue: [],
-    },
-
     years_experience: {
       type: DataTypes.INTEGER,
       allowNull: true,
@@ -131,17 +125,6 @@ const TeamMember = sequelize.define(
       validate: {
         min: { args: [0], msg: "Years of experience cannot be negative" },
       },
-    },
-
-    // ── Location ───────────────────────────────────────────────────────
-    location: {
-      type: DataTypes.STRING(200),
-      allowNull: true,
-    },
-
-    country: {
-      type: DataTypes.STRING(100),
-      allowNull: true,
     },
 
     // ── Display & Status ───────────────────────────────────────────────
