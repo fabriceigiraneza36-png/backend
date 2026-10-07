@@ -1217,6 +1217,21 @@ io.on('connection', (socket) => {
     socket.data.messagesPageOpen = Boolean(open)
   })
 
+  socket.on('msg:join-group', async ({ groupId } = {}, cb) => {
+    try {
+      if (!socket.data.userId || !groupId) throw new Error('groupId required')
+      const member = await query(
+        `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
+        [groupId, socket.data.userId],
+      )
+      if (!member.rows[0] && !socket.data.isAdmin) throw new Error('Not a group member')
+      socket.join(`group-${groupId}`)
+      cb?.({ success: true })
+    } catch (err) {
+      cb?.({ success: false, error: err.message })
+    }
+  })
+
   // -- Notifications --------------------------------------------------------
   socket.on('notification:get-unread', async (_, cb) => {
     try {
