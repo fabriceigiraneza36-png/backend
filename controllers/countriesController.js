@@ -79,6 +79,19 @@ const ensureCountryMediaSchema = async () => {
   return countryMediaSchemaPromise;
 };
 
+const validateCountryContentRequirements = ({ images = [], attractions = [], latitude, longitude, enforce = true }) => {
+  if (!enforce) return null
+  const uniqueImages = [...new Set(urlsOnly(images).filter(Boolean))]
+  if (uniqueImages.length < 9) return 'A country requires at least 9 images: 4 hero images plus attraction/gallery imagery'
+  if (uniqueImages.slice(0, 4).length < 4) return 'A country requires 4 hero images'
+  const items = Array.isArray(attractions) ? attractions : []
+  if (items.length < 4) return 'A country requires at least 4 attractions'
+  const complete = items.filter((item) => String(item?.name || '').trim() && String(item?.imageUrl || item?.image_url || '').trim()).length
+  if (complete < 4) return 'Every required country attraction must have a name and image'
+  if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) return 'Country latitude and longitude are required for the interactive map'
+  return null
+}
+
 const sanitizeString = (value) => {
   if (typeof value !== "string") return "";
   return value
@@ -377,6 +390,9 @@ const create = async (req, res, next) => {
     const actualColumns = await getTableColumns();
     const hasCodeColumn = actualColumns.includes("code");
 
+    const currentResult = await query(`SELECT images, attractions, latitude, longitude, is_active FROM countries WHERE id = $1`, [id]);
+    if (!currentResult.rows.length) return res.status(404).json({ success: false, error: "Country not found" });
+
     // Required fields validation
     if (!name || (hasCodeColumn && !code)) {
       return res.status(400).json({
@@ -402,6 +418,16 @@ const create = async (req, res, next) => {
     }
 
     const slugValue = slug ? sanitizeString(slug) : slugify(nameTrimmed);
+    const normalizedCountryImages = (() => { try { return JSON.parse(cleanCountryImages(gallery || hero_images || req.body.images)); } catch { return []; } })()
+    const normalizedAttractions = Array.isArray(attractions) ? attractions : []
+    const contentError = validateCountryContentRequirements({
+      images: normalizedCountryImages,
+      attractions: normalizedAttractions,
+      latitude,
+      longitude,
+      enforce: is_active !== false && is_active !== 'false',
+    })
+    if (contentError) return res.status(400).json({ success: false, error: contentError })
     if (!slugValue) {
       return res.status(400).json({
         success: false,
@@ -559,6 +585,21 @@ const update = async (req, res, next) => {
 
     const actualColumns = await getTableColumns();
     const hasCodeColumn = actualColumns.includes("code");
+
+    const nextImages = images !== undefined
+      ? (() => { try { return JSON.parse(cleanCountryImages(images)); } catch { return []; } })()
+      : (Array.isArray(currentResult.rows[0].images) ? currentResult.rows[0].images : []);
+    const nextAttractions = attractions !== undefined ? (Array.isArray(attractions) ? attractions : []) : (() => {
+      try { const raw = currentResult.rows[0].attractions; return Array.isArray(raw) ? raw : JSON.parse(raw || '[]'); } catch { return []; }
+    })();
+    const contentError = validateCountryContentRequirements({
+      images: nextImages,
+      attractions: nextAttractions,
+      latitude: latitude !== undefined ? latitude : currentResult.rows[0].latitude,
+      longitude: longitude !== undefined ? longitude : currentResult.rows[0].longitude,
+      enforce: (is_active !== undefined ? is_active !== false && is_active !== 'false' : currentResult.rows[0].is_active !== false),
+    })
+    if (contentError) return res.status(400).json({ success: false, error: contentError })
 
     const setClauses = [];
     const values = [];
