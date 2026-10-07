@@ -262,7 +262,15 @@ async function listConversations({
 
   /* User filter — for non-admin users to see only their own conversations */
   if (userFilter && userFilter.user_id) {
-    conditions.push(`c.user_id = $${p++}`);
+    const userParam = p++;
+    conditions.push(`(
+      c.user_id = ${userParam}
+      OR EXISTS (
+        SELECT 1 FROM message_group_members mgm
+        WHERE mgm.group_id = c.group_id
+          AND mgm.user_id = ${userParam}
+      )
+    )`);
     params.push(userFilter.user_id);
   }
 
@@ -302,6 +310,8 @@ async function listConversations({
   const rowsRes = await query(
     `SELECT
        c.*,
+       g.name        AS group_name,
+       g.description AS group_description,
        u.full_name   AS user_full_name,
        u.email       AS user_email,
        u.avatar_url  AS user_avatar,
@@ -360,6 +370,8 @@ async function getConversationWithMessages(conversationId) {
   const convRes = await query(
     `SELECT
        c.*,
+       g.name        AS group_name,
+       g.description AS group_description,
        u.full_name   AS user_full_name,
        u.email       AS user_email,
        u.avatar_url  AS user_avatar,
