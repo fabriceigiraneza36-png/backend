@@ -462,6 +462,10 @@ function reshapeConversation(row, includeMessages = false) {
     updatedAt:     row.updated_at,
     messageCount:  row.message_count  || 0,
     user:          row.user           || null,
+    groupId:       row.group_id      || null,
+    groupName:     row.group_name    || null,
+    groupDescription: row.group_description || null,
+    conversationType: row.conversation_type || (row.group_id ? "group" : "direct"),
   };
 
   if (includeMessages && Array.isArray(row.messages)) {
@@ -864,8 +868,19 @@ router.get("/conversations/:id", protect, async (req, res) => {
     }
 
     /* Users may only see their own conversation */
-    if (!isAdminUser(req) && data.user_id && data.user_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Access denied" });
+    if (!isAdminUser(req)) {
+      const ownsConversation = data.user_id && data.user_id === req.user.id;
+      let memberOfGroup = false;
+      if (data.group_id) {
+        const member = await query(
+          `SELECT 1 FROM message_group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+          [data.group_id, req.user.id],
+        );
+        memberOfGroup = Boolean(member.rows[0]);
+      }
+      if (!ownsConversation && !memberOfGroup) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
     }
 
     return res.json({ success: true, data: reshapeConversation(data, true) });
@@ -911,9 +926,20 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
-    /* Users may only message their own conversation */
-    if (!isAdminUser(req) && convCheck.rows[0].user_id && convCheck.rows[0].user_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Access denied" });
+    /* Users may message their own conversation or a group they belong to. */
+    if (!isAdminUser(req)) {
+      const ownsConversation = convCheck.rows[0].user_id && convCheck.rows[0].user_id === req.user.id;
+      let memberOfGroup = false;
+      if (convCheck.rows[0].group_id) {
+        const member = await query(
+          `SELECT 1 FROM message_group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+          [convCheck.rows[0].group_id, req.user.id],
+        );
+        memberOfGroup = Boolean(member.rows[0]);
+      }
+      if (!ownsConversation && !memberOfGroup) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
     }
 
     const isAdminReq = isAdminUser(req);
@@ -965,8 +991,19 @@ router.patch("/conversations/:id/read", protect, async (req, res) => {
     }
 
     /* Users may only mark their own conversation as read */
-    if (!isAdminUser(req) && convCheck.rows[0].user_id && convCheck.rows[0].user_id !== req.user.id) {
-      return res.status(403).json({ success: false, message: "Access denied" });
+    if (!isAdminUser(req)) {
+      const ownsConversation = convCheck.rows[0].user_id && convCheck.rows[0].user_id === req.user.id;
+      let memberOfGroup = false;
+      if (convCheck.rows[0].group_id) {
+        const member = await query(
+          `SELECT 1 FROM message_group_members WHERE group_id = $1 AND user_id = $2 LIMIT 1`,
+          [convCheck.rows[0].group_id, req.user.id],
+        );
+        memberOfGroup = Boolean(member.rows[0]);
+      }
+      if (!ownsConversation && !memberOfGroup) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
     }
 
     const readerType = isAdminUser(req) ? "admin" : "user";
@@ -1028,7 +1065,7 @@ router.patch("/conversations/:id/status", adminProtect, async (req, res) => {
 /* ── PATCH /conversations/:cid/messages/:mid/react ──────────────────────── */
 router.patch(
   "/conversations/:cid/messages/:mid/react",
-  adminProtect,
+  protect,
   async (req, res) => {
     try {
       const { cid, mid }   = req.params;
