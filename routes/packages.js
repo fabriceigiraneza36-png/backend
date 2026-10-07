@@ -154,7 +154,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const where = []
     const vals  = []
-    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
+    const canSeeUnpublished = req.userType === 'admin' || req.user?.role === 'admin' || req.user?.is_admin === true || req.user?.isAdmin === true
 
     // Public package cards must never expose drafts/unpublished packages.
     // Admin users still need the same endpoint to manage drafts.
@@ -350,7 +350,7 @@ router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) =>
 router.get('/slug/:slug', optionalAuth, async (req, res) => {
   try {
     await ensurePackagesSchema()
-    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
+    const canSeeUnpublished = req.userType === 'admin' || req.user?.role === 'admin' || req.user?.is_admin === true || req.user?.isAdmin === true
     const slug = String(req.params.slug || '').trim().toLowerCase()
     if (!slug) return res.status(400).json({ success: false, error: 'Package slug is required' })
 
@@ -385,7 +385,7 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
-    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
+    const canSeeUnpublished = req.userType === 'admin' || req.user?.role === 'admin' || req.user?.is_admin === true || req.user?.isAdmin === true
     const pkg = await db(
       `SELECT p.*,
               d.name AS destination_name,
