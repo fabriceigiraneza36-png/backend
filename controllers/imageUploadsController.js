@@ -509,7 +509,7 @@ exports.uploadCountryImages = async (req, res, next) => {
              image_url = COALESCE(NULLIF(image_url, ''), $3),
              hero_image = COALESCE(NULLIF(hero_image, ''), $3),
              cover_image_url = COALESCE(NULLIF(cover_image_url, ''), $3),
-             hero_images = COALESCE(hero_images, '[]'::jsonb) || to_jsonb($1::text[]),
+             hero_images = to_jsonb((COALESCE(images, ARRAY[]::text[]) || $1::text[])[1:4]),
              updated_at = NOW()
          WHERE id = $2`,
         [imageUrls, countryId, imageUrls[0]]
