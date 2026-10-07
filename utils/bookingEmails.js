@@ -694,18 +694,26 @@ const safeSend = async (to, subject, html, label = "") => {
 const sendBookingReceivedEmail = async (booking) => {
   if (!booking?.email) return { success: false };
   const dest = tripName(booking);
+  const confirmationUrl = booking.verification_token ? buildVerificationLink(booking.verification_token) : null;
 
   const html = shell({
-    preheader: `Booking received for ${dest} — we'll contact you within 24 hours.`,
+    preheader: `Action required: confirm your booking request for ${dest}.`,
     heroBadge: statusPill("pending"),
-    heroTitle: "Your journey begins here",
-    heroSubtitle: "We've received your booking request and our team is already reviewing it.",
+    heroTitle: "Please confirm your booking request",
+    heroSubtitle: "One quick step in your inbox confirms that you are the person who requested this journey.",
     body: `
       ${greet(booking.full_name)}
       ${para(`We're delighted you chose <strong style="color:${T.g700};">${esc(ENV.appName)}</strong>
         for your <strong>${esc(dest)}</strong> adventure. Our travel experts will contact you
         within <strong style="color:${T.g600};">24 hours</strong> to craft your perfect itinerary.`)}
       ${bookingSummary(booking)}
+      ${confirmationUrl ? `
+        <div style="margin:28px 0;padding:22px 20px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:16px;text-align:center;">
+          <p style="margin:0 0 12px;color:#065f46;font-weight:800;font-size:14px;">Confirm from your real inbox</p>
+          <p style="margin:0 0 18px;color:#475569;font-size:13px;line-height:1.6;">Click the button below to confirm that you made this booking request. Your dashboard notification is only a reminder; confirmation must happen through this email.</p>
+          <a href="${confirmationUrl}" class="btn-primary">Confirm My Booking</a>
+        </div>
+      ` : ""}
       <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
         font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
         What Happens Next
