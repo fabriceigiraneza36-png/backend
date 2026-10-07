@@ -39,11 +39,20 @@ const ensureTeamTable = async () => {
     ["twitter_url",   "TEXT"],
     ["instagram_url", "TEXT"],
     ["facebook_url",  "TEXT"],
-    ["phone",         "VARCHAR(50)"],
-    ["email",         "VARCHAR(255)"],
-    ["bio",           "TEXT"],
-    ["avatar_url",    "TEXT"],
-    ["role",          "VARCHAR(150)"],
+    ["phone",            "VARCHAR(50)"],
+    ["email",            "VARCHAR(255)"],
+    ["bio",              "TEXT"],
+    ["avatar_url",       "TEXT"],
+    ["role",             "VARCHAR(150)"],
+    ["expertise",        "JSONB DEFAULT '[]'::jsonb"],
+    ["languages",        "JSONB DEFAULT '[]'::jsonb"],
+    ["certifications",   "JSONB DEFAULT '[]'::jsonb"],
+    ["years_experience", "INTEGER DEFAULT 0"],
+    ["location",         "VARCHAR(200)"],
+    ["country",          "VARCHAR(100)"],
+    ["website_url",      "TEXT"],
+    ["joined_date",      "DATE"],
+    ["show_on_homepage", "BOOLEAN DEFAULT false"],
   ];
 
   for (const [col, def] of cols) {
@@ -71,6 +80,10 @@ const formatTeamMember = (member) => ({
   ...member,
   image_url: member.image_url || member.avatar_url || member.photo_url || member.profile_image_url || null,
   imageUrl: member.image_url || member.avatar_url || member.photo_url || member.profile_image_url || null,
+  expertise: Array.isArray(member.expertise) ? member.expertise : [],
+  languages: Array.isArray(member.languages) ? member.languages : [],
+  certifications: Array.isArray(member.certifications) ? member.certifications : [],
+  years_experience: Number(member.years_experience || 0),
 });
 
 // ═══════════════════════════════════════════════════════════════
@@ -149,6 +162,8 @@ router.get("/featured", async (req, res) => {
          id, name, role, department, bio,
          avatar_url, email, phone,
          linkedin_url, twitter_url, instagram_url, facebook_url,
+         expertise, languages, certifications, years_experience,
+         location, country, website_url, joined_date, show_on_homepage,
          display_order, is_active, is_featured,
          created_at, updated_at
        FROM team
@@ -217,6 +232,8 @@ router.get("/", async (req, res) => {
          id, name, role, department, bio,
          avatar_url, email, phone,
          linkedin_url, twitter_url, instagram_url, facebook_url,
+         expertise, languages, certifications, years_experience,
+         location, country, website_url, joined_date, show_on_homepage,
          display_order, is_active, is_featured,
          created_at, updated_at
        FROM team
@@ -270,6 +287,8 @@ router.post("/", async (req, res) => {
       name, role, department, bio,
       avatar_url, image_url, photo_url, profile_image_url, email, phone,
       linkedin_url, twitter_url, instagram_url, facebook_url,
+      expertise, languages, certifications, years_experience,
+      location, country, website_url, joined_date, show_on_homepage,
       display_order, is_active, is_featured,
     } = req.body;
 
@@ -280,8 +299,10 @@ router.post("/", async (req, res) => {
       `INSERT INTO team (
          name, role, department, bio, avatar_url, email, phone,
          linkedin_url, twitter_url, instagram_url, facebook_url,
+         expertise, languages, certifications, years_experience,
+         location, country, website_url, joined_date, show_on_homepage,
          display_order, is_active, is_featured
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
        RETURNING *`,
       [
         name.trim(),
@@ -295,6 +316,15 @@ router.post("/", async (req, res) => {
         twitter_url   || null,
         instagram_url || null,
         facebook_url  || null,
+        JSON.stringify(Array.isArray(expertise) ? expertise : []),
+        JSON.stringify(Array.isArray(languages) ? languages : []),
+        JSON.stringify(Array.isArray(certifications) ? certifications : []),
+        Number(years_experience) || 0,
+        location || null,
+        country || null,
+        website_url || null,
+        joined_date || null,
+        show_on_homepage ?? false,
         display_order ?? 0,
         is_active     ?? true,
         is_featured   ?? false,
@@ -320,6 +350,8 @@ router.put("/:id", async (req, res) => {
       name, role, department, bio,
       avatar_url, image_url, photo_url, profile_image_url, email, phone,
       linkedin_url, twitter_url, instagram_url, facebook_url,
+      expertise, languages, certifications, years_experience,
+      location, country, website_url, joined_date, show_on_homepage,
       display_order, is_active, is_featured,
     } = req.body;
 
@@ -336,11 +368,20 @@ router.put("/:id", async (req, res) => {
          twitter_url   = COALESCE($9,  twitter_url),
          instagram_url = COALESCE($10, instagram_url),
          facebook_url  = COALESCE($11, facebook_url),
-         display_order = COALESCE($12, display_order),
-         is_active     = COALESCE($13, is_active),
-         is_featured   = COALESCE($14, is_featured),
+         expertise     = COALESCE($12::jsonb, expertise),
+         languages     = COALESCE($13::jsonb, languages),
+         certifications = COALESCE($14::jsonb, certifications),
+         years_experience = COALESCE($15, years_experience),
+         location      = COALESCE($16, location),
+         country       = COALESCE($17, country),
+         website_url   = COALESCE($18, website_url),
+         joined_date   = COALESCE($19, joined_date),
+         show_on_homepage = COALESCE($20, show_on_homepage),
+         display_order = COALESCE($21, display_order),
+         is_active     = COALESCE($22, is_active),
+         is_featured   = COALESCE($23, is_featured),
          updated_at    = NOW()
-       WHERE id = $15
+       WHERE id = $24
        RETURNING *`,
       [
         name          || null,
@@ -354,6 +395,15 @@ router.put("/:id", async (req, res) => {
         twitter_url   || null,
         instagram_url || null,
         facebook_url  || null,
+        expertise == null ? null : JSON.stringify(Array.isArray(expertise) ? expertise : []),
+        languages == null ? null : JSON.stringify(Array.isArray(languages) ? languages : []),
+        certifications == null ? null : JSON.stringify(Array.isArray(certifications) ? certifications : []),
+        years_experience == null ? null : Number(years_experience) || 0,
+        location || null,
+        country || null,
+        website_url || null,
+        joined_date || null,
+        show_on_homepage ?? null,
         display_order ?? null,
         is_active     ?? null,
         is_featured   ?? null,
