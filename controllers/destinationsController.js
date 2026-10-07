@@ -9,6 +9,22 @@ const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
 
 const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
 
+const validateDestinationMediaRequirements = ({ imageUrls = [], attractions = [], enforce = true }) => {
+  if (!enforce) return null
+  const uniqueImages = [...new Set(urlsOnly(imageUrls).filter(isSafeImageUrl))]
+  if (uniqueImages.length < 9) return 'A destination requires at least 9 images: 4 hero images plus attraction/gallery imagery'
+  if (uniqueImages.slice(0, 4).length < 4) return 'A destination requires 4 hero images'
+  const items = Array.isArray(attractions) ? attractions : []
+  if (items.length < 4) return 'A destination requires at least 4 attractions'
+  const complete = items.filter((item) =>
+    String(item?.name || '').trim() && isSafeImageUrl(String(item?.imageUrl || item?.image_url || '').trim())
+  ).length
+  if (complete < 4) return 'Every required attraction must have a name and image'
+  return null
+}
+
+
+
 let sendDestinationAlertEmail = null
 try {
   ({ sendDestinationAlertEmail } = require('../services/emailService'))
@@ -2059,6 +2075,12 @@ exports.create = async (req, res, next) => {
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
     imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
     if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
+    const mediaError = validateDestinationMediaRequirements({
+      imageUrls,
+      attractions: Array.isArray(data.attractions) ? data.attractions : parseJson(data.attractions, []),
+      enforce: data.status !== 'draft' && data.is_active !== false && data.is_active !== 'false',
+    })
+    if (mediaError) return res.status(400).json({ success: false, error: mediaError })
     const mainImg = imageUrls[0] || null
 
     const status      = truncate('status', data.status || 'draft')
@@ -2257,8 +2279,21 @@ exports.update = async (req, res, next) => {
     }
 
     if (fields.attractions !== undefined) {
-      fields.attractions = JSON.stringify(Array.isArray(fields.attractions) ? fields.attractions : [])
+      fields.attractions = JSON.stringify(Array.isArray(fields.attractions) ? fields.attractions : parseJson(fields.attractions, []))
     }
+
+    const mergedImages = fields.image_urls !== undefined
+      ? urlsOnly(fields.image_urls)
+      : urlsOnly(current.image_urls)
+    const mergedAttractions = fields.attractions !== undefined
+      ? parseJson(fields.attractions, [])
+      : parseJson(current.attractions, [])
+    const mediaError = validateDestinationMediaRequirements({
+      imageUrls: mergedImages,
+      attractions: mergedAttractions,
+      enforce: (fields.status ?? current.status) !== 'draft' && (fields.is_active ?? current.is_active) !== false && fields.is_active !== 'false',
+    })
+    if (mediaError) return res.status(400).json({ success: false, error: mediaError })
 
     for (const f of ['highlights','activities','wildlife']) {
       if (fields[f] !== undefined) fields[f] = toArr(fields[f])
