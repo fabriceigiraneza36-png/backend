@@ -390,9 +390,6 @@ const create = async (req, res, next) => {
     const actualColumns = await getTableColumns();
     const hasCodeColumn = actualColumns.includes("code");
 
-    const currentResult = await query(`SELECT images, attractions, latitude, longitude, is_active FROM countries WHERE id = $1`, [id]);
-    if (!currentResult.rows.length) return res.status(404).json({ success: false, error: "Country not found" });
-
     // Required fields validation
     if (!name || (hasCodeColumn && !code)) {
       return res.status(400).json({
@@ -578,13 +575,18 @@ const update = async (req, res, next) => {
       experiences,
       travel_tips,
       neighboring_countries,
-      demonym,
+      attractions,
+      latitude,
+      longitude,
+      images,
       is_featured,
       is_active,
     } = req.body;
 
     const actualColumns = await getTableColumns();
     const hasCodeColumn = actualColumns.includes("code");
+    const currentResult = await query(`SELECT images, attractions, latitude, longitude, is_active FROM countries WHERE id = $1`, [id]);
+    if (!currentResult.rows.length) return res.status(404).json({ success: false, error: "Country not found" });
 
     const nextImages = images !== undefined
       ? (() => { try { return JSON.parse(cleanCountryImages(images)); } catch { return []; } })()
@@ -783,7 +785,7 @@ const remove = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: rows[0],
+      data: country,
       message: "Country deleted successfully",
     });
   } catch (err) {
@@ -1020,7 +1022,7 @@ const sanitizeCountryMedia = (country) => {
     cover_image: cleanCountryImage(country.cover_image) || primaryImage,
     hero_image: cleanCountryImage(country.hero_image) || primaryImage,
     hero_image_url: cleanCountryImage(country.hero_image_url) || primaryImage,
-    hero_images: JSON.stringify(gallery.slice(0, 10)),
+    hero_images: JSON.stringify(gallery.slice(0, 4)),
     images: gallery.map((item) => item.url),
   };
 };
