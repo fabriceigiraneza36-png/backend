@@ -64,6 +64,10 @@ const deleteCloudinaryImage = async (publicId) => {
 // ─── Helper: Build the response shape the frontend expects ─────────────────
 const formatMemberResponse = (member) => {
   const json = member.toJSON ? member.toJSON() : { ...member };
+  // Keep legacy database columns private; they are no longer part of the public team profile.
+  delete json.location;
+  delete json.country;
+  delete json.certifications;
 
   // Guarantee the "image" alias exists for backward compat
   if (!json.image) {
