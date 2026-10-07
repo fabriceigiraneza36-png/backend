@@ -807,7 +807,7 @@ const getImages = async (req, res, next) => {
     }
 
     const { rows } = await query(
-      "SELECT hero_images FROM countries WHERE id = $1",
+      "SELECT hero_images, images FROM countries WHERE id = $1",
       [id]
     );
 
@@ -841,6 +841,8 @@ const getImages = async (req, res, next) => {
     return res.json({
       success: true,
       data: images,
+      heroImages: images.slice(0, 4),
+      total: images.length,
     });
   } catch (err) {
     logger.error("[Countries] getImages:", err.message);
