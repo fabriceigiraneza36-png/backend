@@ -1375,6 +1375,19 @@ io.on('connection', (socket) => {
       })
       if (!conv) throw new Error('Conversation not found')
 
+      if (!socket.data.isAdmin) {
+        const owns = conv.user_id && String(conv.user_id) === String(socket.data.userId)
+        let member = false
+        if (conv.group_id && socket.data.userId) {
+          const membership = await query(
+            `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
+            [conv.group_id, socket.data.userId],
+          )
+          member = Boolean(membership.rows[0])
+        }
+        if (!owns && !member) throw new Error('Not a member of this conversation')
+      }
+
       socket.data.conversationId = conv.id
       socket.data.sessionId = conv.session_id
       socket.join(`conv:${conv.id}`)
@@ -1408,8 +1421,28 @@ io.on('connection', (socket) => {
       const body = String(payload.body || payload.message || '').trim()
       if (!body) throw new Error('Message body is required')
 
-      let convId = socket.data.conversationId
+      let convId = payload.conversationId ? parseInt(payload.conversationId, 10) : socket.data.conversationId
       let sid    = socket.data.sessionId
+
+      if (convId) {
+        const existing = await resolveConversationForSocket({ conversationId: convId, sessionId: payload.sessionId })
+        if (!existing) throw new Error('Conversation not found')
+        if (existing.group_id && socket.data.userId && !socket.data.isAdmin) {
+          const membership = await query(
+            `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
+            [existing.group_id, socket.data.userId],
+          )
+          if (!membership.rows[0]) throw new Error('Not a member of this group')
+        } else if (!socket.data.isAdmin && existing.user_id && String(existing.user_id) !== String(socket.data.userId)) {
+          throw new Error('Access denied')
+        }
+        convId = existing.id
+        sid = existing.session_id
+        socket.data.conversationId = convId
+        socket.data.sessionId = sid
+        socket.join(`conv:${convId}`)
+        if (sid) socket.join(`session:${sid}`)
+      }
 
       if (!convId) {
         sid         = String(payload.sessionId || `guest-${socket.id}`).trim()
@@ -1462,6 +1495,16 @@ io.on('connection', (socket) => {
           unreadCount:    unreadAdmin,
         },
       })
+
+      const currentConv = await resolveConversationForSocket({ conversationId: convId, sessionId: sid })
+      if (currentConv?.group_id) {
+        io.to(`group-${currentConv.group_id}`).emit('msg:group-message', {
+          conversationId: convId,
+          groupId: currentConv.group_id,
+          groupName: currentConv.guest_name || currentConv.subject || 'Group',
+          message: serialized,
+        })
+      }
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
     } catch (err) {
@@ -1593,6 +1636,14 @@ io.on('connection', (socket) => {
         userId:         conv.user_id,
         payload:        serialized,
       })
+      if (conv.group_id) {
+        io.to(`group-${conv.group_id}`).emit('msg:group-message', {
+          conversationId: conv.id,
+          groupId: conv.group_id,
+          groupName: conv.guest_name || conv.subject || 'Group',
+          message: serialized,
+        })
+      }
       socket.to('admins').emit('msg:admin-sent', { conversationId: conv.id, message: serialized })
 
       if (typeof cb === 'function') cb({ success: true, message: serialized })
