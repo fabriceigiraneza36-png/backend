@@ -301,6 +301,7 @@ async function listConversations({
     `SELECT COUNT(*)::INT AS total
        FROM conversations c
        LEFT JOIN users u ON u.id = c.user_id
+       LEFT JOIN message_groups g ON g.id = c.group_id
       WHERE ${where}`,
     params
   );
@@ -324,6 +325,7 @@ async function listConversations({
        ) AS message_count
      FROM conversations c
      LEFT JOIN users u ON u.id = c.user_id
+     LEFT JOIN message_groups g ON g.id = c.group_id
      WHERE ${where}
      ORDER BY
        CASE c.priority
@@ -342,6 +344,8 @@ async function listConversations({
   /* Merge user info into each row for convenience */
   const rows = rowsRes.rows.map((row) => ({
     ...row,
+    group_name: row.group_name || null,
+    group_description: row.group_description || null,
     guest_name:  row.guest_name  || row.user_full_name || null,
     guest_email: row.guest_email || row.user_email     || null,
     user: row.user_id
@@ -380,6 +384,7 @@ async function getConversationWithMessages(conversationId) {
        u.username    AS user_username
      FROM conversations c
      LEFT JOIN users u ON u.id = c.user_id
+     LEFT JOIN message_groups g ON g.id = c.group_id
      WHERE c.id = $1 AND c.deleted_at IS NULL`,
     [conversationId]
   );
