@@ -818,7 +818,7 @@ const getImages = async (req, res, next) => {
       });
     }
 
-    let heroImages = rows[0].hero_images;
+    let heroImages = Array.isArray(rows[0].images) && rows[0].images.length ? rows[0].images : rows[0].hero_images;
     if (typeof heroImages === 'string') {
       try {
         const parsed = JSON.parse(heroImages);
