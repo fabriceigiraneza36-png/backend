@@ -493,6 +493,21 @@ const ensureMessagingSchema = async () => {
       started_at      TIMESTAMP   DEFAULT NOW(),
       expires_at      TIMESTAMP   DEFAULT NOW() + INTERVAL '10 seconds'
     )`,
+    `CREATE TABLE IF NOT EXISTS message_groups (
+      id          SERIAL PRIMARY KEY,
+      name        VARCHAR(160) NOT NULL,
+      description TEXT,
+      created_by  INTEGER,
+      is_active   BOOLEAN DEFAULT true,
+      created_at  TIMESTAMP DEFAULT NOW(),
+      updated_at  TIMESTAMP DEFAULT NOW()
+    )`,
+    `CREATE TABLE IF NOT EXISTS message_group_members (
+      group_id   INTEGER NOT NULL REFERENCES message_groups(id) ON DELETE CASCADE,
+      user_id    INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      joined_at  TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (group_id, user_id)
+    )`,
   ]
 
   for (const sql of tables) {
@@ -511,6 +526,9 @@ const ensureMessagingSchema = async () => {
     `CREATE INDEX IF NOT EXISTS idx_messages_unread        ON messages(conversation_id, is_read) WHERE is_read = false`,
     `CREATE INDEX IF NOT EXISTS idx_messages_sender        ON messages(sender_type, sender_id)`,
     `CREATE INDEX IF NOT EXISTS idx_typing_expires         ON typing_indicators(expires_at)`,
+    `CREATE INDEX IF NOT EXISTS idx_conversations_group     ON conversations(group_id) WHERE group_id IS NOT NULL`,
+    `CREATE INDEX IF NOT EXISTS idx_group_members_user      ON message_group_members(user_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_group_members_group     ON message_group_members(group_id)`,
   ]
   for (const idx of indexes) await query(idx).catch(() => {})
 
@@ -527,6 +545,12 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS attachment_type VARCHAR(100)`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS updated_at     TIMESTAMP   DEFAULT NOW()`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS msg_type       VARCHAR(30) DEFAULT 'text'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS group_id        INTEGER`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversation_type VARCHAR(30) DEFAULT 'direct'`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_pinned       BOOLEAN DEFAULT false`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_highlighted  BOOLEAN DEFAULT false`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS deleted_at      TIMESTAMP`,
+    `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS deleted_by      INTEGER`,
   ]
   for (const sql of migrations) {
     await query(sql).catch(() => { /* column already exists � safe */ })
@@ -1171,6 +1195,14 @@ io.on('connection', (socket) => {
     socket.join(`user-${socket.data.userId}`)
     socket.join(`role-${userRole}`)
     socket.join('all-users')
+    // Group chat rooms are joined at connection time so group messages remain
+    // live even when the user is on another dashboard page.
+    query(
+      `SELECT group_id FROM message_group_members WHERE user_id = $1`,
+      [socket.data.userId],
+    ).then(({ rows }) => {
+      for (const row of rows) if (row.group_id) socket.join(`group-${row.group_id}`)
+    }).catch(() => {})
   }
 
   if (socket.data.isAdmin) {
