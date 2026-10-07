@@ -154,6 +154,13 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const where = []
     const vals  = []
+    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
+
+    // Public package cards must never expose drafts/unpublished packages.
+    // Admin users still need the same endpoint to manage drafts.
+    if (!canSeeUnpublished) {
+      where.push('COALESCE(p.is_published, false) = true')
+    }
 
     if (destination) {
       vals.push(destination)
@@ -343,6 +350,7 @@ router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) =>
 router.get('/slug/:slug', optionalAuth, async (req, res) => {
   try {
     await ensurePackagesSchema()
+    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
     const slug = String(req.params.slug || '').trim().toLowerCase()
     if (!slug) return res.status(400).json({ success: false, error: 'Package slug is required' })
 
@@ -353,8 +361,9 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
        FROM packages p
        LEFT JOIN destinations d ON d.id = p.destination_id
        WHERE LOWER(p.slug) = $1
+         AND (COALESCE(p.is_published, false) = true OR $2 = true)
        LIMIT 1`,
-      [slug],
+      [slug, canSeeUnpublished],
     )
 
     if (!pkg.rows.length) {
@@ -376,14 +385,16 @@ router.get('/slug/:slug', optionalAuth, async (req, res) => {
 ═══════════════════════════════════════════════════════════════════════════ */
 router.get('/:id', optionalAuth, async (req, res) => {
   try {
+    const canSeeUnpublished = req.user?.role === 'admin' || req.user?.is_admin === true
     const pkg = await db(
       `SELECT p.*,
               d.name AS destination_name,
               d.slug AS destination_slug
        FROM packages p
        LEFT JOIN destinations d ON d.id = p.destination_id
-       WHERE p.id = $1`,
-      [req.params.id],
+       WHERE p.id = $1
+         AND (COALESCE(p.is_published, false) = true OR $2 = true)`,
+      [req.params.id, canSeeUnpublished],
     )
 
     if (!pkg.rows.length) {
