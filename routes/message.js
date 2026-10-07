@@ -1299,6 +1299,18 @@ router.patch(
         return res.status(400).json({ success: false, message: "Emoji is required" });
       }
 
+      const access = await canAccessConversation(req, cid);
+      if (!access.allowed) {
+        return res.status(403).json({ success: false, message: "Access denied" });
+      }
+      const messageCheck = await query(
+        `SELECT id FROM messages WHERE id=$1 AND conversation_id=$2 AND deleted=false LIMIT 1`,
+        [mid, cid],
+      );
+      if (!messageCheck.rows[0]) {
+        return res.status(404).json({ success: false, message: "Message not found" });
+      }
+
       const reactions = await toggleReaction({
         messageId: mid,
         userId:    req.user.id,
