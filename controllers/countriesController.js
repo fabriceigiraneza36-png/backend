@@ -5,6 +5,7 @@ const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const { slugify } = require("../utils/slugify");
 const { normalizeImages, urlsOnly } = require("../utils/media");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 /* ═══════════════════════════════════════════════════════════════════════════
     SAFE REQUIRE: HELPERS & SERVICE RESOLUTION
@@ -67,6 +68,17 @@ try {
   }
 }
 
+let countryMediaSchemaPromise = null;
+const ensureCountryMediaSchema = async () => {
+  if (countryMediaSchemaPromise) return countryMediaSchemaPromise;
+  countryMediaSchemaPromise = (async () => {
+    await query(`ALTER TABLE countries ADD COLUMN IF NOT EXISTS attractions JSONB DEFAULT '[]'::jsonb`).catch(() => {});
+    await query(`ALTER TABLE countries ADD COLUMN IF NOT EXISTS images TEXT[] DEFAULT '{}'::text[]`).catch(() => {});
+    return true;
+  })();
+  return countryMediaSchemaPromise;
+};
+
 const sanitizeString = (value) => {
   if (typeof value !== "string") return "";
   return value
@@ -107,6 +119,7 @@ const getTableColumns = async () => {
 
 const getAll = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { page = 1, limit = 10, search = "", sortBy = "name", order = "asc" } = req.query;
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
     const limitNum = Math.min(parseInt(limit, 10) || 10, 100);
@@ -155,6 +168,7 @@ const getAll = async (req, res, next) => {
 
 const getById = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { id } = req.params;
     if (!/^\d+$/.test(id)) {
       return res.status(400).json({
@@ -187,6 +201,7 @@ const getById = async (req, res, next) => {
 
 const getOne = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { slug } = req.params;
 
     const rawSlug = String(slug || "").trim();
@@ -308,6 +323,7 @@ const getOne = async (req, res, next) => {
 
 const create = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const {
       name,
       code,
@@ -350,6 +366,9 @@ const create = async (req, res, next) => {
       experiences,
       travel_tips,
       neighboring_countries,
+      attractions,
+      latitude,
+      longitude,
       demonym,
       is_featured,
       is_active,
@@ -421,7 +440,12 @@ const create = async (req, res, next) => {
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", cleanCountryImages(gallery || hero_images));
+    const countryGallery = cleanCountryImages(gallery || hero_images);
+    addField("hero_images", countryGallery);
+    addField("images", countryGallery);
+    addField("attractions", Array.isArray(attractions) ? JSON.stringify(attractions) : attractions);
+    addField("latitude", latitude);
+    addField("longitude", longitude);
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
     addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
@@ -476,6 +500,7 @@ const create = async (req, res, next) => {
 
 const update = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { id } = req.params;
 
     if (!/^\d+$/.test(id)) {
@@ -597,7 +622,12 @@ const update = async (req, res, next) => {
     addField("motto", motto, true);
     addField("description", description, true);
     addField("full_description", full_description, true);
-    addField("hero_images", cleanCountryImages(gallery || hero_images));
+    const countryGallery = cleanCountryImages(gallery || hero_images);
+    addField("hero_images", countryGallery);
+    addField("images", countryGallery);
+    addField("attractions", Array.isArray(attractions) ? JSON.stringify(attractions) : attractions);
+    addField("latitude", latitude);
+    addField("longitude", longitude);
     addField("short_notes", short_notes, true);
     addField("destination_count", destination_count);
     addField("activities", Array.isArray(activities) || typeof activities === "object" ? JSON.stringify(activities) : activities);
@@ -670,6 +700,7 @@ const update = async (req, res, next) => {
 
 const remove = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { id } = req.params;
 
     if (!/^\d+$/.test(id)) {
@@ -679,17 +710,35 @@ const remove = async (req, res, next) => {
       });
     }
 
-    const { rows } = await query(
-      `DELETE FROM countries WHERE id = $1 RETURNING *`,
-      [id]
+    const { rows: existingRows } = await query(
+      `SELECT * FROM countries WHERE id = $1`, [id]
     );
+    if (!existingRows.length) return res.status(404).json({ success: false, error: "Country not found" });
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "Country not found",
-      });
-    }
+    const country = existingRows[0];
+    const destinationRows = await query(
+      `SELECT id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url FROM destinations WHERE country_id = $1`,
+      [id]
+    ).catch(() => ({ rows: [] }));
+    const destinationImageRows = destinationRows.rows.length
+      ? await query(`SELECT di.image_url FROM destination_images di JOIN destinations d ON d.id = di.destination_id WHERE d.country_id = $1`, [id]).catch(() => ({ rows: [] }))
+      : { rows: [] };
+
+    const urls = [
+      country.flag_url, country.image_url, country.cover_image_url, country.hero_image,
+      ...(Array.isArray(country.images) ? country.images : []),
+      ...normalizeImages(country.hero_images).map((x) => x.url),
+      ...destinationRows.rows.flatMap((d) => [
+        d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
+        ...(Array.isArray(d.image_urls) ? d.image_urls : []),
+      ]),
+      ...destinationImageRows.rows.map((x) => x.image_url),
+    ].filter(Boolean);
+
+    await query(`DELETE FROM countries WHERE id = $1`, [id]);
+    await destroyCloudinaryUrls(urls).catch((cleanupErr) =>
+      logger.error(`[Countries] Cloudinary cleanup failed for ${id}: ${cleanupErr.message}`)
+    );
 
     return res.json({
       success: true,
@@ -704,6 +753,7 @@ const remove = async (req, res, next) => {
 
 const getImages = async (req, res, next) => {
   try {
+    await ensureCountryMediaSchema();
     const { id } = req.params;
 
     if (!/^\d+$/.test(id)) {
