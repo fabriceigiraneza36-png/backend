@@ -2437,7 +2437,7 @@ exports.remove = async (req, res, next) => {
     const permanent = toBool(req.query.permanent)
 
     const existRows = await safeQuery(
-      `SELECT id, name, slug, country_id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url
+      `SELECT id, name, slug, country_id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url, attractions
        FROM destinations WHERE id = $1`,
       [id], 'remove:exist',
     )
@@ -2460,6 +2460,7 @@ exports.remove = async (req, res, next) => {
         destination.thumbnail_url,
         ...(Array.isArray(destination.image_urls) ? destination.image_urls : []),
         ...imageRows.map((row) => row.image_url),
+        ...parseJson(destination.attractions, []).map((item) => item?.imageUrl || item?.image_url || item?.image).filter(Boolean),
       ].filter(Boolean)
       await query('DELETE FROM destinations WHERE id = $1', [id])
       await destroyCloudinaryUrls(urls).catch((cleanupErr) =>
