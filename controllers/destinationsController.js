@@ -5,6 +5,7 @@ const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
+const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
 
 const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
 
@@ -2401,17 +2402,34 @@ exports.remove = async (req, res, next) => {
     const permanent = toBool(req.query.permanent)
 
     const existRows = await safeQuery(
-      'SELECT id, name, slug, country_id FROM destinations WHERE id = $1',
+      `SELECT id, name, slug, country_id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url
+       FROM destinations WHERE id = $1`,
       [id], 'remove:exist',
     )
     if (!existRows.length) {
       return res.status(404).json({ success: false, error: 'Destination not found' })
     }
 
-    const { country_id, name, slug } = existRows[0]
+    const destination = existRows[0]
+    const { country_id, name, slug } = destination
 
     if (permanent) {
+      const imageRows = await safeQuery(
+        `SELECT image_url FROM destination_images WHERE destination_id = $1`,
+        [id], 'remove:images',
+      )
+      const urls = [
+        destination.image_url,
+        destination.hero_image,
+        destination.cover_image_url,
+        destination.thumbnail_url,
+        ...(Array.isArray(destination.image_urls) ? destination.image_urls : []),
+        ...imageRows.map((row) => row.image_url),
+      ].filter(Boolean)
       await query('DELETE FROM destinations WHERE id = $1', [id])
+      await destroyCloudinaryUrls(urls).catch((cleanupErr) =>
+        console.error(`${LOG} Cloudinary cleanup failed for destination ${id}:`, cleanupErr.message)
+      )
     } else {
       await query(
         `UPDATE destinations
