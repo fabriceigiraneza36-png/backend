@@ -760,7 +760,7 @@ const remove = async (req, res, next) => {
 
     const country = existingRows[0];
     const destinationRows = await query(
-      `SELECT id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url FROM destinations WHERE country_id = $1`,
+      `SELECT id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url, attractions FROM destinations WHERE country_id = $1`,
       [id]
     ).catch(() => ({ rows: [] }));
     const destinationImageRows = destinationRows.rows.length
@@ -774,6 +774,7 @@ const remove = async (req, res, next) => {
       ...destinationRows.rows.flatMap((d) => [
         d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
         ...(Array.isArray(d.image_urls) ? d.image_urls : []),
+        ...(() => { try { const a = Array.isArray(d.attractions) ? d.attractions : JSON.parse(d.attractions || '[]'); return a.map((item) => item?.imageUrl || item?.image_url || item?.image).filter(Boolean); } catch { return []; } })(),
       ]),
       ...destinationImageRows.rows.map((x) => x.image_url),
     ].filter(Boolean);
