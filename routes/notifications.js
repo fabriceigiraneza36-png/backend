@@ -609,6 +609,7 @@ router.post(
         image_url,
         expires_at,
         metadata      = {},
+        send_email    = true,
       } = req.body;
 
       if (!title?.trim())
@@ -671,7 +672,7 @@ router.post(
       emitNotification(req, notif);
 
       // ── Send email notification respecting user preferences ──────────────
-      if (sendEmail) {
+      if (send_email && sendEmail) {
         try {
           if (target_scope === "individual") {
             const recipientEmail = notif.user_email || user_email;
