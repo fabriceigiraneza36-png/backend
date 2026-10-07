@@ -798,11 +798,11 @@ exports.create = async (req, res, next) => {
     }
 
     const bookingNumber = generateBookingNumber();
-    // The booking form already establishes the traveller's active request.
-    // Do not send a second redundant "confirm your booking" email.
-    const verificationToken = null;
-    const tokenExpiry = null;
-    const emailVerified = true;
+    // The branded booking email is the single source of traveller confirmation.
+    // The dashboard notification is informational only and never performs confirmation.
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const tokenExpiry = new Date(Date.now() + VERIFY_EXPIRY_H * 60 * 60 * 1000);
+    const emailVerified = false;
 
     const { rows } = await query(
       `INSERT INTO bookings (
@@ -915,10 +915,10 @@ exports.create = async (req, res, next) => {
       notifyUserBookingEvent({
         user: { id: req.user?.id || body.user_id || null, email: req.user?.email || body.email },
         booking: full,
-        title: "Booking request received",
-        message: `We received your booking request for ${tripName(full)}. Our travel team will review it and contact you within 24 hours.`,
-        actionUrl: "/my-bookings",
-        actionLabel: "View my booking",
+        title: "Please confirm your booking request",
+        message: `We received your booking request for ${tripName(full)}. Please open the confirmation email sent to your inbox and click its confirmation button. This dashboard notification does not contain a confirmation link.`,
+        actionUrl: null,
+        actionLabel: null,
         priority: "normal",
       }),
       "notifyUserBookingEvent(received)",
@@ -956,9 +956,39 @@ exports.create = async (req, res, next) => {
 ═════════════════════════════════════════════════════════════════════ */
 exports.verifyEmail = async (req, res) => {
   const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
-  // Legacy endpoint retained only so old links fail safely. New bookings no
-  // longer use email verification and never generate verification emails.
-  return res.redirect(`${frontendUrl}/booking/verify?status=not_required`);
+  const token = String(req.params.token || "").trim();
+
+  if (!token) return res.redirect(`${frontendUrl}/booking/verify?status=invalid`);
+
+  try {
+    const { rows } = await query(
+      `SELECT id FROM bookings
+         WHERE verification_token = $1
+           AND email_verified = false
+           AND verification_token_exp IS NOT NULL
+           AND verification_token_exp > NOW()
+         LIMIT 1`,
+      [token],
+    );
+
+    if (!rows[0]) return res.redirect(`${frontendUrl}/booking/verify?status=expired_or_invalid`);
+
+    await query(
+      `UPDATE bookings
+          SET email_verified = true,
+              email_verified_at = NOW(),
+              verification_token = NULL,
+              verification_token_exp = NULL,
+              updated_at = NOW()
+        WHERE id = $1`,
+      [rows[0].id],
+    );
+
+    return res.redirect(`${frontendUrl}/booking/verify?status=confirmed&bookingId=${encodeURIComponent(rows[0].id)}`);
+  } catch (err) {
+    logger.error("[Bookings] verifyEmail:", err.message);
+    return res.redirect(`${frontendUrl}/booking/verify?status=error`);
+  }
 };
 
 /* ═════════════════════════════════════════════════════════════════════
