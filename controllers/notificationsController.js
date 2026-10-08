@@ -458,12 +458,13 @@ const notifyBookingCreated = async (booking, user) => {
     userEmail: user?.email,
     type: "booking_created",
     category: "booking",
-    title: "Booking Received! 🎉",
-    message: `Your booking ${booking?.booking_number || ""} is pending review.`,
+    title: `Congratulations ${user?.full_name || user?.name || booking?.full_name || "traveller"}! 🎉`,
+    message: `Your booking ${booking?.booking_number ? `(${booking.booking_number}) ` : ""}has been received successfully and is pending review.`,
     actionUrl: "/my-bookings",
     actionLabel: "Track Booking",
     priority: "normal",
     actor: user,
+    skipUserEmail: true,
   });
   await notifyAdminsImmediately({
     type: "booking_created",
@@ -615,6 +616,7 @@ const notifyAdminMessage = async (conversationId, user, admin, messageBody) => {
     actionUrl: conversationId ? `/messages?conversationId=${encodeURIComponent(conversationId)}` : "/messages",
     actionLabel: "Open message",
     actor: admin,
+    skipUserEmail: true,
     metadata: { conversationId: conversationId || null },
   });
 };
@@ -627,17 +629,18 @@ const notifyContactMessage = async (contact, user) => {
     userEmail: user?.email,
     type: "contact_message",
     category: "contact",
-    title: "Message received 💬",
-    message: "We got your message and will reply within 24 hours.",
+    title: `Thanks ${user?.name || user?.full_name || "for contacting Altuvera"}! 💬`,
+    message: "Your contact message was received. Our team will review it and get back to you.",
     actionUrl: "/contact",
-    actionLabel: "View",
+    actionLabel: "View message",
     actor: user,
+    skipUserEmail: true,
   });
   await notifyAdminsImmediately({
     type: "contact_message",
     category: "contact",
-    title: "New contact enquiry 💬",
-    message: `${user?.name || user?.email || "A visitor"} sent a new contact message${contact?.subject ? ` about "${contact.subject}"` : ""}.`,
+    title: `New contact message from ${user?.name || user?.full_name || user?.email || "a visitor"} 💬`,
+    message: `${user?.name || user?.full_name || user?.email || "A visitor"} has sent a contact message${contact?.subject ? ` about "${contact.subject}"` : ""}. Open it to review and reply.`,
     actionUrl: contactId ? `/contact?messageId=${encodeURIComponent(contactId)}` : "/contact",
     actionLabel: "Open message",
     metadata: { contactId },
