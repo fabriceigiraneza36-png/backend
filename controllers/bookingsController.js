@@ -911,18 +911,9 @@ exports.create = async (req, res, next) => {
       asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
     }
     pingAdminNewRequest(full);
-    asyncNoThrow(
-      notifyUserBookingEvent({
-        user: { id: req.user?.id || body.user_id || null, email: req.user?.email || body.email },
-        booking: full,
-        title: "Please confirm your booking request",
-        message: `We received your booking request for ${tripName(full)}. Please open the confirmation email sent to your inbox and click its confirmation button. This dashboard notification does not contain a confirmation link.`,
-        actionUrl: null,
-        actionLabel: null,
-        priority: "normal",
-      }),
-      "notifyUserBookingEvent(received)",
-    );
+    // Intentionally do not send a second notification email here.
+    // The branded sendBookingReceivedEmail above is the sole traveller booking-request email.
+
 
     await logActivity(
       booking.id,
