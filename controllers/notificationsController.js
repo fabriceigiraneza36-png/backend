@@ -484,6 +484,22 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
   const hasSpecialRequests = Boolean(booking?.special_requests);
   const actionPath = `/packages?packageId=${encodeURIComponent(booking?.package_id || pkg?.id || "")}&requestId=${encodeURIComponent(booking?.id || "")}`;
 
+  // Package requests must also create a traveller-facing notification. The
+  // booking route already sends the receipt email, but previously this helper
+  // only notified admins, leaving authenticated users with no in-app alert.
+  const userNotif = await createNotificationInternal({
+    userId: booking?.user_id || null,
+    userEmail: booking?.email || null,
+    type: "package_request_created",
+    category: "package",
+    title: "Package request received 📦",
+    message: `Your request for "${packageTitle}" was received and is pending review.`,
+    actionUrl: "/my-bookings",
+    actionLabel: "Track request",
+    priority: "normal",
+    req,
+  });
+
   const notif = await createNotificationInternal({
     type: "package_request",
     category: "package",
@@ -534,7 +550,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
     </div>`,
   ).catch((err) => logger.warn("[Notifications] package admin email failed:", err.message));
 
-  return notif;
+  return userNotif || notif;
 };
 /* Review posted — notify the user + aggregate to admins */
 const notifyReviewPosted = async (review, user) => {
