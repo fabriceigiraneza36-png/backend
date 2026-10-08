@@ -530,6 +530,32 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
       accommodation_preference, trip_style, budget_range,
     } = req.body
 
+    // Ensure the legacy bookings table has every column used by the package-request flow.
+    // Older production schemas may predate package-specific requests.
+    const bookingColumns = [
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_number TEXT`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS destination_id INTEGER`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS package_id INTEGER`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS full_name TEXT`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS email TEXT`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS phone TEXT`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS travel_date DATE`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS return_date DATE`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS number_of_travelers INTEGER DEFAULT 1`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS number_of_adults INTEGER DEFAULT 1`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS number_of_children INTEGER DEFAULT 0`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS special_requests TEXT`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'pending'`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_type TEXT DEFAULT 'custom'`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'website'`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
+    ];
+    for (const sql of bookingColumns) {
+      await db(sql);
+    }
+
     // Load package
     const pkg = await db(
       `SELECT id, title, price, currency, destination_id, is_published, cover_image_url
@@ -709,7 +735,9 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to create package booking',
-      details: process.env.NODE_ENV !== 'production' ? err.message : undefined,
+      // Keep the production response safe but actionable; full SQL details stay in server logs.
+      code: err.code || undefined,
+      details: process.env.NODE_ENV !== 'production' ? err.message : 'The request could not be saved. Please retry; if it continues, contact support with the time of the attempt.',
     })
   }
 })
