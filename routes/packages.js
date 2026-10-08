@@ -104,6 +104,8 @@ const ensurePackagesSchema = async () => {
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS currency      VARCHAR(10) DEFAULT 'USD'`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS price         NUMERIC(12,2)`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS cover_image_url TEXT`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS category TEXT`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`,
     ]
     for (const sql of cols) {
       await db(sql).catch(() => {})
@@ -147,7 +149,19 @@ router.get('/', optionalAuth, async (req, res) => {
   try {
     await ensurePackagesSchema()
 
-    const { page = 1, limit = 10, sort = 'featured', destination } = req.query
+    const {
+      page = 1,
+      limit = 10,
+      sort = 'featured',
+      sortBy,
+      order,
+      destination,
+      search,
+      category,
+      duration,
+      minPrice,
+      maxPrice,
+    } = req.query
     const parsedLimit  = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100)
     const parsedPage   = Math.max(parseInt(page, 10) || 1, 1)
     const parsedOffset = (parsedPage - 1) * parsedLimit
@@ -165,15 +179,47 @@ router.get('/', optionalAuth, async (req, res) => {
     if (destination) {
       vals.push(destination)
       where.push(_hasDestinationId
-        ? `p.destination_id = $${vals.length}`
-        : `p.destination = $${vals.length}`)
+        ? `p.destination_id = ${vals.length}`
+        : `p.destination = ${vals.length}`)
+    }
+
+    if (search) {
+      vals.push(`%${String(search).trim()}%`)
+      where.push(`(p.title ILIKE ${vals.length} OR COALESCE(p.description, '') ILIKE ${vals.length})`)
+    }
+    if (category) {
+      vals.push(String(category).trim())
+      where.push(`LOWER(COALESCE(p.category, '')) = LOWER(${vals.length})`)
+    }
+    if (duration) {
+      const maxDays = parseInt(duration, 10)
+      if (Number.isFinite(maxDays) && maxDays > 0) {
+        vals.push(maxDays)
+        where.push(`COALESCE(p.duration_days, 0) <= ${vals.length}`)
+      }
+    }
+    if (minPrice !== undefined && minPrice !== '') {
+      vals.push(Number(minPrice))
+      where.push(`COALESCE(p.price, 0) >= ${vals.length}`)
+    }
+    if (maxPrice !== undefined && maxPrice !== '') {
+      vals.push(Number(maxPrice))
+      where.push(`COALESCE(p.price, 0) <= ${vals.length}`)
     }
 
     let orderBy = 'p.is_featured DESC NULLS LAST, p.created_at DESC'
-    if (sort === 'price_asc')  orderBy = 'COALESCE(p.price, 0) ASC,  p.id ASC'
-    if (sort === 'price_desc') orderBy = 'COALESCE(p.price, 0) DESC, p.id DESC'
-    if (sort === 'latest')     orderBy = 'p.created_at DESC'
-    if (sort === 'popular')    orderBy = 'COALESCE(p.booking_count,0) DESC, COALESCE(p.view_count,0) DESC'
+    const effectiveSort = sortBy || sort
+    if (effectiveSort === 'price_asc' || (effectiveSort === 'price' && order === 'asc')) {
+      orderBy = 'COALESCE(p.price, 0) ASC, p.id ASC'
+    } else if (effectiveSort === 'price_desc' || (effectiveSort === 'price' && order === 'desc')) {
+      orderBy = 'COALESCE(p.price, 0) DESC, p.id DESC'
+    } else if (effectiveSort === 'latest' || (effectiveSort === 'created_at' && order === 'desc')) {
+      orderBy = 'p.created_at DESC'
+    } else if (effectiveSort === 'popular' || (effectiveSort === 'view_count' && order === 'desc')) {
+      orderBy = 'COALESCE(p.booking_count,0) DESC, COALESCE(p.view_count,0) DESC'
+    } else if (effectiveSort === 'sort_order') {
+      orderBy = 'COALESCE(p.sort_order, 0) ASC, p.is_featured DESC NULLS LAST, p.created_at DESC'
+    }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
 
