@@ -1096,8 +1096,7 @@ router.post("/conversations", optionalAuth, async (req, res) => {
 
     if (firstMessage && String(firstMessage).trim()) {
       const callerIsAdmin = req.user && isAdminUser(req);
-
-      await insertMessage({
+      const msg = await insertMessage({
         conversationId: conv.id,
         senderType:     callerIsAdmin ? "admin" : "user",
         senderId:       req.user?.id      || null,
@@ -1106,6 +1105,25 @@ router.post("/conversations", optionalAuth, async (req, res) => {
         senderAvatar:   req.user?.avatar_url || null,
         body:           String(firstMessage).trim(),
       });
+
+      // Keep the existing real-time inbox in sync for first-message creation.
+      try {
+        const io = req.app.get("io");
+        if (io) {
+          const shapedMessage = reshapeMessage(msg);
+          const shapedConversation = reshapeConversation(conversation);
+          io.to(`conversation-${conv.id}`).emit("msg:message", shapedMessage);
+          if (!callerIsAdmin) {
+            io.to("admin-room").emit("msg:new-from-user", {
+              conversationId: conv.id,
+              message: shapedMessage,
+              conversation: shapedConversation,
+            });
+          }
+        }
+      } catch (socketErr) {
+        logger.warn("[Messages] First-message socket broadcast skipped:", socketErr.message);
+      }
     }
 
     return res.json({ success: true, data: reshapeConversation(conversation) });
