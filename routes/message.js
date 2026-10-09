@@ -1024,6 +1024,9 @@ router.post("/conversations", optionalAuth, async (req, res) => {
       priority,
       firstMessage,
       targetUserId,
+      contextType,
+      contextId,
+      contextName,
     } = req.body;
 
     const ipAddress = req.ip;
@@ -1060,12 +1063,40 @@ router.post("/conversations", optionalAuth, async (req, res) => {
       priority:      priority  || "normal",
       ipAddress,
       userAgent,
+      metadata: (() => {
+        const type = ["country", "destination", "package"].includes(String(contextType || "").toLowerCase())
+          ? String(contextType).toLowerCase()
+          : null;
+        const name = String(contextName || "").trim().slice(0, 180);
+        const id = contextId == null || contextId === "" ? null : String(contextId).slice(0, 80);
+        return type && name ? { context: { type, id, name, selectedBy: "user" } } : {};
+      })(),
     });
+
+    // Preserve the selected subject on both new and existing conversations.
+    // The JSONB merge is additive, so unrelated conversation metadata survives.
+    const selectedContext = ["country", "destination", "package"].includes(String(contextType || "").toLowerCase())
+      && String(contextName || "").trim();
+    let conversation = conv;
+    if (selectedContext) {
+      const type = String(contextType).toLowerCase();
+      const name = String(contextName).trim().slice(0, 180);
+      const id = contextId == null || contextId === "" ? null : String(contextId).slice(0, 80);
+      const updated = await query(
+        `UPDATE conversations
+            SET metadata = COALESCE(metadata, '{}'::jsonb) || $1::jsonb,
+                subject = $2,
+                updated_at = NOW()
+          WHERE id = $3
+          RETURNING *`,
+        [JSON.stringify({ context: { type, id, name, selectedBy: "user" } }), String(subject || "").trim().slice(0, 255) || `About ${type}: ${name}`.slice(0, 255), conv.id],
+      );
+      conversation = updated.rows[0] || conv;
+    }
 
     if (firstMessage && String(firstMessage).trim()) {
       const callerIsAdmin = req.user && isAdminUser(req);
-
-      await insertMessage({
+      const msg = await insertMessage({
         conversationId: conv.id,
         senderType:     callerIsAdmin ? "admin" : "user",
         senderId:       req.user?.id      || null,
@@ -1074,9 +1105,33 @@ router.post("/conversations", optionalAuth, async (req, res) => {
         senderAvatar:   req.user?.avatar_url || null,
         body:           String(firstMessage).trim(),
       });
+      const latestConversation = await query(
+        "SELECT * FROM conversations WHERE id = $1 LIMIT 1",
+        [conv.id],
+      );
+      if (latestConversation.rows[0]) conversation = latestConversation.rows[0];
+
+      // Keep the existing real-time inbox in sync for first-message creation.
+      try {
+        const io = req.app.get("io");
+        if (io) {
+          const shapedMessage = reshapeMessage(msg);
+          const shapedConversation = reshapeConversation(conversation);
+          io.to(`conversation-${conv.id}`).emit("msg:message", shapedMessage);
+          if (!callerIsAdmin) {
+            io.to("admin-room").emit("msg:new-from-user", {
+              conversationId: conv.id,
+              message: shapedMessage,
+              conversation: shapedConversation,
+            });
+          }
+        }
+      } catch (socketErr) {
+        logger.warn("[Messages] First-message socket broadcast skipped:", socketErr.message);
+      }
     }
 
-    return res.json({ success: true, data: reshapeConversation(conv) });
+    return res.json({ success: true, data: reshapeConversation(conversation) });
   } catch (err) {
     logger.error(`[Messages] POST /conversations: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
