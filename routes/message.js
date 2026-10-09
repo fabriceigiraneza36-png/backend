@@ -1089,7 +1089,7 @@ router.post("/conversations", optionalAuth, async (req, res) => {
                 updated_at = NOW()
           WHERE id = $3
           RETURNING *`,
-        [JSON.stringify({ context: { type, id, name, selectedBy: "user" } }), `About ${type}: ${name}`.slice(0, 255), conv.id],
+        [JSON.stringify({ context: { type, id, name, selectedBy: "user" } }), String(subject || "").trim().slice(0, 255) || `About ${type}: ${name}`.slice(0, 255), conv.id],
       );
       conversation = updated.rows[0] || conv;
     }
