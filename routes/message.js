@@ -1105,6 +1105,11 @@ router.post("/conversations", optionalAuth, async (req, res) => {
         senderAvatar:   req.user?.avatar_url || null,
         body:           String(firstMessage).trim(),
       });
+      const latestConversation = await query(
+        "SELECT * FROM conversations WHERE id = $1 LIMIT 1",
+        [conv.id],
+      );
+      if (latestConversation.rows[0]) conversation = latestConversation.rows[0];
 
       // Keep the existing real-time inbox in sync for first-message creation.
       try {
