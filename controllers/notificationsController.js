@@ -141,7 +141,9 @@ const emitNotification = (req, notif) => {
     } else if (user_id) {
       io.to(`user-${user_id}`).emit("notification:new", notif);
     }
-    if (target_scope !== "admin") {
+    // An admin's outgoing chat message creates a user-facing notification.
+    // Do not echo it back as a new incoming-message alert for the admin.
+    if (target_scope !== "admin" && notif.type !== "admin_message") {
       io.to("admins").emit("notification:admin-ping", notif);
     }
   } catch (err) {
