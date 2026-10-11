@@ -205,6 +205,51 @@ const tripName = (b) =>
   safe(b.destination_name || b.service_name || b.package_name || b.package_title ||
     b.destination || b.service || b.package, "Your Trip");
 
+const getDestinationImages = (booking) => {
+  const details = booking?.destination_details || booking?.destinationDetails || {};
+  const readArray = (value) => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string") {
+      try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : []; } catch { return []; }
+    }
+    return [];
+  };
+  const normalise = (value) => {
+    if (typeof value === "string") return value.trim();
+    if (value && typeof value === "object") return String(value.url || value.image_url || value.imageUrl || "").trim();
+    return "";
+  };
+  const hero = readArray(details.hero_images || details.heroImages || booking?.hero_images || booking?.heroImages);
+  const banners = readArray(details.banner_images || details.bannerImages || booking?.banner_images || booking?.bannerImages);
+  const gallery = readArray(details.gallery_images || details.galleryImages || details.image_urls || booking?.gallery_images || booking?.images);
+  const candidates = [...hero, ...banners, ...gallery,
+    booking?.destination_image_url, booking?.destination_image, booking?.country_image_url,
+    details.hero_image, details.image_url, details.cover_image_url];
+  return [...new Set(candidates.map(normalise).filter((url) => {
+    try { return ["http:", "https:"].includes(new URL(url).protocol); } catch { return false; }
+  }))];
+};
+
+const destinationHeroImage = (booking) => getDestinationImages(booking)[0] || ENV.heroImage;
+
+const destinationGalleryMarkup = (booking) => {
+  const allImages = getDestinationImages(booking);
+  const images = (allImages.length > 1 ? allImages.slice(1, 4) : allImages.slice(0, 1));
+  if (!images.length) return "";
+  // Email clients generally block CSS/JavaScript animation. Use a resilient
+  // three-frame visual strip in the confirmation email instead of a broken slideshow.
+  return `
+    <div style="margin:22px 0 26px;">
+      <p style="margin:0 0 10px;font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:${T.g700};">Your destination at a glance</p>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="table-layout:fixed;border-collapse:separate;border-spacing:5px 0;">
+        <tr>${images.map((url, index) => `
+          <td style="width:${100 / images.length}%;padding:0;vertical-align:top;">
+            <img src="${esc(url)}" alt="${esc(tripName(booking))} view ${index + 1}" style="display:block;width:100%;height:118px;object-fit:cover;border-radius:10px;background:#e2e8f0;" />
+          </td>`).join("")}</tr>
+      </table>
+    </div>`;
+};
+
 /* ════════════════════════════════════════════════════════════════════════════
    DESIGN TOKENS
 ════════════════════════════════════════════════════════════════════════════ */
@@ -697,6 +742,7 @@ const sendBookingReceivedEmail = async (booking) => {
   const confirmationUrl = booking.verification_token ? buildVerificationLink(booking.verification_token) : null;
 
   const html = shell({
+    heroImage: destinationHeroImage(booking),
     preheader: `Action required: confirm your booking request for ${dest}.`,
     heroBadge: statusPill("pending"),
     heroTitle: "Please confirm your booking request",
@@ -752,17 +798,20 @@ const sendAdminBookingNotification = async (booking) => {
   const wa = phone !== "—" ? phone.replace(/\D/g, "") : null;
   const adminUrl = `${ENV.frontendUrl}/admin/bookings`;
   const travelers = Number(booking.number_of_travelers) || 1;
+  const emailVerified = booking.email_verified === true || booking.email_verified === "true" || booking.email_verified === 1;
 
   const html = shell({
-    preheader: `${name} has confirmed their booking for ${dest} (${safe(booking.booking_number)})`,
+    preheader: `${name} submitted a booking request for ${dest} (${safe(booking.booking_number)}). ${emailVerified ? "Email verified; ready for review." : "Traveller email confirmation is pending."}`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(245,158,11,.25);border:1.5px solid rgba(251,191,36,.6);
       border-radius:100px;color:#fef3c7;font-family:'Inter',sans-serif;
       font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
-      🔔 Action Required
+      🔔 New Request
     </span>`,
-    heroTitle: "Booking Confirmed by Traveller",
-    heroSubtitle: `${name} has confirmed their booking for ${dest}. The request is ready for your review and planning.`,
+    heroTitle: "New Booking Request",
+    heroSubtitle: emailVerified
+      ? `${name} submitted a request for ${dest} and verified their email. Review the travel details and follow up with the traveller.`
+      : `${name} submitted a request for ${dest}. The traveller still needs to confirm their email before the request is fully verified.`,
     body: `
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
         <tr>
@@ -770,7 +819,7 @@ const sendAdminBookingNotification = async (booking) => {
             ["Reference", safe(booking.booking_number)],
             ["Travelers", String(travelers)],
             ["Source", safe(booking.source, "website")],
-            ["Verified", "✓ Yes"],
+            ["Email verified", emailVerified ? "✓ Yes" : "Pending"],
           ].map(([l, v]) => `
           <td style="width:25%;padding:0 4px;vertical-align:top;">
             <div style="background:${T.g50};border:1px solid ${T.g200};
@@ -866,9 +915,10 @@ const sendBookingConfirmation = async (booking) => {
     heroBadge: statusPill("confirmed"),
     heroTitle: "Your adventure is confirmed",
     heroSubtitle: `Pack your bags — ${dest} is waiting for you.`,
-    heroImage: booking.destination_image_url || booking.country_image_url || ENV.heroImage,
+    heroImage: destinationHeroImage(booking),
     body: `
       ${greet(booking.full_name)}
+      ${destinationGalleryMarkup(booking)}
       ${para(`Wonderful news — your safari to <strong style="color:${T.g700};">${esc(dest)}</strong>
         has been <strong>officially confirmed</strong>. We're excited to be part of your journey.`)}
       ${days !== null && days >= 0 ? countdownBox(days, dest, booking.travel_date) : ""}
