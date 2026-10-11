@@ -260,17 +260,10 @@ async function listConversations({
     params.push(status);
   }
 
-  /* User filter — for non-admin users to see only their own conversations */
-  if (userFilter && userFilter.user_id) {
-    const userParam = p++;
-    conditions.push(`(
-      c.user_id = ${userParam}
-      OR EXISTS (
-        SELECT 1 FROM message_group_members mgm
-        WHERE mgm.group_id = c.group_id
-          AND mgm.user_id = ${userParam}
-      )
-    )`);
+  /* Traveler inbox is scoped to the single direct conversation assigned
+     to their account. Admins pass no userFilter and keep their full inbox. */
+  if (userFilter && userFilter.user_id != null) {
+    conditions.push(`c.user_id = ${p++}`);
     params.push(userFilter.user_id);
   }
 
