@@ -303,6 +303,9 @@ exports.ensureDestinationSchema = async () => {
        distance_from_airport_km NUMERIC(8,2),
        image_url                TEXT,
        image_urls               TEXT[] DEFAULT '{}'::TEXT[],
+       hero_images              TEXT[] DEFAULT '{}'::TEXT[],
+       banner_images            TEXT[] DEFAULT '{}'::TEXT[],
+       gallery_images           TEXT[] DEFAULT '{}'::TEXT[],
        hero_image               TEXT,
        thumbnail_url            TEXT,
        cover_image_url          TEXT,
@@ -365,6 +368,9 @@ exports.ensureDestinationSchema = async () => {
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS nearest_airport    TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS distance_from_airport_km NUMERIC(8,2)`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS image_urls         TEXT[] DEFAULT '{}'::TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS hero_images         TEXT[] DEFAULT '{}'::TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS banner_images       TEXT[] DEFAULT '{}'::TEXT[]`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS gallery_images      TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS hero_image         TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS thumbnail_url      TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS cover_image_url    TEXT`,
@@ -691,6 +697,9 @@ const serialize = (row) => {
 
     images,
     imageUrl:      mainImg,
+    heroImages:    toArr(row.hero_images).slice(0, 3),
+    bannerImages:  toArr(row.banner_images).slice(0, 3),
+    galleryImages: toArr(row.gallery_images),
     heroImage:     row.hero_image      || null,
     thumbnailUrl:  row.thumbnail_url   || null,
     coverImageUrl: row.cover_image_url || null,
@@ -2075,11 +2084,22 @@ exports.create = async (req, res, next) => {
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
     imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
     if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
-    const mediaError = validateDestinationMediaRequirements({
-      imageUrls,
-      attractions: Array.isArray(data.attractions) ? data.attractions : parseJson(data.attractions, []),
-      enforce: data.status !== 'draft' && data.is_active !== false && data.is_active !== 'false',
-    })
+    const newHeroImages = [...new Set(urlsOnly(data.hero_images).filter(isSafeImageUrl))].slice(0, 3)
+    const newBannerImages = [...new Set(urlsOnly(data.banner_images).filter(isSafeImageUrl))].slice(0, 3)
+    const newGalleryImages = [...new Set(urlsOnly(data.gallery_images).filter(isSafeImageUrl))]
+    const enforceMedia = data.status !== 'draft' && data.is_active !== false && data.is_active !== 'false'
+    const usesNewMediaWorkflow = Array.isArray(data.hero_images) || Array.isArray(data.banner_images) || Array.isArray(data.gallery_images)
+    const mediaError = usesNewMediaWorkflow
+      ? (enforceMedia && newHeroImages.length < 1
+          ? 'Add at least one hero image for destination details and booking emails'
+          : enforceMedia && newGalleryImages.length < 3
+            ? 'Add at least 3 gallery images for other destination views'
+            : null)
+      : validateDestinationMediaRequirements({
+          imageUrls,
+          attractions: Array.isArray(data.attractions) ? data.attractions : parseJson(data.attractions, []),
+          enforce: enforceMedia,
+        })
     if (mediaError) return res.status(400).json({ success: false, error: mediaError })
     const mainImg = imageUrls[0] || null
 
@@ -2118,6 +2138,9 @@ exports.create = async (req, res, next) => {
       distance_from_airport_km: toNum(data.distance_from_airport_km),
       image_url: mainImg,
       image_urls: imageUrls,
+      hero_images: newHeroImages,
+      banner_images: newBannerImages,
+      gallery_images: newGalleryImages,
       hero_image: safeMediaValue(data.hero_image),
       thumbnail_url: safeMediaValue(data.thumbnail_url),
       video_url: data.video_url || null,
