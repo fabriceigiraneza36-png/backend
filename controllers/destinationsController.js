@@ -2085,7 +2085,7 @@ exports.create = async (req, res, next) => {
     imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
     if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
     const newHeroImages = [...new Set(urlsOnly(data.hero_images).filter(isSafeImageUrl))].slice(0, 3)
-    const newBannerImages = [...new Set(urlsOnly(data.banner_images).filter(isSafeImageUrl && (url) => !newHeroImages.includes(url)))].slice(0, 3)
+    const newBannerImages = [...new Set(urlsOnly(data.banner_images).filter((url) => isSafeImageUrl(url) && !newHeroImages.includes(url)))].slice(0, 3)
     const newGalleryImages = [...new Set(urlsOnly(data.gallery_images).filter((url) => isSafeImageUrl(url) && !newHeroImages.includes(url) && !newBannerImages.includes(url)))]
     const enforceMedia = data.status !== 'draft' && data.is_active !== false && data.is_active !== 'false'
     const usesNewMediaWorkflow = Array.isArray(data.hero_images) || Array.isArray(data.banner_images) || Array.isArray(data.gallery_images)
