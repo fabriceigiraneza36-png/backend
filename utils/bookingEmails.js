@@ -233,7 +233,8 @@ const getDestinationImages = (booking) => {
 const destinationHeroImage = (booking) => getDestinationImages(booking)[0] || ENV.heroImage;
 
 const destinationGalleryMarkup = (booking) => {
-  const images = getDestinationImages(booking).slice(0, 3);
+  const allImages = getDestinationImages(booking);
+  const images = (allImages.length > 1 ? allImages.slice(1, 4) : allImages.slice(0, 1));
   if (!images.length) return "";
   // Email clients generally block CSS/JavaScript animation. Use a resilient
   // three-frame visual strip in the confirmation email instead of a broken slideshow.
