@@ -1026,6 +1026,15 @@ router.post("/conversations", optionalAuth, async (req, res) => {
       targetUserId,
     } = req.body;
 
+    // Only administrators may create conversations. Users must continue in
+    // the thread opened for them by an administrator.
+    if (!req.user || !isAdminUser(req)) {
+      return res.status(403).json({
+        success: false,
+        message: "Only the Altuvera team can open a conversation. Please use your existing chat.",
+      });
+    }
+
     const ipAddress = req.ip;
     const userAgent = req.get("user-agent") || null;
 
@@ -1087,6 +1096,28 @@ router.post("/conversations", optionalAuth, async (req, res) => {
   }
 });
 
+/* ── DELETE /conversations/:id — admin-only soft delete ─────────────────── */
+router.delete("/conversations/:id", adminProtect, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `UPDATE conversations
+          SET deleted_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING id, user_id`,
+      [req.params.id],
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, message: "Conversation not found" });
+    const io = req.app.get("io");
+    if (io && rows[0].user_id) {
+      io.to(`user-${rows[0].user_id}`).emit("msg:conversation-deleted", { conversationId: rows[0].id });
+    }
+    return res.json({ success: true, message: "Conversation deleted" });
+  } catch (err) {
+    logger.error(`[Messages] DELETE /conversations/:id: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to delete conversation" });
+  }
+});
+
 /* ── GET /conversations/:id ─────────────────────────────────────────────── */
 router.get("/conversations/:id", protect, async (req, res) => {
   try {
@@ -1097,7 +1128,7 @@ router.get("/conversations/:id", protect, async (req, res) => {
 
     /* Users may only see their own conversation */
     if (!isAdminUser(req)) {
-      const ownsConversation = data.user_id && data.user_id === req.user.id;
+      const ownsConversation = data.user_id != null && String(data.user_id) === String(req.user.id);
       let memberOfGroup = false;
       if (data.group_id) {
         const member = await query(
