@@ -1641,7 +1641,11 @@ function setupMessageSockets(io) {
 
       try {
         const convCheck = await query(
-          `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+          `SELECT c.id, c.user_id, c.guest_name, c.guest_email,
+                  u.full_name AS user_full_name, u.email AS user_email
+             FROM conversations c
+             LEFT JOIN users u ON u.id = c.user_id
+            WHERE c.id = $1 AND c.deleted_at IS NULL`,
           [conversationId]
         );
         if (!convCheck.rows[0]) {
@@ -1649,12 +1653,16 @@ function setupMessageSockets(io) {
         }
 
         const socketUser = socket.handshake.auth?.user || socket.user || {};
+        const conversation = convCheck.rows[0];
+        const senderName = socketUser.full_name || socketUser.name ||
+          conversation.user_full_name || conversation.guest_name ||
+          conversation.user_email || conversation.guest_email || "User";
 
         const msg = await insertMessage({
           conversationId,
           senderType:   "user",
           senderId:     socketUser.id       || null,
-          senderName:   socketUser.full_name || socketUser.name || "User",
+          senderName:   senderName,
           senderEmail:  socketUser.email    || null,
           senderAvatar: socketUser.avatar_url || null,
           body:         body.trim(),
@@ -1666,9 +1674,11 @@ function setupMessageSockets(io) {
         // Broadcast to everyone in the room
         io.to(`conversation-${conversationId}`).emit("msg:message", shaped);
 
-        // Notify admins
+        // Notify admins with the traveller's name and the exact conversation target.
         io.to("admin-room").emit("msg:new-from-user", {
           conversationId,
+          senderName,
+          senderEmail: socketUser.email || conversation.user_email || conversation.guest_email || "",
           message: shaped,
         });
 
