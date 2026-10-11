@@ -381,12 +381,24 @@ const pingAdminNewRequest = (booking) => {
       targetRole: "admin",
       type: "booking_created",
       category: category,
-      title: "New booking request",
-      message: `Booking ${booking?.booking_number || ""} from ${booking?.full_name || "a traveller"}${booking?.attraction_name ? ` for ${booking.attraction_name}` : ""}.`,
+      title: `New ${bookingType === "package" ? "package" : bookingType === "service" ? "service" : "destination"} booking request`,
+      message: `${booking?.full_name || "A traveller"} requested ${booking?.destination_name || booking?.package_name || booking?.service_name || booking?.attraction_name || "a trip"} (${booking?.booking_number || "reference pending"}). ${Number(booking?.number_of_travelers) || 1} traveller(s); ${booking?.travel_date ? `travel date ${String(booking.travel_date).slice(0, 10)}` : "dates to be discussed"}. Contact: ${booking?.email || "email not provided"}${booking?.phone ? ` · ${booking.phone}` : ""}. Review the request and follow up with the traveller.`,
       actionUrl: "/bookings",
-      actionLabel: "Review",
+      actionLabel: "Review booking",
       priority: "high",
-      metadata: { bookingNumber: booking?.booking_number || null, bookingType, attractionName: booking?.attraction_name || null },
+      metadata: {
+        bookingNumber: booking?.booking_number || null,
+        bookingType,
+        destinationName: booking?.destination_name || booking?.package_name || booking?.service_name || booking?.attraction_name || null,
+        attractionName: booking?.attraction_name || null,
+        travelDate: booking?.travel_date || null,
+        returnDate: booking?.return_date || null,
+        travelers: Number(booking?.number_of_travelers) || 1,
+        travellerName: booking?.full_name || null,
+        travellerEmail: booking?.email || null,
+        travellerPhone: booking?.phone || null,
+        source: booking?.source || "website",
+      },
     }).catch(() => {});
   } catch {
     // non-fatal
