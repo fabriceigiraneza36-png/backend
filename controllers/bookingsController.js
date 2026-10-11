@@ -599,7 +599,7 @@ const getBookingDetail = async (identifier, type = "id") => {
       `SELECT b.*,
               COALESCE(d.name, b.destination_name) AS destination_name,
               d.slug AS destination_slug,
-              COALESCE(d.image_url, d.thumbnail_url) AS destination_image,
+              COALESCE(to_jsonb(d)->'hero_images'->>0, d.hero_image, d.image_url, d.thumbnail_url) AS destination_image,
               c.slug AS country_slug,
               s.title AS service_name,
               s.slug AS service_slug,
