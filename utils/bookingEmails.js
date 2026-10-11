@@ -797,17 +797,20 @@ const sendAdminBookingNotification = async (booking) => {
   const wa = phone !== "—" ? phone.replace(/\D/g, "") : null;
   const adminUrl = `${ENV.frontendUrl}/admin/bookings`;
   const travelers = Number(booking.number_of_travelers) || 1;
+  const emailVerified = booking.email_verified === true || booking.email_verified === "true" || booking.email_verified === 1;
 
   const html = shell({
-    preheader: `${name} has confirmed their booking for ${dest} (${safe(booking.booking_number)})`,
+    preheader: `${name} submitted a booking request for ${dest} (${safe(booking.booking_number)}). ${emailVerified ? "Email verified; ready for review." : "Traveller email confirmation is pending."}`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(245,158,11,.25);border:1.5px solid rgba(251,191,36,.6);
       border-radius:100px;color:#fef3c7;font-family:'Inter',sans-serif;
       font-size:11.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;">
-      🔔 Action Required
+      🔔 New Request
     </span>`,
-    heroTitle: "Booking Confirmed by Traveller",
-    heroSubtitle: `${name} has confirmed their booking for ${dest}. The request is ready for your review and planning.`,
+    heroTitle: "New Booking Request",
+    heroSubtitle: emailVerified
+      ? `${name} submitted a request for ${dest} and verified their email. Review the travel details and follow up with the traveller.`
+      : `${name} submitted a request for ${dest}. The traveller still needs to confirm their email before the request is fully verified.`,
     body: `
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;">
         <tr>
@@ -815,7 +818,7 @@ const sendAdminBookingNotification = async (booking) => {
             ["Reference", safe(booking.booking_number)],
             ["Travelers", String(travelers)],
             ["Source", safe(booking.source, "website")],
-            ["Verified", "✓ Yes"],
+            ["Email verified", emailVerified ? "✓ Yes" : "Pending"],
           ].map(([l, v]) => `
           <td style="width:25%;padding:0 4px;vertical-align:top;">
             <div style="background:${T.g50};border:1px solid ${T.g200};
