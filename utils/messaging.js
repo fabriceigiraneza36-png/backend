@@ -512,7 +512,7 @@ async function toggleReaction({ messageId, userId, emoji, add = true }) {
 async function changeConversationStatus({ conversationId, status }) {
   if (!conversationId) throw Object.assign(new Error("conversationId is required"), { status: 400 });
 
-  const allowed = ["open", "pending", "closed", "resolved"];
+  const allowed = ["open", "pending", "closed", "resolved", "archived"];
   if (!allowed.includes(status)) {
     throw Object.assign(
       new Error(`Invalid status. Allowed: ${allowed.join(", ")}`),
