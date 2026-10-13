@@ -407,7 +407,7 @@ const toggleReaction = typeof _toggleReaction === "function"
 const changeConversationStatus = typeof _changeConversationStatus === "function"
   ? _changeConversationStatus
   : async ({ conversationId, status } = {}) => {
-      const VALID = new Set(["open", "closed", "pending", "resolved"]);
+      const VALID = new Set(["open", "closed", "pending", "resolved", "archived"]);
       if (!VALID.has(status)) {
         const err = new Error(`Invalid status: ${status}. Must be one of: ${[...VALID].join(", ")}`);
         err.status = 400;
@@ -818,6 +818,7 @@ router.post("/groups", adminProtect, async (req, res) => {
       const shaped = reshapeMessage(message);
       const io = req.app.get("io");
       if (io) {
+        io.to(`conv:${conv.id}`).emit("msg:message", shaped);
         io.to(`conversation-${conv.id}`).emit("msg:message", shaped);
         io.to(`group-${group.id}`).emit("msg:group-message", {
           conversationId: conv.id, groupId: group.id, groupName: name, message: shaped,
@@ -921,6 +922,7 @@ router.post("/groups/:id/messages", adminProtect, async (req, res) => {
     const shaped = reshapeMessage(msg);
     const io = req.app.get("io");
     if (io) {
+      io.to(`conv:${group.conversation_id}`).emit("msg:message", shaped);
       io.to(`conversation-${group.conversation_id}`).emit("msg:message", shaped);
       io.to(`group-${groupId}`).emit("msg:group-message", {
         conversationId: group.conversation_id, groupId, groupName: group.name, message: shaped,
@@ -1043,6 +1045,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
       try {
         const io = req.app.get("io");
         if (io) {
+          io.to(`conv:${conv.id}`).emit("msg:message", reshapeMessage(msg));
           io.to(`conversation-${conv.id}`).emit("msg:message", reshapeMessage(msg));
           io.to(`user-${uid}`).emit("msg:new-from-admin", {
             conversationId: conv.id,
@@ -1466,7 +1469,7 @@ router.patch("/conversations/:id/read", protect, async (req, res) => {
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${req.params.id}`).emit("msg:conversation-updated", {
+        io.to(`conv:${req.params.id}`).emit("msg:conversation-updated", {
           id:            req.params.id,
           unreadAdmin:   readerType === "admin" ? 0 : undefined,
           unreadUser:    readerType === "user" ? 0 : undefined,
@@ -1496,7 +1499,7 @@ router.patch("/conversations/:id/status", adminProtect, async (req, res) => {
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${req.params.id}`).emit(
+        io.to(`conv:${req.params.id}`).emit(
           "msg:conversation-updated",
           reshapeConversation(conv),
         );
@@ -1548,7 +1551,7 @@ router.patch(
       try {
         const io = req.app.get("io");
         if (io) {
-          io.to(`conversation-${cid}`).emit("msg:reaction", {
+          io.to(`conv:${cid}`).emit("msg:reaction", {
             messageId: mid,
             reactions,
             emoji,
@@ -1605,7 +1608,10 @@ router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
     );
     const shaped = reshapeMessage(rows[0]);
     const io = req.app.get("io");
-    if (io) io.to(`conversation-${cid}`).emit("msg:message-edited", shaped);
+    if (io) {
+      io.to(`conv:${cid}`).emit("msg:message-edited", shaped);
+      io.to(`conversation-${cid}`).emit("msg:message-edited", shaped);
+    }
     return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] PATCH message: ${err.message}`);
@@ -1644,7 +1650,10 @@ router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => 
     );
     const shaped = reshapeMessage(rows[0]);
     const io = req.app.get("io");
-    if (io) io.to(`conversation-${cid}`).emit("msg:message-deleted", shaped);
+    if (io) {
+      io.to(`conv:${cid}`).emit("msg:message-deleted", shaped);
+      io.to(`conversation-${cid}`).emit("msg:message-deleted", shaped);
+    }
     return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] DELETE message: ${err.message}`);
@@ -1682,7 +1691,10 @@ for (const [pathSuffix, column, eventName] of [
       );
       const shaped = reshapeMessage(rows[0]);
       const io = req.app.get("io");
-      if (io) io.to(`conversation-${cid}`).emit(eventName, shaped);
+      if (io) {
+        io.to(`conv:${cid}`).emit(eventName, shaped);
+        io.to(`conversation-${cid}`).emit(eventName, shaped);
+      }
       return res.json({ success: true, data: shaped });
     } catch (err) {
       logger.error(`[Messages] PATCH ${pathSuffix}: ${err.message}`);
