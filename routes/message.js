@@ -1291,7 +1291,8 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     }
 
     const convCheck = await query(
-      `SELECT id, user_id, group_id FROM conversations
+      `SELECT id, user_id, group_id, session_id, guest_name, guest_email, subject, status
+         FROM conversations
         WHERE id = $1 AND deleted_at IS NULL`,
       [id],
     );
@@ -1329,20 +1330,97 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       replyToId:      replyToId || null,
     });
 
+    const serialized = reshapeMessage(msg);
+    const conv = convCheck.rows[0];
+
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${id}`).emit("msg:message", reshapeMessage(msg));
-        if (!isAdminReq && convCheck.rows[0].user_id) {
-          io.to(`user-${convCheck.rows[0].user_id}`).emit("msg:new-from-admin", {
-            conversationId: id,
-            message:        reshapeMessage(msg),
+        // Socket.IO uses conv:/session: rooms; keep HTTP fallback sends just as live.
+        io.to(`conv:${id}`).emit("msg:message", serialized);
+        if (conv.session_id) io.to(`session:${conv.session_id}`).emit("msg:message", serialized);
+        if (conv.user_id) io.to(`user-${conv.user_id}`).emit("msg:message", serialized);
+
+        if (!isAdminReq) {
+          const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+          const senderEmail = req.user.email || "";
+          io.to("admins").emit("msg:new-from-user", {
+            conversationId: Number(id),
+            sessionId: conv.session_id || null,
+            message: serialized,
+            senderName,
+            senderEmail,
+          });
+          const current = await query(
+            `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+            [id],
+          );
+          if (current.rows[0]) io.to("admins").emit("msg:conversation-updated", reshapeConversation(current.rows[0]));
+        } else if (conv.user_id) {
+          io.to(`user-${conv.user_id}`).emit("msg:new-from-admin", {
+            conversationId: Number(id),
+            message: serialized,
           });
         }
       }
-    } catch (_) { /* silent */ }
+    } catch (socketError) {
+      logger.warn("[Messages] Live message broadcast failed:", socketError.message);
+    }
 
-    return res.json({ success: true, data: reshapeMessage(msg) });
+    // The REST fallback is also responsible for personalized persistent alerts.
+    try {
+      const { createNotificationInternal } = require("../controllers/notificationsController");
+      if (!isAdminReq) {
+        const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+        await createNotificationInternal({
+          userId: null,
+          senderType: "user",
+          senderId: req.user.id,
+          senderName,
+          type: "message_received",
+          category: "message",
+          title: `New message from ${senderName}`,
+          message: String(body).trim().slice(0, 500),
+          actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
+          actionLabel: "Open conversation",
+          priority: "high",
+          targetScope: "role",
+          targetRole: "admin",
+          metadata: { conversationId: Number(id), messageId: msg.id, senderName, senderEmail: req.user.email || "" },
+        });
+      } else if (conv.user_id) {
+        const io = req.app.get("io");
+        const userSocketOpen = io && [...io.sockets.sockets.values()].some(socket =>
+          socket?.data?.userId &&
+          String(socket.data.userId) === String(conv.user_id) &&
+          socket?.data?.messagesPageOpen === true &&
+          String(socket.data.activeConversation || socket.data.conversationId || "") === String(id)
+        );
+        if (!userSocketOpen) {
+          const senderName = msg.sender_name || "Altuvera Support";
+          await createNotificationInternal({
+            userId: conv.user_id,
+            userEmail: conv.guest_email || req.user.email || null,
+            senderType: "admin",
+            senderId: req.user.id,
+            senderName,
+            type: "message_received",
+            category: "message",
+            title: `Message from ${senderName}`,
+            message: String(body).trim().slice(0, 500),
+            actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
+            actionLabel: "Reply now",
+            priority: "high",
+            targetScope: "individual",
+            metadata: { conversationId: Number(id), messageId: msg.id, senderName },
+          });
+        }
+      }
+    } catch (notificationError) {
+      logger.warn("[Messages] Persistent message notification failed:", notificationError.message);
+    }
+
+    return res.json({ success: true, data: serialized });
   } catch (err) {
     logger.error(`[Messages] POST /conversations/:id/messages: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
