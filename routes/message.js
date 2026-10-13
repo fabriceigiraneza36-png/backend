@@ -407,7 +407,7 @@ const toggleReaction = typeof _toggleReaction === "function"
 const changeConversationStatus = typeof _changeConversationStatus === "function"
   ? _changeConversationStatus
   : async ({ conversationId, status } = {}) => {
-      const VALID = new Set(["open", "closed", "pending", "resolved"]);
+      const VALID = new Set(["open", "closed", "pending", "resolved", "archived"]);
       if (!VALID.has(status)) {
         const err = new Error(`Invalid status: ${status}. Must be one of: ${[...VALID].join(", ")}`);
         err.status = 400;
@@ -547,6 +547,59 @@ async function canAccessConversation(req, conversationId) {
 /* ═══════════════════════════════════════════════════════════════════════════
    ROUTES
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Per-account chat appearance preferences ────────────────────────────── */
+router.get("/preferences", protect, async (req, res) => {
+  try {
+    const result = await query(
+      "SELECT settings FROM message_preferences WHERE user_id = $1 LIMIT 1",
+      [req.user.id],
+    );
+    return res.json({ success: true, data: result.rows[0]?.settings || {} });
+  } catch (err) {
+    logger.error(`[Messages] GET /preferences: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to load chat preferences" });
+  }
+});
+
+router.patch("/preferences", protect, async (req, res) => {
+  try {
+    const input = req.body?.settings;
+    if (!input || typeof input !== "object" || Array.isArray(input)) {
+      return res.status(400).json({ success: false, message: "settings must be an object" });
+    }
+    const allowed = {
+      theme: new Set(["emerald", "ocean", "midnight", "rose"]),
+      font: new Set(["system", "rounded", "serif", "mono"]),
+      density: new Set(["compact", "comfortable", "spacious"]),
+    };
+    const clean = {};
+    for (const [key, values] of Object.entries(allowed)) {
+      if (input[key] != null) {
+        if (!values.has(String(input[key]))) {
+          return res.status(400).json({ success: false, message: `Unsupported chat ${key}` });
+        }
+        clean[key] = String(input[key]);
+      }
+    }
+    if (!Object.keys(clean).length) {
+      return res.status(400).json({ success: false, message: "No valid preference values supplied" });
+    }
+    const result = await query(
+      `INSERT INTO message_preferences (user_id, settings, updated_at)
+       VALUES ($1, $2::jsonb, NOW())
+       ON CONFLICT (user_id) DO UPDATE
+         SET settings = message_preferences.settings || EXCLUDED.settings,
+             updated_at = NOW()
+       RETURNING settings`,
+      [req.user.id, JSON.stringify(clean)],
+    );
+    return res.json({ success: true, data: result.rows[0]?.settings || clean });
+  } catch (err) {
+    logger.error(`[Messages] PATCH /preferences: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Failed to save chat preferences" });
+  }
+});
 
 /* ── Health check ───────────────────────────────────────────────────────── */
 router.get("/health", (_req, res) =>
@@ -765,6 +818,7 @@ router.post("/groups", adminProtect, async (req, res) => {
       const shaped = reshapeMessage(message);
       const io = req.app.get("io");
       if (io) {
+        io.to(`conv:${conv.id}`).emit("msg:message", shaped);
         io.to(`conversation-${conv.id}`).emit("msg:message", shaped);
         io.to(`group-${group.id}`).emit("msg:group-message", {
           conversationId: conv.id, groupId: group.id, groupName: name, message: shaped,
@@ -868,6 +922,7 @@ router.post("/groups/:id/messages", adminProtect, async (req, res) => {
     const shaped = reshapeMessage(msg);
     const io = req.app.get("io");
     if (io) {
+      io.to(`conv:${group.conversation_id}`).emit("msg:message", shaped);
       io.to(`conversation-${group.conversation_id}`).emit("msg:message", shaped);
       io.to(`group-${groupId}`).emit("msg:group-message", {
         conversationId: group.conversation_id, groupId, groupName: group.name, message: shaped,
@@ -990,6 +1045,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
       try {
         const io = req.app.get("io");
         if (io) {
+          io.to(`conv:${conv.id}`).emit("msg:message", reshapeMessage(msg));
           io.to(`conversation-${conv.id}`).emit("msg:message", reshapeMessage(msg));
           io.to(`user-${uid}`).emit("msg:new-from-admin", {
             conversationId: conv.id,
@@ -1013,85 +1069,146 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
 router.post("/conversations", optionalAuth, async (req, res) => {
   try {
     const {
-      sessionId,
-      guestName,
-      guestEmail,
-      bookingId,
-      bookingNumber,
-      subject,
-      channel,
-      source,
-      priority,
-      firstMessage,
-      targetUserId,
-    } = req.body;
+      sessionId, guestName, guestEmail, bookingId, bookingNumber, subject,
+      channel, source, priority, firstMessage, body, targetUserId,
+      destinationName, metadata,
+    } = req.body || {};
 
-    // Only administrators may create conversations. Users must continue in
-    // the thread opened for them by an administrator.
-    if (!req.user || !isAdminUser(req)) {
-      return res.status(403).json({
-        success: false,
-        message: "Only the Altuvera team can open a conversation. Please use your existing chat.",
-      });
+    if (!req.user) {
+      return res.status(401).json({ success: false, message: "Sign in to start a private support conversation." });
+    }
+
+    const callerIsAdmin = isAdminUser(req);
+    if (!callerIsAdmin && targetUserId != null) {
+      return res.status(403).json({ success: false, message: "You can only start a conversation for your own account." });
     }
 
     const ipAddress = req.ip;
     const userAgent = req.get("user-agent") || null;
+    const userId = callerIsAdmin && targetUserId
+      ? (parseInt(targetUserId, 10) || null)
+      : req.user.id;
 
-    /* ── Resolve effective userId ──────────────────────────────────────── */
-    let userId = null;
+    if (!userId && !sessionId) {
+      return res.status(400).json({ success: false, message: "A target user or session is required." });
+    }
 
-    if (req.user) {
-      if (isAdminUser(req) && targetUserId) {
-        userId = parseInt(targetUserId, 10) || null;
-      } else {
-        userId = req.user.id;
+    const destination = String(destinationName || metadata?.destinationName || metadata?.destination_name || "").trim();
+    const conversationMetadata = {
+      ...(metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {}),
+      ...(destination ? { destinationName: destination } : {}),
+    };
+    const conversationSubject = String(subject || "").trim() || (destination ? `Question about ${destination}` : null);
+
+    // An explicit subject means the user/admin intentionally requested a new thread.
+    // Keep separate threads possible; getOrCreate remains the fallback for legacy guest sessions.
+    let conv;
+    if (userId && conversationSubject) {
+      const created = await query(
+        `INSERT INTO conversations
+          (session_id, user_id, guest_name, guest_email, channel, subject, status, priority,
+           source, booking_id, booking_number, metadata, unread_admin, unread_user, created_at, updated_at)
+         VALUES (NULL, $1, $2, $3, $4, $5, 'open', $6, $7, $8, $9, $10::jsonb, 0, 0, NOW(), NOW())
+         RETURNING *`,
+        [
+          userId,
+          callerIsAdmin ? (guestName || null) : (req.user.full_name || req.user.name || guestName || null),
+          callerIsAdmin ? (guestEmail || null) : (req.user.email || guestEmail || null),
+          channel || "live_chat",
+          conversationSubject,
+          priority || "normal",
+          source || (callerIsAdmin ? "admin" : "messages-portal"),
+          bookingId || null,
+          bookingNumber || null,
+          JSON.stringify(conversationMetadata),
+        ],
+      );
+      conv = created.rows[0];
+    } else {
+      conv = await getOrCreateConversation({
+        userId: userId || null,
+        sessionId: userId ? null : (sessionId || null),
+        guestName: guestName || req.user.full_name || req.user.name || null,
+        guestEmail: guestEmail || req.user.email || null,
+        bookingId: bookingId || null,
+        bookingNumber: bookingNumber || null,
+        subject: conversationSubject,
+        channel: channel || "live_chat",
+        source: source || (callerIsAdmin ? "admin" : "messages-portal"),
+        priority: priority || "normal",
+        ipAddress,
+        userAgent,
+        metadata: conversationMetadata,
+      });
+    }
+
+    const initialMessage = String(firstMessage || body || "").trim();
+    let savedMessage = null;
+    if (initialMessage) {
+      savedMessage = await insertMessage({
+        conversationId: conv.id,
+        senderType: callerIsAdmin ? "admin" : "user",
+        senderId: req.user.id,
+        senderName: callerIsAdmin
+          ? (req.user.full_name || req.user.name || "Altuvera Support")
+          : (req.user.full_name || req.user.name || guestName || "Traveler"),
+        senderEmail: req.user.email || guestEmail || null,
+        senderAvatar: req.user.avatar_url || null,
+        body: initialMessage,
+        metadata: { source: "messages-portal", ...conversationMetadata },
+      });
+    }
+
+    // The admin inbox needs both a durable notification and a live conversation event.
+    if (!callerIsAdmin && savedMessage) {
+      const io = req.app.get("io");
+      const shapedMessage = reshapeMessage(savedMessage);
+      const senderName = savedMessage.sender_name || req.user.full_name || req.user.name || "Traveler";
+      const senderEmail = req.user.email || "";
+      if (io) {
+        io.to("admins").emit("msg:new-from-user", {
+          conversationId: conv.id,
+          sessionId: conv.session_id || null,
+          message: shapedMessage,
+          senderName,
+          senderEmail,
+          unreadCount: 1,
+        });
+        io.to("admins").emit("msg:conversation-updated", reshapeConversation(conv));
+      }
+      try {
+        const { createNotificationInternal } = require("../controllers/notificationsController");
+        await createNotificationInternal({
+          userId: null,
+          senderType: "user",
+          senderId: req.user.id,
+          senderName,
+          type: "message_received",
+          category: "message",
+          title: `New message from ${senderName}`,
+          message: initialMessage.slice(0, 500),
+          actionUrl: `/messages?conversationId=${encodeURIComponent(conv.id)}`,
+          actionLabel: "Open conversation",
+          priority: "high",
+          targetScope: "role",
+          targetRole: "admin",
+          metadata: { conversationId: conv.id, messageId: savedMessage.id, senderName, senderEmail, destinationName: destination || null },
+        });
+      } catch (notifyError) {
+        logger.warn("[Messages] Admin message notification failed:", notifyError.message);
       }
     }
 
-    if (!userId && !sessionId) {
-      return res.status(400).json({
-        success: false,
-        message: "Either userId (auth) or sessionId is required",
-      });
-    }
-
-    const conv = await getOrCreateConversation({
-      userId:        userId    || null,
-      sessionId:     userId    ? null : (sessionId || null),
-      guestName:     guestName  || req.user?.full_name  || null,
-      guestEmail:    guestEmail || req.user?.email      || null,
-      bookingId:     bookingId     || null,
-      bookingNumber: bookingNumber || null,
-      subject:       subject   || null,
-      channel:       channel   || "live_chat",
-      source:        source    || (req.user ? "authenticated" : "guest"),
-      priority:      priority  || "normal",
-      ipAddress,
-      userAgent,
+    return res.status(201).json({
+      success: true,
+      data: { ...reshapeConversation(conv), ...(savedMessage ? { messages: [reshapeMessage(savedMessage)] } : {}) },
     });
-
-    if (firstMessage && String(firstMessage).trim()) {
-      const callerIsAdmin = req.user && isAdminUser(req);
-
-      await insertMessage({
-        conversationId: conv.id,
-        senderType:     callerIsAdmin ? "admin" : "user",
-        senderId:       req.user?.id      || null,
-        senderName:     guestName         || req.user?.full_name || null,
-        senderEmail:    guestEmail        || req.user?.email     || null,
-        senderAvatar:   req.user?.avatar_url || null,
-        body:           String(firstMessage).trim(),
-      });
-    }
-
-    return res.json({ success: true, data: reshapeConversation(conv) });
   } catch (err) {
     logger.error(`[Messages] POST /conversations: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
       success: false,
       message: err.message || "Failed to create conversation",
-      error:   process.env.NODE_ENV !== "production" ? err.message : undefined,
+      error: process.env.NODE_ENV !== "production" ? err.message : undefined,
     });
   }
 });
@@ -1177,7 +1294,8 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     }
 
     const convCheck = await query(
-      `SELECT id, user_id, group_id FROM conversations
+      `SELECT id, user_id, group_id, session_id, guest_name, guest_email, subject, status
+         FROM conversations
         WHERE id = $1 AND deleted_at IS NULL`,
       [id],
     );
@@ -1215,20 +1333,97 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       replyToId:      replyToId || null,
     });
 
+    const serialized = reshapeMessage(msg);
+    const conv = convCheck.rows[0];
+
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${id}`).emit("msg:message", reshapeMessage(msg));
-        if (!isAdminReq && convCheck.rows[0].user_id) {
-          io.to(`user-${convCheck.rows[0].user_id}`).emit("msg:new-from-admin", {
-            conversationId: id,
-            message:        reshapeMessage(msg),
+        // Socket.IO uses conv:/session: rooms; keep HTTP fallback sends just as live.
+        io.to(`conv:${id}`).emit("msg:message", serialized);
+        if (conv.session_id) io.to(`session:${conv.session_id}`).emit("msg:message", serialized);
+        if (conv.user_id) io.to(`user-${conv.user_id}`).emit("msg:message", serialized);
+
+        if (!isAdminReq) {
+          const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+          const senderEmail = req.user.email || "";
+          io.to("admins").emit("msg:new-from-user", {
+            conversationId: Number(id),
+            sessionId: conv.session_id || null,
+            message: serialized,
+            senderName,
+            senderEmail,
+          });
+          const current = await query(
+            `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+            [id],
+          );
+          if (current.rows[0]) io.to("admins").emit("msg:conversation-updated", reshapeConversation(current.rows[0]));
+        } else if (conv.user_id) {
+          io.to(`user-${conv.user_id}`).emit("msg:new-from-admin", {
+            conversationId: Number(id),
+            message: serialized,
           });
         }
       }
-    } catch (_) { /* silent */ }
+    } catch (socketError) {
+      logger.warn("[Messages] Live message broadcast failed:", socketError.message);
+    }
 
-    return res.json({ success: true, data: reshapeMessage(msg) });
+    // The REST fallback is also responsible for personalized persistent alerts.
+    try {
+      const { createNotificationInternal } = require("../controllers/notificationsController");
+      if (!isAdminReq) {
+        const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+        await createNotificationInternal({
+          userId: null,
+          senderType: "user",
+          senderId: req.user.id,
+          senderName,
+          type: "message_received",
+          category: "message",
+          title: `New message from ${senderName}`,
+          message: String(body).trim().slice(0, 500),
+          actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
+          actionLabel: "Open conversation",
+          priority: "high",
+          targetScope: "role",
+          targetRole: "admin",
+          metadata: { conversationId: Number(id), messageId: msg.id, senderName, senderEmail: req.user.email || "" },
+        });
+      } else if (conv.user_id) {
+        const io = req.app.get("io");
+        const userSocketOpen = io && [...io.sockets.sockets.values()].some(socket =>
+          socket?.data?.userId &&
+          String(socket.data.userId) === String(conv.user_id) &&
+          socket?.data?.messagesPageOpen === true &&
+          String(socket.data.activeConversation || socket.data.conversationId || "") === String(id)
+        );
+        if (!userSocketOpen) {
+          const senderName = msg.sender_name || "Altuvera Support";
+          await createNotificationInternal({
+            userId: conv.user_id,
+            userEmail: conv.guest_email || req.user.email || null,
+            senderType: "admin",
+            senderId: req.user.id,
+            senderName,
+            type: "message_received",
+            category: "message",
+            title: `Message from ${senderName}`,
+            message: String(body).trim().slice(0, 500),
+            actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
+            actionLabel: "Reply now",
+            priority: "high",
+            targetScope: "individual",
+            metadata: { conversationId: Number(id), messageId: msg.id, senderName },
+          });
+        }
+      }
+    } catch (notificationError) {
+      logger.warn("[Messages] Persistent message notification failed:", notificationError.message);
+    }
+
+    return res.json({ success: true, data: serialized });
   } catch (err) {
     logger.error(`[Messages] POST /conversations/:id/messages: ${err.message}`, { stack: err.stack });
     return res.status(err.status || 500).json({
@@ -1274,7 +1469,7 @@ router.patch("/conversations/:id/read", protect, async (req, res) => {
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${req.params.id}`).emit("msg:conversation-updated", {
+        io.to(`conv:${req.params.id}`).emit("msg:conversation-updated", {
           id:            req.params.id,
           unreadAdmin:   readerType === "admin" ? 0 : undefined,
           unreadUser:    readerType === "user" ? 0 : undefined,
@@ -1304,7 +1499,7 @@ router.patch("/conversations/:id/status", adminProtect, async (req, res) => {
     try {
       const io = req.app.get("io");
       if (io) {
-        io.to(`conversation-${req.params.id}`).emit(
+        io.to(`conv:${req.params.id}`).emit(
           "msg:conversation-updated",
           reshapeConversation(conv),
         );
@@ -1356,7 +1551,7 @@ router.patch(
       try {
         const io = req.app.get("io");
         if (io) {
-          io.to(`conversation-${cid}`).emit("msg:reaction", {
+          io.to(`conv:${cid}`).emit("msg:reaction", {
             messageId: mid,
             reactions,
             emoji,
@@ -1413,7 +1608,10 @@ router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
     );
     const shaped = reshapeMessage(rows[0]);
     const io = req.app.get("io");
-    if (io) io.to(`conversation-${cid}`).emit("msg:message-edited", shaped);
+    if (io) {
+      io.to(`conv:${cid}`).emit("msg:message-edited", shaped);
+      io.to(`conversation-${cid}`).emit("msg:message-edited", shaped);
+    }
     return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] PATCH message: ${err.message}`);
@@ -1452,7 +1650,10 @@ router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => 
     );
     const shaped = reshapeMessage(rows[0]);
     const io = req.app.get("io");
-    if (io) io.to(`conversation-${cid}`).emit("msg:message-deleted", shaped);
+    if (io) {
+      io.to(`conv:${cid}`).emit("msg:message-deleted", shaped);
+      io.to(`conversation-${cid}`).emit("msg:message-deleted", shaped);
+    }
     return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] DELETE message: ${err.message}`);
@@ -1490,7 +1691,10 @@ for (const [pathSuffix, column, eventName] of [
       );
       const shaped = reshapeMessage(rows[0]);
       const io = req.app.get("io");
-      if (io) io.to(`conversation-${cid}`).emit(eventName, shaped);
+      if (io) {
+        io.to(`conv:${cid}`).emit(eventName, shaped);
+        io.to(`conversation-${cid}`).emit(eventName, shaped);
+      }
       return res.json({ success: true, data: shaped });
     } catch (err) {
       logger.error(`[Messages] PATCH ${pathSuffix}: ${err.message}`);
