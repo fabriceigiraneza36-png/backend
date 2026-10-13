@@ -493,6 +493,11 @@ const ensureMessagingSchema = async () => {
       started_at      TIMESTAMP   DEFAULT NOW(),
       expires_at      TIMESTAMP   DEFAULT NOW() + INTERVAL '10 seconds'
     )`,
+    `CREATE TABLE IF NOT EXISTS message_preferences (
+      user_id     INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      settings    JSONB NOT NULL DEFAULT '{}'::JSONB,
+      updated_at  TIMESTAMP DEFAULT NOW()
+    )`,
     `CREATE TABLE IF NOT EXISTS message_groups (
       id          SERIAL PRIMARY KEY,
       name        VARCHAR(160) NOT NULL,
@@ -1499,6 +1504,34 @@ io.on('connection', (socket) => {
       const serialized  = serializeConvMessage(msg)
       const unreadAdmin = await countUnreadAdmin(convId)
 
+      try {
+        const { createNotificationInternal } = require('./controllers/notificationsController')
+        const senderName = msg.sender_name || socket.data.user?.full_name || socket.data.user?.name || 'Traveler'
+        await createNotificationInternal({
+          userId: null,
+          senderType: 'user',
+          senderId: socket.data.userId,
+          senderName,
+          type: 'message_received',
+          category: 'message',
+          title: `New message from ${senderName}`,
+          message: body.slice(0, 500),
+          actionUrl: `/messages?conversationId=${encodeURIComponent(convId)}`,
+          actionLabel: 'Open conversation',
+          priority: 'high',
+          targetScope: 'role',
+          targetRole: 'admin',
+          metadata: {
+            conversationId: convId,
+            messageId: msg.id,
+            senderName,
+            senderEmail: msg.sender_email || '',
+          },
+        })
+      } catch (notificationError) {
+        logger.warn('[Socket] user message notification failed:', notificationError.message)
+      }
+
       broadcastConversationMessage({
         io,
         conversationId: convId,
@@ -1621,27 +1654,27 @@ io.on('connection', (socket) => {
           const userSocketOpen = [...io.sockets.sockets.values()].some(s =>
             s?.data?.userId &&
             String(s.data.userId) === String(conv.user_id) &&
-            s?.data?.messagesPageOpen === true
+            s?.data?.messagesPageOpen === true &&
+            String(s.data.activeConversation || s.data.conversationId || '') === String(conv.id)
           )
-          if (userSocketOpen) {
-            // The live socket message is enough while the conversation is open.
-          } else {
-          await createNotificationInternal({
-            userId: conv.user_id,
-            userEmail: conv.guest_email || null,
-            type: 'message_received',
-            category: 'message',
-            title: 'New message from Altuvera 💬',
-            message: `${msg.sender_name || 'Altuvera Support'} sent you a new message.`,
-            actionUrl: `/messages?conversationId=${encodeURIComponent(conv.id)}`,
-            actionLabel: 'Reply now',
-            priority: 'high',
-            senderType: 'admin',
-            senderId: socket.data.userId,
-            senderName: msg.sender_name || 'Altuvera Support',
-            targetScope: 'individual',
-            metadata: { conversationId: conv.id, messageId: msg.id },
-          })
+          if (!userSocketOpen) {
+            const senderName = msg.sender_name || 'Altuvera Support'
+            await createNotificationInternal({
+              userId: conv.user_id,
+              userEmail: conv.guest_email || null,
+              type: 'message_received',
+              category: 'message',
+              title: `Message from ${senderName}`,
+              message: body.slice(0, 500),
+              actionUrl: `/messages?conversationId=${encodeURIComponent(conv.id)}`,
+              actionLabel: 'Reply now',
+              priority: 'high',
+              senderType: 'admin',
+              senderId: socket.data.userId,
+              senderName,
+              targetScope: 'individual',
+              metadata: { conversationId: conv.id, messageId: msg.id, senderName },
+            })
           }
         }
       } catch (notificationError) {
