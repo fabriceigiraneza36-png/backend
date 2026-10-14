@@ -690,6 +690,10 @@ router.post('/:id/book', authenticate, async (req, res) => {
       package_price:    p.price,
       package_currency: p.currency,
       booking_type:     'package',
+      user_id:          req.user?.id || null,
+      user_name:        req.user?.full_name || req.user?.fullName || req.user?.name || finalName,
+      user_email:       req.user?.email || finalEmail,
+      user_avatar_url:  req.user?.avatar_url || req.user?.avatarUrl || req.user?.avatar || null,
     }
 
     // The package-specific notification sends the admin inbox email and creates
@@ -802,7 +806,8 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
       db(
         `SELECT b.*,
                 u.email     AS user_email,
-                u.full_name AS user_name
+                u.full_name AS user_name,
+                u.avatar_url AS user_avatar_url
          FROM bookings b
          LEFT JOIN users u ON u.id = b.user_id
          WHERE ${whereSql}
