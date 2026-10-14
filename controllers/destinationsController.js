@@ -2282,16 +2282,47 @@ exports.update = async (req, res, next) => {
       fields.attractions = JSON.stringify(Array.isArray(fields.attractions) ? fields.attractions : parseJson(fields.attractions, []))
     }
 
-    const mergedImages = fields.image_urls !== undefined
-      ? urlsOnly(fields.image_urls)
-      : urlsOnly(current.image_urls)
+    // A destination's public media can live in both destinations.image_urls
+    // and destination_images. Checking only image_urls incorrectly rejects
+    // legacy destinations whose gallery is stored in the related table.
+    const galleryRows = await safeQuery(
+      `SELECT image_url FROM destination_images
+       WHERE destination_id = $1 AND is_active = true
+       ORDER BY sort_order ASC, id ASC`,
+      [id],
+      'update:media-validation',
+    )
+    const mergedImages = [
+      ...urlsOnly(fields.image_urls !== undefined ? fields.image_urls : current.image_urls),
+      ...galleryRows.map((row) => row.image_url),
+      fields.hero_image !== undefined ? fields.hero_image : current.hero_image,
+      fields.cover_image_url !== undefined ? fields.cover_image_url : current.cover_image_url,
+      fields.image_url !== undefined ? fields.image_url : current.image_url,
+    ].filter(isSafeImageUrl)
     const mergedAttractions = fields.attractions !== undefined
       ? parseJson(fields.attractions, [])
       : parseJson(current.attractions, [])
+
+    const sameJson = (a, b) => {
+      try { return JSON.stringify(parseJson(a, [])) === JSON.stringify(parseJson(b, [])) }
+      catch { return false }
+    }
+    const mediaChanged = (
+      ['image_urls', 'image_url', 'hero_image', 'cover_image_url'].some((field) =>
+        fields[field] !== undefined &&
+        JSON.stringify(fields[field]) !== JSON.stringify(current[field])
+      ) ||
+      (fields.attractions !== undefined && !sameJson(fields.attractions, current.attractions))
+    )
+    const publishingNow = fields.status === 'published' && current.status !== 'published'
+    const activatingNow = toBool(fields.is_active) && !toBool(current.is_active)
+    const shouldValidateMedia = mediaChanged || publishingNow || activatingNow
     const mediaError = validateDestinationMediaRequirements({
-      imageUrls: mergedImages,
+      imageUrls: [...new Set(mergedImages)],
       attractions: mergedAttractions,
-      enforce: (fields.status ?? current.status) !== 'draft' && (fields.is_active ?? current.is_active) !== false && fields.is_active !== 'false',
+      enforce: shouldValidateMedia &&
+        (fields.status ?? current.status) !== 'draft' &&
+        toBool(fields.is_active ?? current.is_active),
     })
     if (mediaError) return res.status(400).json({ success: false, error: mediaError })
 
