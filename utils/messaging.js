@@ -263,7 +263,7 @@ async function listConversations({
   /* Traveler inbox is scoped to the single direct conversation assigned
      to their account. Admins pass no userFilter and keep their full inbox. */
   if (userFilter && userFilter.user_id != null) {
-    conditions.push(`c.user_id = ${p++}`);
+    conditions.push(`c.user_id = $${p++}`);
     params.push(userFilter.user_id);
   }
 
