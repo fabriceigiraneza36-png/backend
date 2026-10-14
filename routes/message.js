@@ -458,8 +458,9 @@ function reshapeConversation(row, includeMessages = false) {
     id:            row.id,
     sessionId:     row.session_id,
     userId:        row.user_id,
-    guestName:     row.guest_name,
-    guestEmail:    row.guest_email,
+    guestName:     row.guest_name || row.user?.fullName || row.user_full_name || row.u_full_name || null,
+    guestEmail:    row.guest_email || row.user?.email || row.user_email || row.u_email || null,
+    guestAvatar:   row.user?.avatarUrl || row.user_avatar || row.u_avatar_url || row.guest_avatar || null,
     channel:       row.channel,
     subject:       row.subject,
     status:        row.status,
@@ -1086,7 +1087,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
 });
 
 /* ── POST /conversations — guest / user / admin starts conversation ──────── */
-router.post("/conversations", optionalAuth, async (req, res) => {
+router.post("/conversations", protect, async (req, res) => {
   try {
     const {
       sessionId, guestName, guestEmail, bookingId, bookingNumber, subject,
@@ -1622,7 +1623,10 @@ router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
     if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
     const admin = isAdminUser(req);
-    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+    if (admin) {
+      return res.status(403).json({ success: false, message: "Admin accounts cannot edit messages. Send a new reply instead." });
+    }
+    if (String(msg.sender_id) !== String(req.user.id)) {
       return res.status(403).json({ success: false, message: "You can only edit your own messages" });
     }
     if (!admin && Date.now() - new Date(msg.created_at).getTime() > 15 * 60 * 1000) {
@@ -1663,7 +1667,10 @@ router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => 
     if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
     const admin = isAdminUser(req);
-    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+    if (admin) {
+      return res.status(403).json({ success: false, message: "Admin accounts cannot unsend or alter messages." });
+    }
+    if (String(msg.sender_id) !== String(req.user.id)) {
       return res.status(403).json({ success: false, message: "You can only unsend your own messages" });
     }
     if (!admin && Date.now() - new Date(msg.created_at).getTime() > 24 * 60 * 60 * 1000) {
