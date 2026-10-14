@@ -396,17 +396,17 @@ async function getConversationWithMessages(conversationId, options = {}) {
     const params = [conversationId];
     let cursorClause = "";
 
-    if (options.beforeCreatedAt && options.beforeId != null) {
-      params.push(options.beforeCreatedAt, Number.parseInt(options.beforeId, 10));
-      cursorClause = ` AND (created_at < $2 OR (created_at = $2 AND id < $3))`;
+    if (options.beforeId != null) {
+      params.push(Number.parseInt(options.beforeId, 10));
+      cursorClause = ` AND id < $2`;
     }
 
     params.push(limit + 1);
     const msgRes = await query(
       `SELECT * FROM messages
         WHERE conversation_id = $1${cursorClause}
-        ORDER BY created_at DESC, id DESC
-        LIMIT ${params.length}`,
+        ORDER BY id DESC
+        LIMIT $${params.length}`,
       params
     );
 
