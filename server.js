@@ -556,9 +556,20 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_highlighted  BOOLEAN DEFAULT false`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS deleted_at      TIMESTAMP`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS deleted_by      INTEGER`,
+    // Keep existing installations compatible if this table predates the current shape.
+    `ALTER TABLE message_preferences ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+    `ALTER TABLE message_preferences ADD COLUMN IF NOT EXISTS settings JSONB NOT NULL DEFAULT '{}'::JSONB`,
+    `ALTER TABLE message_preferences ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`,
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_message_preferences_user_id ON message_preferences(user_id)`,
   ]
   for (const sql of migrations) {
-    await query(sql).catch(() => { /* column already exists � safe */ })
+    await query(sql).catch(err => {
+      // Keep unrelated idempotent migrations non-fatal, but surface failures
+      // that would prevent per-account chat appearance preferences from saving.
+      if (/message_preferences/i.test(sql)) {
+        logger.error("[MessagingSchema] message_preferences migration failed:", { code: err.code, message: err.message })
+      }
+    })
   }
 
   // Make session_id nullable on existing DBs that created it NOT NULL
