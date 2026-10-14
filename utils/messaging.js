@@ -360,7 +360,7 @@ async function listConversations({
 /* ─────────────────────────────────────────────────────────────────────────────
    getConversationWithMessages
    ───────────────────────────────────────────────────────────────────────────── */
-async function getConversationWithMessages(conversationId) {
+async function getConversationWithMessages(conversationId, options = {}) {
   if (!conversationId) throw new Error("conversationId is required");
 
   /* Conversation + user info */
@@ -385,13 +385,42 @@ async function getConversationWithMessages(conversationId) {
   const conv = convRes.rows[0];
   if (!conv) return null;
 
-  /* Messages */
-  const msgRes = await query(
-    `SELECT * FROM messages
-      WHERE conversation_id = $1
-      ORDER BY created_at ASC`,
-    [conversationId]
-  );
+  /* Messages: fetch only the newest page when requested. Older pages use a
+     stable (created_at, id) cursor so messages are not skipped or duplicated. */
+  const requestedLimit = Number.parseInt(options.limit, 10);
+  let messages;
+  let hasMoreMessages;
+
+  if (Number.isInteger(requestedLimit) && requestedLimit > 0) {
+    const limit = Math.min(requestedLimit, 50);
+    const params = [conversationId];
+    let cursorClause = "";
+
+    if (options.beforeId != null) {
+      params.push(Number.parseInt(options.beforeId, 10));
+      cursorClause = ` AND id < $2`;
+    }
+
+    params.push(limit + 1);
+    const msgRes = await query(
+      `SELECT * FROM messages
+        WHERE conversation_id = $1${cursorClause}
+        ORDER BY id DESC
+        LIMIT $${params.length}`,
+      params
+    );
+
+    hasMoreMessages = msgRes.rows.length > limit;
+    messages = msgRes.rows.slice(0, limit).reverse();
+  } else {
+    const msgRes = await query(
+      `SELECT * FROM messages
+        WHERE conversation_id = $1
+        ORDER BY created_at ASC, id ASC`,
+      [conversationId]
+    );
+    messages = msgRes.rows;
+  }
 
   return {
     ...conv,
@@ -408,7 +437,8 @@ async function getConversationWithMessages(conversationId) {
           username:    conv.user_username,
         }
       : null,
-    messages: msgRes.rows,
+    messages,
+    ...(typeof hasMoreMessages === "boolean" ? { hasMoreMessages } : {}),
   };
 }
 
