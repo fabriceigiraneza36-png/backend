@@ -515,7 +515,7 @@ router.get('/:id/availability', optionalAuth, async (req, res) => {
 /* ═══════════════════════════════════════════════════════════════════════════
    POST /api/packages/:id/book
 ═══════════════════════════════════════════════════════════════════════════ */
-router.post('/:id/book', optionalAuth, async (req, res) => {
+router.post('/:id/book', authenticate, async (req, res) => {
   try {
     const pkgId = req.params.id
     const {
@@ -575,8 +575,8 @@ router.post('/:id/book', optionalAuth, async (req, res) => {
     }
 
     // Normalize input
-    const finalName    = String(guest_name || full_name || name || '').trim()
-    const finalEmail   = String(guest_email || email || '').trim().toLowerCase()
+    const finalName    = String(req.user?.full_name || req.user?.fullName || req.user?.name || guest_name || full_name || name || '').trim()
+    const finalEmail   = String(req.user?.email || guest_email || email || '').trim().toLowerCase()
     const finalPhone   = String(guest_phone || phone || '').trim() || null
     const finalTravel  = travel_date || startDate || null
     const finalEnd     = end_date  || endDate  || null
