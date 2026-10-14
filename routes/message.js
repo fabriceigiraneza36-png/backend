@@ -334,7 +334,7 @@ const markConversationRead = typeof _markConversationRead === "function"
 /* ── Inline fallback: getConversationWithMessages ───────────────────────── */
 const getConversationWithMessages = typeof _getConversationWithMessages === "function"
   ? _getConversationWithMessages
-  : async (conversationId) => {
+  : async (conversationId, options = {}) => {
       const convRes = await query(
         `SELECT
            c.*,
@@ -365,15 +365,35 @@ const getConversationWithMessages = typeof _getConversationWithMessages === "fun
           : null,
       };
 
-      const msgsRes = await query(
-        `SELECT * FROM messages
-          WHERE conversation_id = $1
-          ORDER BY created_at ASC`,
-        [conversationId],
-      );
-
-      conv.messages      = msgsRes.rows;
-      conv.message_count = msgsRes.rows.length;
+      const requestedLimit = Number.parseInt(options.limit, 10);
+      if (Number.isInteger(requestedLimit) && requestedLimit > 0) {
+        const limit = Math.min(requestedLimit, 50);
+        const params = [conversationId];
+        let cursorClause = "";
+        if (options.beforeCreatedAt && options.beforeId != null) {
+          params.push(options.beforeCreatedAt, Number.parseInt(options.beforeId, 10));
+          cursorClause = ` AND (created_at < $2 OR (created_at = $2 AND id < $3))`;
+        }
+        params.push(limit + 1);
+        const msgsRes = await query(
+          `SELECT * FROM messages
+            WHERE conversation_id = $1${cursorClause}
+            ORDER BY created_at DESC, id DESC
+            LIMIT ${params.length}`,
+          params,
+        );
+        conv.hasMoreMessages = msgsRes.rows.length > limit;
+        conv.messages = msgsRes.rows.slice(0, limit).reverse();
+      } else {
+        const msgsRes = await query(
+          `SELECT * FROM messages
+            WHERE conversation_id = $1
+            ORDER BY created_at ASC, id ASC`,
+          [conversationId],
+        );
+        conv.messages = msgsRes.rows;
+      }
+      conv.message_count = conv.messages.length;
       return conv;
     };
 
@@ -1238,7 +1258,15 @@ router.delete("/conversations/:id", adminProtect, async (req, res) => {
 /* ── GET /conversations/:id ─────────────────────────────────────────────── */
 router.get("/conversations/:id", protect, async (req, res) => {
   try {
-    const data = await getConversationWithMessages(req.params.id);
+    const requestedLimit = req.query.limit == null ? null : Number.parseInt(req.query.limit, 10);
+    const pageOptions = Number.isInteger(requestedLimit) && requestedLimit > 0
+      ? {
+          limit: Math.min(requestedLimit, 50),
+          beforeCreatedAt: req.query.beforeCreatedAt || null,
+          beforeId: req.query.beforeId || null,
+        }
+      : {};
+    const data = await getConversationWithMessages(req.params.id, pageOptions);
     if (!data) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
@@ -1259,7 +1287,9 @@ router.get("/conversations/:id", protect, async (req, res) => {
       }
     }
 
-    return res.json({ success: true, data: reshapeConversation(data, true) });
+    const shaped = reshapeConversation(data, true);
+    if (typeof data.hasMoreMessages === "boolean") shaped.hasMoreMessages = data.hasMoreMessages;
+    return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] GET /conversations/:id: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to fetch conversation" });
