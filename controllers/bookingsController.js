@@ -771,6 +771,14 @@ exports.create = async (req, res, next) => {
     );
 
     const body = normalizeBookingData(req.body || {});
+    if (!req.user?.id) {
+      return res.status(401).json({ success: false, message: "Please sign in before submitting a booking request." });
+    }
+    // The authenticated account is authoritative; never trust client-supplied
+    // identity fields or a user_id supplied in the request body.
+    body.user_id = req.user.id;
+    body.full_name = safeText(req.user.full_name || req.user.fullName || req.user.name, body.full_name);
+    body.email = safeEmail(req.user.email) || body.email;
     const errors = validateBooking(body);
 
     if (errors.length) {
@@ -1165,7 +1173,8 @@ exports.getAll = async (req, res, next) => {
                 s.title AS service_name,
                 p.title AS package_name,
                 u.full_name AS user_name,
-                u.email AS user_email
+                u.email AS user_email,
+                u.avatar_url AS user_avatar_url
            FROM bookings b
            LEFT JOIN destinations d ON b.destination_id = d.id
            LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)

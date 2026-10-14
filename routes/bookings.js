@@ -1,13 +1,13 @@
 // routes/bookings.js
 const express = require('express')
 const router = express.Router()
-const { optionalAuth } = require('../middleware/auth')
+const { optionalAuth, protect } = require('../middleware/auth')
 const bookingsController = require('../controllers/bookingsController')
 
 // ── 1. PUBLIC / GUEST & USER ROUTES ──────────────────────────────────────────
 
 // Create a new booking (Sends verification email or booking received email)
-router.post('/', optionalAuth, bookingsController.create)
+router.post('/', protect, bookingsController.create)
 
 // Verify guest email via link in email
 router.get('/verify-email/:token', bookingsController.verifyEmail)

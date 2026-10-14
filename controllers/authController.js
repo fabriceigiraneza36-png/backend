@@ -810,6 +810,29 @@ exports.googleAuth = async (req, res) => {
         message: "Your Google email is not verified.",
       });
 
+    // Do not create a partial user record just because someone tried Google
+    // sign-in. Existing users can sign in immediately; new users must finish
+    // the profile form before their account is created.
+    const existing = await query(
+      "SELECT id FROM users WHERE email = $1 OR google_id = $2 LIMIT 1",
+      [payload.email.toLowerCase(), payload.sub],
+    );
+
+    if (!existing.rows.length) {
+      return res.status(200).json({
+        success: true,
+        data: {
+          isNewUser: true,
+          requiresProfile: true,
+          googleProfile: {
+            email: payload.email.toLowerCase(),
+            name: payload.name || payload.email.split("@")[0],
+            picture: payload.picture || "",
+          },
+        },
+      });
+    }
+
     const { user, isNew } = await upsertSocialUser({
       provider:   "google",
       providerId: payload.sub,
@@ -856,18 +879,54 @@ exports.completeGoogleSignUp = async (req, res) => {
         success: false,
         message: "Could not retrieve account info from Google.",
       });
+    if (payload.email_verified === false)
+      return res.status(401).json({
+        success: false,
+        message: "Your Google email is not verified.",
+      });
+
+    const fullName = String(req.body.fullName || payload.name || "").trim().slice(0, 100);
+    if (fullName.length < 2)
+      return res.status(400).json({
+        success: false,
+        message: "Please provide your full name to finish creating your account.",
+      });
 
     const { user, isNew } = await upsertSocialUser({
       provider:   "google",
       providerId: payload.sub,
       email:      payload.email.toLowerCase(),
-      name:       (req.body.fullName || payload.name || payload.email.split("@")[0]).trim(),
+      name:       fullName || payload.email.split("@")[0],
       avatar:     req.body.avatar || payload.picture,
       phone:      req.body.phone  || null,
       bio:        req.body.bio    || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
+    // Store optional travel/profile answers in the existing JSONB preferences
+    // field so we don't depend on optional database columns being present.
+    const profilePreferences = {
+      dateOfBirth: String(req.body.dateOfBirth || "").slice(0, 10),
+      nationality: String(req.body.nationality || "").slice(0, 100),
+      residenceCountry: String(req.body.residenceCountry || "").slice(0, 100),
+      preferredLanguage: String(req.body.preferredLanguage || "").slice(0, 80),
+      profession: String(req.body.profession || "").slice(0, 120),
+      travelStyles: Array.isArray(req.body.travelStyles)
+        ? req.body.travelStyles.map((style) => String(style).slice(0, 50)).slice(0, 20)
+        : [],
+      profileRole: ["user", "photographer", "planner"].includes(req.body.role)
+        ? req.body.role
+        : "user",
+    };
+    const profileUpdate = await query(
+      `UPDATE users
+          SET preferences = COALESCE(preferences, '{}'::jsonb) || $1::jsonb,
+              updated_at = NOW()
+        WHERE id = $2
+        RETURNING *`,
+      [JSON.stringify(profilePreferences), user.id],
+    );
+
+    const freshUser = await incrementLoginCounter(profileUpdate.rows[0]?.id || user.id);
     logger.info("[Google Signup] Complete:", { email: freshUser.email, isNew });
     return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
