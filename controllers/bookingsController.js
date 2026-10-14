@@ -771,6 +771,14 @@ exports.create = async (req, res, next) => {
     );
 
     const body = normalizeBookingData(req.body || {});
+    if (!req.user?.id) {
+      return res.status(401).json({ success: false, message: "Please sign in before submitting a booking request." });
+    }
+    // The authenticated account is authoritative; never trust client-supplied
+    // identity fields or a user_id supplied in the request body.
+    body.user_id = req.user.id;
+    body.full_name = safeText(req.user.full_name || req.user.fullName || req.user.name, body.full_name);
+    body.email = safeEmail(req.user.email) || body.email;
     const errors = validateBooking(body);
 
     if (errors.length) {
