@@ -1737,7 +1737,10 @@ for (const [pathSuffix, column, eventName] of [
       if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
       const admin = isAdminUser(req);
-      if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+      if (admin) {
+        return res.status(403).json({ success: false, message: "Admin accounts cannot modify existing messages." });
+      }
+      if (String(msg.sender_id) !== String(req.user.id)) {
         return res.status(403).json({ success: false, message: "You can only manage your own message" });
       }
 
