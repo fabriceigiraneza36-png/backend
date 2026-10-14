@@ -826,7 +826,7 @@ exports.create = async (req, res, next) => {
           children_ages, travelers_details, emergency_contact,
           group_type, marketing_source, newsletter_opt_in,
           preferred_contact_method, preferred_contact_time, pickup_location,
-          source, status,
+          source, status, payment_status,
           email_verified, email_verified_at, verification_token, verification_token_exp,
           created_at, updated_at
         ) VALUES (
