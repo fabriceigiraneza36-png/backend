@@ -1173,7 +1173,8 @@ exports.getAll = async (req, res, next) => {
                 s.title AS service_name,
                 p.title AS package_name,
                 u.full_name AS user_name,
-                u.email AS user_email
+                u.email AS user_email,
+                u.avatar_url AS user_avatar_url
            FROM bookings b
            LEFT JOIN destinations d ON b.destination_id = d.id
            LEFT JOIN countries c ON c.id = COALESCE(b.country_id, d.country_id)
