@@ -458,8 +458,9 @@ function reshapeConversation(row, includeMessages = false) {
     id:            row.id,
     sessionId:     row.session_id,
     userId:        row.user_id,
-    guestName:     row.guest_name,
-    guestEmail:    row.guest_email,
+    guestName:     row.guest_name || row.user?.fullName || row.user_full_name || row.u_full_name || null,
+    guestEmail:    row.guest_email || row.user?.email || row.user_email || row.u_email || null,
+    guestAvatar:   row.user?.avatarUrl || row.user_avatar || row.u_avatar_url || row.guest_avatar || null,
     channel:       row.channel,
     subject:       row.subject,
     status:        row.status,
@@ -1086,7 +1087,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
 });
 
 /* ── POST /conversations — guest / user / admin starts conversation ──────── */
-router.post("/conversations", optionalAuth, async (req, res) => {
+router.post("/conversations", protect, async (req, res) => {
   try {
     const {
       sessionId, guestName, guestEmail, bookingId, bookingNumber, subject,
@@ -1192,9 +1193,17 @@ router.post("/conversations", optionalAuth, async (req, res) => {
           message: shapedMessage,
           senderName,
           senderEmail,
+          senderAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
+          guestName: senderName,
+          guestAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
           unreadCount: 1,
         });
-        io.to("admins").emit("msg:conversation-updated", reshapeConversation(conv));
+        io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+          ...conv,
+          guest_name: conv.guest_name || senderName,
+          guest_email: conv.guest_email || senderEmail,
+          user: { fullName: senderName, email: senderEmail, avatarUrl: savedMessage.sender_avatar || req.user.avatar_url || null },
+        }));
       }
       try {
         const { createNotificationInternal } = require("../controllers/notificationsController");
@@ -1383,12 +1392,25 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
             message: serialized,
             senderName,
             senderEmail,
+            senderAvatar: msg.sender_avatar || req.user.avatar_url || null,
+            guestName: senderName,
+            guestAvatar: msg.sender_avatar || req.user.avatar_url || null,
           });
           const current = await query(
-            `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+            `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email, u.avatar_url AS user_avatar
+               FROM conversations c LEFT JOIN users u ON u.id = c.user_id
+              WHERE c.id = $1 LIMIT 1`,
             [id],
           );
-          if (current.rows[0]) io.to("admins").emit("msg:conversation-updated", reshapeConversation(current.rows[0]));
+          if (current.rows[0]) {
+            const row = current.rows[0];
+            io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+              ...row,
+              user: row.user_id ? {
+                fullName: row.user_full_name, email: row.user_email, avatarUrl: row.user_avatar,
+              } : null,
+            }));
+          }
         } else if (conv.user_id) {
           io.to(`user-${conv.user_id}`).emit("msg:new-from-admin", {
             conversationId: Number(id),
@@ -1622,7 +1644,10 @@ router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
     if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
     const admin = isAdminUser(req);
-    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+    if (admin) {
+      return res.status(403).json({ success: false, message: "Admin accounts cannot edit messages. Send a new reply instead." });
+    }
+    if (String(msg.sender_id) !== String(req.user.id)) {
       return res.status(403).json({ success: false, message: "You can only edit your own messages" });
     }
     if (!admin && Date.now() - new Date(msg.created_at).getTime() > 15 * 60 * 1000) {
@@ -1663,7 +1688,10 @@ router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => 
     if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
     const admin = isAdminUser(req);
-    if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+    if (admin) {
+      return res.status(403).json({ success: false, message: "Admin accounts cannot unsend or alter messages." });
+    }
+    if (String(msg.sender_id) !== String(req.user.id)) {
       return res.status(403).json({ success: false, message: "You can only unsend your own messages" });
     }
     if (!admin && Date.now() - new Date(msg.created_at).getTime() > 24 * 60 * 60 * 1000) {
@@ -1709,7 +1737,10 @@ for (const [pathSuffix, column, eventName] of [
       if (!msg) return res.status(404).json({ success: false, message: "Message not found" });
 
       const admin = isAdminUser(req);
-      if (!admin && String(msg.sender_id) !== String(req.user.id)) {
+      if (admin) {
+        return res.status(403).json({ success: false, message: "Admin accounts cannot modify existing messages." });
+      }
+      if (String(msg.sender_id) !== String(req.user.id)) {
         return res.status(403).json({ success: false, message: "You can only manage your own message" });
       }
 
