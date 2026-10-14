@@ -1193,9 +1193,17 @@ router.post("/conversations", protect, async (req, res) => {
           message: shapedMessage,
           senderName,
           senderEmail,
+          senderAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
+          guestName: senderName,
+          guestAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
           unreadCount: 1,
         });
-        io.to("admins").emit("msg:conversation-updated", reshapeConversation(conv));
+        io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+          ...conv,
+          guest_name: conv.guest_name || senderName,
+          guest_email: conv.guest_email || senderEmail,
+          user: { fullName: senderName, email: senderEmail, avatarUrl: savedMessage.sender_avatar || req.user.avatar_url || null },
+        }));
       }
       try {
         const { createNotificationInternal } = require("../controllers/notificationsController");
@@ -1384,12 +1392,25 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
             message: serialized,
             senderName,
             senderEmail,
+            senderAvatar: msg.sender_avatar || req.user.avatar_url || null,
+            guestName: senderName,
+            guestAvatar: msg.sender_avatar || req.user.avatar_url || null,
           });
           const current = await query(
-            `SELECT * FROM conversations WHERE id = $1 LIMIT 1`,
+            `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email, u.avatar_url AS user_avatar
+               FROM conversations c LEFT JOIN users u ON u.id = c.user_id
+              WHERE c.id = $1 LIMIT 1`,
             [id],
           );
-          if (current.rows[0]) io.to("admins").emit("msg:conversation-updated", reshapeConversation(current.rows[0]));
+          if (current.rows[0]) {
+            const row = current.rows[0];
+            io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+              ...row,
+              user: row.user_id ? {
+                fullName: row.user_full_name, email: row.user_email, avatarUrl: row.user_avatar,
+              } : null,
+            }));
+          }
         } else if (conv.user_id) {
           io.to(`user-${conv.user_id}`).emit("msg:new-from-admin", {
             conversationId: Number(id),
