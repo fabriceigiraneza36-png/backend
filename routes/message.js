@@ -557,8 +557,14 @@ router.get("/preferences", protect, async (req, res) => {
     );
     return res.json({ success: true, data: result.rows[0]?.settings || {} });
   } catch (err) {
-    logger.error(`[Messages] GET /preferences: ${err.message}`);
-    return res.status(500).json({ success: false, message: "Failed to load chat preferences" });
+    logger.error("[Messages] GET /preferences failed", { code: err.code, message: err.message });
+    const schemaUnavailable = ["42P01", "42703", "42501"].includes(err.code);
+    return res.status(schemaUnavailable ? 503 : 500).json({
+      success: false,
+      message: schemaUnavailable
+        ? "Chat preferences are temporarily unavailable. Your local appearance settings are still available."
+        : "Failed to load chat preferences",
+    });
   }
 });
 
@@ -596,8 +602,14 @@ router.patch("/preferences", protect, async (req, res) => {
     );
     return res.json({ success: true, data: result.rows[0]?.settings || clean });
   } catch (err) {
-    logger.error(`[Messages] PATCH /preferences: ${err.message}`);
-    return res.status(500).json({ success: false, message: "Failed to save chat preferences" });
+    logger.error("[Messages] PATCH /preferences failed", { code: err.code, message: err.message });
+    const schemaUnavailable = ["42P01", "42703", "42P10", "42501"].includes(err.code);
+    return res.status(schemaUnavailable ? 503 : 500).json({
+      success: false,
+      message: schemaUnavailable
+        ? "Chat preferences are temporarily unavailable. Your local appearance settings are still available."
+        : "Failed to save chat preferences",
+    });
   }
 });
 
