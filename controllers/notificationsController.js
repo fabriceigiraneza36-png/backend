@@ -497,7 +497,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
     category: "package",
     title: "Package request received 📦",
     message: `Your request for "${packageTitle}" was received and is pending review.`,
-    actionUrl: "/my-bookings",
+    actionUrl: `/my-bookings?bookingId=${encodeURIComponent(booking?.id || "")}&packageId=${encodeURIComponent(booking?.package_id || pkg?.id || "")}`,
     actionLabel: "Track request",
     priority: "normal",
     req,
