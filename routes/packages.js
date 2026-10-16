@@ -4,7 +4,7 @@ const router   = express.Router()
 const { query: db } = require('../config/db')
 const { authenticate, optionalAuth, requireAdmin } = require('../middleware/auth')
 const logger   = require('../utils/logger')
-const { notifyPackageBookingCreated } = require('../controllers/notificationsController')
+const { notifyPackageBookingCreated, createNotificationInternal } = require('../controllers/notificationsController')
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: EMAIL SERVICE (for booking notifications)
@@ -815,18 +815,33 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
     if (admin_notes !== undefined)  { sets.push(`admin_notes = $${pi++}`);    params.push(admin_notes) }
     if (payment_status)             { sets.push(`payment_status = $${pi++}`); params.push(payment_status) }
 
+    const previous = await db('SELECT * FROM bookings WHERE id = $1 AND package_id = $2 LIMIT 1', [bId, id])
+    if (!previous.rows.length) return res.status(404).json({ success: false, error: 'Package booking not found' })
     const result = await db(
-      `UPDATE bookings
-       SET ${sets.join(', ')}
-       WHERE id = $${pi++} AND package_id = $${pi++}
-       RETURNING *`,
+      `UPDATE bookings SET ${sets.join(', ')} WHERE id = ${pi++} AND package_id = ${pi++} RETURNING *`,
       [...params, bId, id],
     )
-
-    if (!result.rows.length) {
-      return res.status(404).json({ success: false, error: 'Package booking not found' })
+    const booking = result.rows[0]
+    if (status === 'confirmed' && previous.rows[0].status !== 'confirmed') {
+      const [pkgResult, userResult] = await Promise.all([
+        db('SELECT title FROM packages WHERE id = $1 LIMIT 1', [id]),
+        booking.user_id ? db('SELECT id, full_name, email FROM users WHERE id = $1 LIMIT 1', [booking.user_id]).catch(() => ({ rows: [] })) : Promise.resolve({ rows: [] }),
+      ])
+      const pkgTitle = pkgResult.rows[0]?.title || 'your package'
+      const user = userResult.rows[0] || {}
+      const email = user.email || booking.email || null
+      const traveller = user.full_name || booking.full_name || 'traveller'
+      if (booking.user_id || email) asyncNoThrow(createNotificationInternal({
+        userId: booking.user_id || user.id || null, userEmail: email, type: 'package_request_confirmed', category: 'package',
+        title: 'Good news, ' + String(traveller).split(' ')[0] + ' — your trip is confirmed!',
+        message: 'Your request for "' + pkgTitle + '" has been confirmed by Altuvera Safaris. Open your booking for the dates, guest details, and next steps.',
+        actionUrl: '/my-bookings?bookingId=' + encodeURIComponent(booking.id) + '&packageId=' + encodeURIComponent(id),
+        actionLabel: 'View confirmed booking', priority: 'high', req,
+        metadata: { bookingId: booking.id, packageId: Number(id), bookingNumber: booking.booking_number || null },
+      }), 'package confirmation notification/email')
     }
-    return res.json({ success: true, data: result.rows[0] })
+    try { const io = req.app.get('io'); if (io) io.to('admin-room').emit('package:booking-updated', { booking, packageId: Number(id) }) } catch (socketErr) { logger.warn('[Packages] booking update socket failed:', socketErr.message) }
+    return res.json({ success: true, data: booking })
   } catch (err) {
     logger.error('[Packages] booking update error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to update package booking' })
