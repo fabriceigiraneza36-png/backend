@@ -55,14 +55,41 @@ const packageImage = (body = {}) => String(
   body.cover_image_url || body.image_url || body.thumbnail_url || ''
 ).trim()
 
-const packagePayload = (body = {}, existing = {}) => ({
-  title: String(body.title || existing.title || 'Travel package').trim().slice(0, 255),
-  slug: existing.slug || slugify(body.title || 'travel-package') + '-' + Date.now(),
-  cover_image_url: packageImage(body) || existing.cover_image_url || '',
-  destination_id: body.destination_id === undefined ? (existing.destination_id ?? null) : (body.destination_id ? Number(body.destination_id) : null),
-  is_published: body.is_published === undefined ? (existing.is_published ?? false) : Boolean(body.is_published),
-  is_featured: body.is_featured === undefined ? (existing.is_featured ?? false) : Boolean(body.is_featured),
-})
+const jsonList = (value, fallback = []) => {
+  if (value === undefined || value === null) return fallback
+  if (Array.isArray(value)) return value
+  if (typeof value === 'string') {
+    try { const parsed = JSON.parse(value); return Array.isArray(parsed) ? parsed : fallback } catch { return fallback }
+  }
+  return fallback
+}
+const packagePayload = (body = {}, existing = {}) => {
+  const mode = body.poster_mode === 'poster' || body.creation_mode === 'poster' ? 'poster' : (body.poster_mode === 'manual' || body.creation_mode === 'manual' ? 'manual' : (existing.poster_mode || 'manual'))
+  const gallery = jsonList(body.image_gallery ?? body.images, existing.image_gallery || [])
+    .map(item => typeof item === 'string' ? item.trim() : String(item?.url || item?.image_url || '').trim())
+    .filter(Boolean).slice(0, 30)
+  const poster = String(body.poster_image_url || packageImage(body) || existing.cover_image_url || '').trim()
+  return {
+    title: String(body.title || existing.title || 'Travel package').trim().slice(0, 255),
+    slug: existing.slug || slugify(body.title || 'travel-package') + '-' + Date.now(),
+    description: String(body.description ?? existing.description ?? '').trim(),
+    short_description: String(body.short_description ?? existing.short_description ?? '').trim(),
+    cover_image_url: poster || gallery[0] || '',
+    image_gallery: mode === 'poster' ? (poster ? [poster] : gallery) : gallery,
+    poster_mode: mode,
+    destination_id: body.destination_id === undefined ? (existing.destination_id ?? null) : (body.destination_id ? Number(body.destination_id) : null),
+    price: body.price === undefined ? (existing.price ?? null) : (body.price === '' ? null : Number(body.price)),
+    currency: String(body.currency || existing.currency || 'USD').slice(0, 10),
+    duration_days: body.duration_days === undefined ? (existing.duration_days ?? null) : (body.duration_days === '' ? null : Number(body.duration_days)),
+    duration_nights: body.duration_nights === undefined ? (existing.duration_nights ?? null) : (body.duration_nights === '' ? null : Number(body.duration_nights)),
+    category: String(body.category || existing.category || '').trim(),
+    highlights: jsonList(body.highlights, existing.highlights || []),
+    inclusions: jsonList(body.inclusions, existing.inclusions || []),
+    exclusions: jsonList(body.exclusions, existing.exclusions || []),
+    is_published: body.is_published === undefined ? (existing.is_published ?? false) : Boolean(body.is_published),
+    is_featured: body.is_featured === undefined ? (existing.is_featured ?? false) : Boolean(body.is_featured),
+  }
+}
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SCHEMA GUARD
@@ -96,16 +123,23 @@ const ensurePackagesSchema = async () => {
     `)
 
     const cols = [
-      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_featured   BOOLEAN DEFAULT false`,
-      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_published  BOOLEAN DEFAULT true`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_featured BOOLEAN DEFAULT false`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS is_published BOOLEAN DEFAULT true`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS destination_id INTEGER`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS booking_count INTEGER DEFAULT 0`,
-      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS view_count    INTEGER DEFAULT 0`,
-      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS currency      VARCHAR(10) DEFAULT 'USD'`,
-      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS price         NUMERIC(12,2)`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS view_count INTEGER DEFAULT 0`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS currency VARCHAR(10) DEFAULT 'USD'`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS price NUMERIC(12,2)`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS cover_image_url TEXT`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS category TEXT`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS sort_order INTEGER DEFAULT 0`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS poster_mode VARCHAR(20) DEFAULT 'manual'`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS image_gallery JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS highlights JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS inclusions JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS exclusions JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS duration_nights INTEGER`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS short_description TEXT`,
     ]
     for (const sql of cols) {
       await db(sql).catch(() => {})
@@ -320,10 +354,21 @@ router.post('/', requireAdmin, async (req, res) => {
     if (!payload.cover_image_url) {
       return res.status(400).json({ success: false, error: 'A package poster image is required' })
     }
+    if (payload.poster_mode === 'manual' && payload.image_gallery.length < 2) {
+      return res.status(400).json({ success: false, error: 'Manual packages require at least two images' })
+    }
+    if (payload.poster_mode === 'poster' && !payload.cover_image_url) {
+      return res.status(400).json({ success: false, error: 'Upload a package poster or provide its image URL' })
+    }
     const result = await db(
-      `INSERT INTO packages (title, slug, cover_image_url, destination_id, is_published, is_featured)
-       VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [payload.title, payload.slug, payload.cover_image_url, payload.destination_id, payload.is_published, payload.is_featured],
+      `INSERT INTO packages
+        (title, slug, description, short_description, cover_image_url, image_gallery, poster_mode,
+         destination_id, price, currency, duration_days, duration_nights, category, highlights, inclusions, exclusions, is_published, is_featured)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17,$18) RETURNING *`,
+      [payload.title, payload.slug, payload.description, payload.short_description, payload.cover_image_url,
+       JSON.stringify(payload.image_gallery), payload.poster_mode, payload.destination_id, payload.price, payload.currency,
+       payload.duration_days, payload.duration_nights, payload.category, JSON.stringify(payload.highlights),
+       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), payload.is_published, payload.is_featured],
     )
     return res.status(201).json({ success: true, data: result.rows[0] })
   } catch (err) {
@@ -338,14 +383,22 @@ router.patch('/:id', requireAdmin, async (req, res) => {
     const current = await db('SELECT * FROM packages WHERE id = $1', [req.params.id])
     if (!current.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
     const payload = packagePayload(req.body, current.rows[0])
-    if (!payload.cover_image_url) {
-      return res.status(400).json({ success: false, error: 'A package poster image is required' })
+    if (payload.poster_mode === 'manual' && payload.image_gallery.length < 2) {
+      return res.status(400).json({ success: false, error: 'Manual packages require at least two images' })
+    }
+    if (payload.poster_mode === 'poster' && !payload.cover_image_url) {
+      return res.status(400).json({ success: false, error: 'Upload a package poster or provide its image URL' })
     }
     const result = await db(
-      `UPDATE packages
-       SET cover_image_url = $1, destination_id = $2, is_published = $3, is_featured = $4, updated_at = NOW()
-       WHERE id = $5 RETURNING *`,
-      [payload.cover_image_url, payload.destination_id, payload.is_published, payload.is_featured, req.params.id],
+      `UPDATE packages SET title=$1, description=$2, short_description=$3, cover_image_url=$4,
+       image_gallery=$5::jsonb, poster_mode=$6, destination_id=$7, price=$8, currency=$9,
+       duration_days=$10, duration_nights=$11, category=$12, highlights=$13::jsonb,
+       inclusions=$14::jsonb, exclusions=$15::jsonb, is_published=$16, is_featured=$17, updated_at=NOW()
+       WHERE id=$18 RETURNING *`,
+      [payload.title, payload.description, payload.short_description, payload.cover_image_url,
+       JSON.stringify(payload.image_gallery), payload.poster_mode, payload.destination_id, payload.price, payload.currency,
+       payload.duration_days, payload.duration_nights, payload.category, JSON.stringify(payload.highlights),
+       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), payload.is_published, payload.is_featured, req.params.id],
     )
     const row = result.rows[0]
     return res.json({
