@@ -45,7 +45,10 @@ const publicIdFromUrl = (value) => {
 // text/JSON/array fields likely to contain media URLs. If any other record
 // still refers to it, preserve the asset. If reference discovery fails, fail
 // closed and do not delete anything from Cloudinary.
-const hasDatabaseReference = async (publicId) => {
+const findDatabaseReferences = async (publicIds) => {
+  const candidates = [...new Set(publicIds.filter(Boolean))]
+  const referenced = new Set()
+  if (!candidates.length) return referenced
   const { rows: tableRows } = await query(`
     SELECT c.table_name, c.column_name
     FROM information_schema.columns c
@@ -54,9 +57,7 @@ const hasDatabaseReference = async (publicId) => {
     WHERE c.table_schema = 'public'
       AND t.table_type = 'BASE TABLE'
       AND c.data_type IN ('text', 'character varying', 'character', 'json', 'jsonb', 'ARRAY')
-      AND (
-        c.column_name ~* '(image|media|thumbnail|avatar|cover|hero|logo|banner|poster|video|file|url|gallery|content|body|html|attraction|attachment|photo|icon|flag)'
-      )
+      AND c.column_name ~* '(image|media|thumbnail|avatar|cover|hero|logo|banner|poster|video|file|url|gallery|content|body|html|attraction|attachment|photo|icon|flag)'
     ORDER BY c.table_name, c.ordinal_position
   `)
   const grouped = new Map()
@@ -66,13 +67,17 @@ const hasDatabaseReference = async (publicId) => {
   }
   for (const [table, columns] of grouped) {
     const checks = columns.map((column) =>
-      `position($1 in COALESCE(${quoteIdentifier(column)}::text, '')) > 0`
+      `position(candidate.public_id in COALESCE(t.${quoteIdentifier(column)}::text, '')) > 0`
     ).join(' OR ')
-    const sql = `SELECT EXISTS (SELECT 1 FROM ${quoteIdentifier(table)} WHERE ${checks}) AS present`
-    const result = await query(sql, [publicId])
-    if (result.rows[0]?.present) return true
+    const sql = `SELECT DISTINCT candidate.public_id
+      FROM ${quoteIdentifier(table)} t
+      CROSS JOIN unnest($1::text[]) AS candidate(public_id)
+      WHERE ${checks}`
+    const result = await query(sql, [candidates])
+    for (const row of result.rows) referenced.add(row.public_id)
+    if (referenced.size === candidates.length) break
   }
-  return false
+  return referenced
 }
 
 const quoteIdentifier = (identifier) => `"${String(identifier).replace(/"/g, '""')}"`
@@ -84,28 +89,36 @@ const destroyCloudinaryUrls = async (urls = []) => {
   let deleted = 0
   let preserved = 0
   let failed = 0
-  for (const url of unique) {
-    try {
-      const publicId = publicIdFromUrl(url)
-      const resourceType = resourceTypeFromUrl(url)
-      if (!publicId || !resourceType) {
+  const assets = unique.map((url) => ({
+    url,
+    publicId: publicIdFromUrl(url),
+    resourceType: resourceTypeFromUrl(url),
+  }))
+  const validAssets = assets.filter((asset) => asset.publicId && asset.resourceType)
+  preserved += assets.length - validAssets.length
+  try {
+    const referenced = await findDatabaseReferences(validAssets.map((asset) => asset.publicId))
+    for (const asset of validAssets) {
+      if (referenced.has(asset.publicId)) {
         preserved += 1
         continue
       }
-      if (await hasDatabaseReference(publicId)) {
-        preserved += 1
-        continue
+      try {
+        const result = await cloudinary.uploader.destroy(asset.publicId, {
+          resource_type: asset.resourceType,
+          invalidate: true,
+        })
+        if (result?.result === 'ok' || result?.result === 'not found') deleted += 1
+        else failed += 1
+      } catch (err) {
+        failed += 1
+        console.error('[CloudinaryCleanup] Asset cleanup failed:', err.message)
       }
-      const result = await cloudinary.uploader.destroy(publicId, {
-        resource_type: resourceType,
-        invalidate: true,
-      })
-      if (result?.result === 'ok' || result?.result === 'not found') deleted += 1
-      else failed += 1
-    } catch (err) {
-      failed += 1
-      console.error('[CloudinaryCleanup] Asset preserved/cleanup failed:', err.message)
     }
+  } catch (err) {
+    // If the database reference scan fails, fail closed and preserve every asset.
+    preserved += validAssets.length
+    console.error('[CloudinaryCleanup] Reference scan failed; preserving assets:', err.message)
   }
   return { attempted: unique.length, deleted, preserved, failed }
 }
