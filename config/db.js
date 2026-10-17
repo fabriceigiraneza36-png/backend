@@ -40,6 +40,7 @@ const poolOptions = connectionString
       max:                    parseInt(process.env.DB_POOL_MAX,        10) || 30,
       idleTimeoutMillis:      parseInt(process.env.DB_IDLE_MS,         10) || 300_000,
       connectionTimeoutMillis:parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10_000,
+      statement_timeout:       parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30_000,
       allowExitOnIdle: false,
     }
   : {

@@ -63,6 +63,9 @@ router.get('/continent/:continent', ctrl.getByContinent)
 router.post('/', protect, adminOnly, ctrl.create)
 
 /** DELETE /api/countries — bulk delete (body: { ids }) */
+router.get('/purge/preview', protect, adminOnly, ctrl.purgePreview)
+router.delete('/purge', protect, adminOnly, ctrl.purgeAll)
+router.get('/purge/:jobId', protect, adminOnly, ctrl.getPurgeJob)
 router.delete('/', protect, adminOnly, ctrl.bulkDelete)
 
 /** PATCH /api/countries/:id/toggle-active */

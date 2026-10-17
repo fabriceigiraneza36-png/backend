@@ -6,6 +6,7 @@ const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
+const { startPurge, getPurgeJob } = require('../utils/purgeJobs')
 
 const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
 
@@ -2606,48 +2607,101 @@ exports.bulkUpdate = async (req, res, next) => {
 
 exports.bulkDelete = async (req, res, next) => {
   try {
-    const { ids, permanent = false } = req.body
-
+    const { ids, permanent = false } = req.body || {}
     if (!Array.isArray(ids) || !ids.length) {
       return res.status(400).json({ success: false, error: 'ids array required' })
     }
 
-    const safeIds = ids.map(x => parseInt(x, 10)).filter(Number.isFinite)
+    const safeIds = [...new Set(ids.map(x => Number.parseInt(x, 10)).filter(x => Number.isInteger(x) && x > 0))]
     if (!safeIds.length) {
       return res.status(400).json({ success: false, error: 'No valid IDs provided' })
     }
 
     const isPermanent = toBool(permanent)
     let result
-
+    let mediaUrls = []
     if (isPermanent) {
+      const { rows: destinations } = await query(
+        `SELECT id, name, slug, country_id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url, attractions
+         FROM destinations WHERE id = ANY($1::INTEGER[])`, [safeIds],
+      )
+      const imageRows = await query(
+        'SELECT image_url FROM destination_images WHERE destination_id = ANY($1::INTEGER[])', [safeIds],
+      ).catch(() => ({ rows: [] }))
+      mediaUrls = [
+        ...destinations.flatMap(d => [
+          d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
+          ...(Array.isArray(d.image_urls) ? d.image_urls : []),
+          ...parseJson(d.attractions, []).map(x => x?.imageUrl || x?.image_url || x?.image).filter(Boolean),
+        ]),
+        ...imageRows.rows.map(row => row.image_url),
+      ].filter(Boolean)
       result = await query(
-        `DELETE FROM destinations WHERE id = ANY($1::INTEGER[])
-         RETURNING id, name, slug, country_id`,
+        'DELETE FROM destinations WHERE id = ANY($1::INTEGER[]) RETURNING id, name, slug, country_id',
         [safeIds],
       )
+      // External media calls must not hold the HTTP request open.
+      void destroyCloudinaryUrls(mediaUrls).catch(err =>
+        console.error(`${LOG} bulk Cloudinary cleanup failed:`, err.message))
     } else {
       result = await query(
-        `UPDATE destinations
-         SET is_active = false, status = 'archived', updated_at = NOW()
-         WHERE id = ANY($1::INTEGER[])
-         RETURNING id, name, slug, country_id`,
+        `UPDATE destinations SET is_active = false, status = 'archived', updated_at = NOW()
+         WHERE id = ANY($1::INTEGER[]) RETURNING id, name, slug, country_id`,
         [safeIds],
       )
     }
 
-    /* Sync all affected country counts */
     const countryIds = [...new Set(result.rows.map(r => r.country_id).filter(Boolean))]
     for (const cid of countryIds) await syncCountryDestCount(cid)
 
     return res.json({
       success: true,
       message: `${result.rows.length} destination(s) ${isPermanent ? 'deleted' : 'archived'}`,
-      data:    result.rows,
+      data: result.rows,
+      mediaCleanup: isPermanent ? 'queued' : undefined,
     })
   } catch (err) {
     return handlePgError(err, res, next)
   }
+}
+
+exports.purgePreview = async (req, res, next) => {
+  try {
+    const resource = String(req.query.resource || req.baseUrl?.split('/').pop() || '').toLowerCase()
+    if (!['destinations', 'countries'].includes(resource)) {
+      return res.status(400).json({ success: false, error: 'resource must be destinations or countries' })
+    }
+    const { rows } = await query(`SELECT COUNT(*)::integer AS count FROM "${resource}"`)
+    return res.json({ success: true, data: { resource, count: rows[0].count, confirmation: `PURGE ALL ${resource.toUpperCase()}` } })
+  } catch (err) { next(err) }
+}
+
+exports.purgeAll = async (req, res, next) => {
+  try {
+    const resource = String(req.body?.resource || '').toLowerCase()
+    const expected = `PURGE ALL ${resource.toUpperCase()}`
+    if (!['destinations', 'countries'].includes(resource)) {
+      return res.status(400).json({ success: false, error: 'resource must be destinations or countries' })
+    }
+    if (String(req.body?.confirm || '') !== expected) {
+      return res.status(400).json({ success: false, error: `Explicit confirmation required: ${expected}` })
+    }
+    const jobId = await startPurge({ resource, requestedBy: req.user?.email || req.user?.id || req.user?.username })
+    return res.status(202).json({ success: true, message: 'Purge queued; check job status to monitor progress', jobId, statusUrl: `/api/${resource}/purge/${jobId}` })
+  } catch (err) {
+    if (err.code === 'PURGE_ALREADY_RUNNING') {
+      return res.status(409).json({ success: false, error: err.message, jobId: err.jobId })
+    }
+    next(err)
+  }
+}
+
+exports.getPurgeJob = async (req, res, next) => {
+  try {
+    const job = await getPurgeJob(req.params.jobId)
+    if (!job) return res.status(404).json({ success: false, error: 'Purge job not found' })
+    return res.json({ success: true, data: job })
+  } catch (err) { next(err) }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
