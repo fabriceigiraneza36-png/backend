@@ -124,23 +124,33 @@ const mapLimit = async (items, limit, worker) => {
 
 exports.listCategories = async (req, res) => {
   try {
-    const data = await Promise.all(ALL_CATEGORIES.map(async category => {
+    const configuredByCategory = await Promise.all(ALL_CATEGORIES.map(async category => {
       const configured = uniqueTables(category)
       const tablesPresent = await existingTables(configured)
-      const missingTables = configured.filter(table => !tablesPresent.includes(table))
-      const tables = await mapLimit(tablesPresent, 5, async table => ({
+      return {
+        category,
+        tablesPresent,
+        missingTables: configured.filter(table => !tablesPresent.includes(table)),
+      }
+    }))
+    const allPresent = [...new Set(configuredByCategory.flatMap(item => item.tablesPresent))]
+    // One global concurrency limit avoids flooding Neon with parallel count queries.
+    const estimates = await mapLimit(allPresent, 8, async table => [table, await estimateTable(table)])
+    const estimateByTable = new Map(estimates)
+    const data = configuredByCategory.map(item => {
+      const tables = item.tablesPresent.map(table => ({
         table,
-        count: await estimateTable(table),
+        count: estimateByTable.get(table),
         estimated: true,
       }))
       return {
-        category,
+        category: item.category,
         tables,
-        missingTables,
-        totalRecords: tables.reduce((sum, item) => sum + item.count, 0),
+        missingTables: item.missingTables,
+        totalRecords: tables.reduce((sum, table) => sum + table.count, 0),
         estimated: true,
       }
-    }))
+    })
     return res.json({ success: true, data, countMode: 'estimated' })
   } catch (err) {
     logger.error('[Maintenance] listCategories failed:', err.message)
@@ -324,7 +334,21 @@ exports.getPurgeJob = async (req, res) => {
       [req.params.jobId],
     )
     if (!rows.length) return res.status(404).json({ success: false, message: 'Purge job not found' })
-    const job = rows[0]
+    let job = rows[0]
+    // If a worker died while a job was running, requeue it after a quiet period.
+    // The update is conditional so active workers keep ownership of fresh jobs.
+    if (job.status === 'running' && Date.now() - new Date(job.updated_at).getTime() > 120_000) {
+      const recovered = await query(
+        `UPDATE maintenance_purge_jobs SET status = 'queued', updated_at = NOW()
+         WHERE id = $1 AND status = 'running' AND updated_at < NOW() - INTERVAL '2 minutes'
+         RETURNING status, updated_at`,
+        [job.id],
+      )
+      if (recovered.rows.length) {
+        job = { ...job, status: 'queued', updated_at: recovered.rows[0].updated_at }
+        setImmediate(() => { void processPurgeJob(job.id) })
+      }
+    }
     // Convert snake_case DB columns to a stable API shape.
     return res.json({
       success: true,
