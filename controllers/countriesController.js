@@ -888,7 +888,12 @@ const purgeAll = async (req, res, next) => {
     }
     const jobId = await startPurge({ resource, requestedBy: req.user?.email || req.user?.id || req.user?.username });
     return res.status(202).json({ success: true, message: 'Purge queued; check job status to monitor progress', jobId, statusUrl: `/api/${resource}/purge/${jobId}` });
-  } catch (err) { next(err); }
+  } catch (err) {
+    if (err.code === 'PURGE_ALREADY_RUNNING') {
+      return res.status(409).json({ success: false, error: err.message, jobId: err.jobId });
+    }
+    next(err);
+  }
 };
 
 const getPurgeJob = async (req, res, next) => {
