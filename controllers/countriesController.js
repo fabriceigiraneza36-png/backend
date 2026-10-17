@@ -867,7 +867,7 @@ const { startPurge, getPurgeJob: getPurgeJobRecord } = require("../utils/purgeJo
 
 const purgePreview = async (req, res, next) => {
   try {
-    const resource = String(req.query.resource || '').toLowerCase();
+    const resource = String(req.query.resource || req.baseUrl?.split('/').pop() || '').toLowerCase();
     if (!['countries', 'destinations'].includes(resource)) {
       return res.status(400).json({ success: false, error: 'resource must be countries or destinations' });
     }
