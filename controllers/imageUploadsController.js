@@ -5,6 +5,7 @@
 
 const { query } = require("../config/database");
 const { cloudinary, ensureCloudinaryConfigured } = require("../config/cloudinary");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 // ==========================================
 // DESTINATION IMAGE UPLOADS
@@ -164,11 +165,7 @@ exports.deleteDestinationImage = async (req, res, next) => {
 
     const image = imageResult.rows[0];
 
-    // Delete from Cloudinary
-    const publicId = image.image_url.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Remove database references first; shared assets are preserved by the cleanup utility.
     await query("DELETE FROM destination_images WHERE id = $1", [imageId]);
 
     // Update destination's image_urls array
@@ -178,6 +175,7 @@ exports.deleteDestinationImage = async (req, res, next) => {
        WHERE id = $2`,
       [image.image_url, destinationId]
     );
+    await destroyCloudinaryUrls([image.image_url]);
 
     res.json({
       success: true,
@@ -334,12 +332,9 @@ exports.deleteGalleryImage = async (req, res, next) => {
 
     const image = imageResult.rows[0];
 
-    // Delete from Cloudinary
-    const publicId = image.image_url.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Delete the row first so shared-reference detection can decide safely.
     await query("DELETE FROM gallery WHERE id = $1", [id]);
+    await destroyCloudinaryUrls([image.image_url]);
 
     res.json({
       success: true,
@@ -569,11 +564,7 @@ exports.deleteCountryImage = async (req, res, next) => {
     // Check if this is the flag image
     const isFlagImage = countryData.flag_url === decodedImageUrl;
 
-    // Delete from Cloudinary
-    const publicId = decodedImageUrl.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Remove database references first; shared assets are never destroyed.
     if (isFlagImage) {
       await query(
         `UPDATE countries 
@@ -592,6 +583,7 @@ exports.deleteCountryImage = async (req, res, next) => {
         [decodedImageUrl, countryId]
       );
     }
+    await destroyCloudinaryUrls([decodedImageUrl]);
 
     res.json({
       success: true,
