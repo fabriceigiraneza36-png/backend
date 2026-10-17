@@ -157,6 +157,10 @@ const processJob = async (jobId, resource) => {
       )
       if (exists.rows[0]?.present) await query(`DELETE FROM "${table}"`)
     }
+    if (resource === 'destinations') {
+      await query('UPDATE countries SET destination_count = 0, updated_at = NOW()').catch(err =>
+        console.warn('[PurgeJobs] Could not reset country destination counts:', err.message))
+    }
     await query("UPDATE admin_purge_jobs SET status = 'completed', updated_at = NOW() WHERE id = $1", [jobId])
   } catch (err) {
     await query(
@@ -170,6 +174,16 @@ const processJob = async (jobId, resource) => {
 const startPurge = async ({ resource, requestedBy }) => {
   if (!['destinations', 'countries'].includes(resource)) throw new Error('Unsupported purge resource')
   await ensureSchema()
+  const active = await query(
+    "SELECT id FROM admin_purge_jobs WHERE resource = $1 AND status IN ('queued', 'running') LIMIT 1",
+    [resource],
+  )
+  if (active.rows.length) {
+    const err = new Error('A purge job for this table is already queued or running')
+    err.code = 'PURGE_ALREADY_RUNNING'
+    err.jobId = active.rows[0].id
+    throw err
+  }
   const { rows } = await query(
     `INSERT INTO admin_purge_jobs (id, resource, status, requested_by)
      VALUES (gen_random_uuid(), $1, 'queued', $2) RETURNING id`,
