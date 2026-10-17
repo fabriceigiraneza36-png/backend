@@ -2667,7 +2667,7 @@ exports.bulkDelete = async (req, res, next) => {
 
 exports.purgePreview = async (req, res, next) => {
   try {
-    const resource = String(req.query.resource || '').toLowerCase()
+    const resource = String(req.query.resource || req.baseUrl?.split('/').pop() || '').toLowerCase()
     if (!['destinations', 'countries'].includes(resource)) {
       return res.status(400).json({ success: false, error: 'resource must be destinations or countries' })
     }
