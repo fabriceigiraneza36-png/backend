@@ -152,13 +152,22 @@ const processJob = async (jobId, resource) => {
       }
     }
 
-    // Clear legacy orphan rows that no longer have a parent record.
+    // Clear legacy orphan rows in bounded batches so old data cannot make
+    // the final cleanup exceed PostgreSQL's statement timeout.
     for (const table of CHILD_TABLES[resource]) {
       const exists = await query(
         'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2) AS present',
         ['public', table],
       )
-      if (exists.rows[0]?.present) await query(`DELETE FROM "${table}"`)
+      if (!exists.rows[0]?.present) continue
+      while (true) {
+        const deleted = await query(
+          `WITH batch AS (SELECT ctid FROM "${table}" LIMIT $1)
+           DELETE FROM "${table}" WHERE ctid IN (SELECT ctid FROM batch) RETURNING 1`,
+          [BATCH_SIZE],
+        )
+        if (!deleted.rows.length) break
+      }
     }
     if (resource === 'destinations') {
       await query('UPDATE countries SET destination_count = 0, updated_at = NOW()').catch(err =>
@@ -216,5 +225,19 @@ const getPurgeJob = async (jobId) => {
   )
   return rows[0] || null
 }
+
+// Resume explicitly requested jobs after a process restart. These jobs are durable
+// in Postgres and are never created without the admin confirmation phrase.
+setImmediate(async () => {
+  try {
+    await ensureSchema()
+    const { rows } = await query(
+      "SELECT id, resource FROM admin_purge_jobs WHERE status IN ('queued', 'running') ORDER BY created_at",
+    )
+    for (const job of rows) void processJob(job.id, job.resource)
+  } catch (err) {
+    console.error('[PurgeJobs] Could not resume queued jobs:', err.message)
+  }
+})
 
 module.exports = { startPurge, getPurgeJob }
