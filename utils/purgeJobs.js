@@ -34,6 +34,9 @@ const ensureSchema = () => {
   `).then(() => query(`
     CREATE INDEX IF NOT EXISTS idx_admin_purge_jobs_created_at
     ON admin_purge_jobs(created_at DESC)
+  `)).then(() => query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_admin_purge_jobs_one_active_per_resource
+    ON admin_purge_jobs(resource) WHERE status IN ('queued', 'running')
   `)).catch((err) => { schemaReady = null; throw err })
   return schemaReady
 }
@@ -101,9 +104,9 @@ const mediaUrlsForCountries = async (client, ids) => {
 }
 
 const processJob = async (jobId, resource) => {
-  await ensureSchema()
-  await query("UPDATE admin_purge_jobs SET status = 'running', updated_at = NOW() WHERE id = $1", [jobId])
   try {
+    await ensureSchema()
+    await query("UPDATE admin_purge_jobs SET status = 'running', updated_at = NOW() WHERE id = $1", [jobId])
     const count = await query(`SELECT COUNT(*)::integer AS count FROM "${resource}"`)
     await query('UPDATE admin_purge_jobs SET total_count = $2, updated_at = NOW() WHERE id = $1', [jobId, count.rows[0].count])
     let processed = 0
@@ -184,11 +187,22 @@ const startPurge = async ({ resource, requestedBy }) => {
     err.jobId = active.rows[0].id
     throw err
   }
-  const { rows } = await query(
-    `INSERT INTO admin_purge_jobs (id, resource, status, requested_by)
-     VALUES (gen_random_uuid(), $1, 'queued', $2) RETURNING id`,
-    [resource, requestedBy ? String(requestedBy).slice(0, 255) : null],
-  )
+  let rows
+  try {
+    const inserted = await query(
+      `INSERT INTO admin_purge_jobs (id, resource, status, requested_by)
+       VALUES (gen_random_uuid(), $1, 'queued', $2) RETURNING id`,
+      [resource, requestedBy ? String(requestedBy).slice(0, 255) : null],
+    )
+    rows = inserted.rows
+  } catch (insertErr) {
+    if (insertErr.code === '23505') {
+      const err = new Error('A purge job for this table is already queued or running')
+      err.code = 'PURGE_ALREADY_RUNNING'
+      throw err
+    }
+    throw insertErr
+  }
   const jobId = rows[0].id
   setImmediate(() => { void processJob(jobId, resource) })
   return jobId
