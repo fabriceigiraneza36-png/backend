@@ -3,6 +3,7 @@
 const { query }    = require("../config/db");
 const { paginate } = require("../utils/helpers");
 const logger       = require("../utils/logger");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 // ── Column list ───────────────────────────────────────────────────────────
 const COLS = `
@@ -616,7 +617,7 @@ exports.remove = async (req, res, next) => {
       });
 
     const result = await query(
-      "DELETE FROM testimonials WHERE id = $1 RETURNING id, name",
+      "DELETE FROM testimonials WHERE id = $1 RETURNING id, name, avatar_url",
       [id],
     );
 
@@ -625,6 +626,7 @@ exports.remove = async (req, res, next) => {
         success: false, error: "Testimonial not found",
       });
 
+    await destroyCloudinaryUrls([result.rows[0].avatar_url]);
     res.json({
       success: true,
       message: `"${result.rows[0].name}" deleted`,
@@ -652,10 +654,11 @@ exports.bulkDelete = async (req, res, next) => {
       });
 
     const result = await query(
-      "DELETE FROM testimonials WHERE id = ANY($1::INTEGER[]) RETURNING id",
+      "DELETE FROM testimonials WHERE id = ANY($1::INTEGER[]) RETURNING id, avatar_url",
       [validIds],
     );
 
+    await destroyCloudinaryUrls(result.rows.map((row) => row.avatar_url).filter(Boolean));
     res.json({
       success: true,
       message: `${result.rows.length} testimonial(s) deleted`,

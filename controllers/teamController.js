@@ -13,7 +13,7 @@
 const TeamMember = require("../models/TeamMember");
 const AppError = require("../utils/AppError");
 const catchAsync = require("../middleware/asyncHandler");
-const { cloudinary } = require("../config/cloudinary");
+const { destroyCloudinaryPublicIds } = require("../utils/cloudinaryCleanup");
 const { Op } = require("sequelize");
 
 // ─── Helper: Parse string or array into a clean JS array ───────────────────
@@ -51,14 +51,14 @@ const extractImageData = (file) => {
   };
 };
 
-// ─── Helper: Delete image from Cloudinary silently ─────────────────────────
+// Delete only after the owning row has stopped referencing the asset.
 const deleteCloudinaryImage = async (publicId) => {
   if (!publicId) return;
-  try {
-    await cloudinary.uploader.destroy(publicId);
-  } catch (err) {
-    console.error(`[Cloudinary] Failed to delete image ${publicId}:`, err.message);
-  }
+  await destroyCloudinaryPublicIds([publicId], "image");
+};
+const deleteCloudinaryImageBatch = async (publicIds) => {
+  if (!publicIds?.length) return;
+  await destroyCloudinaryPublicIds(publicIds, "image");
 };
 
 // ─── Helper: Build the response shape the frontend expects ─────────────────
@@ -495,6 +495,7 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
   if (!member) {
     return next(new AppError("Team member not found", 404));
   }
+  const previousImagePublicId = member.image_public_id;
 
   // Build update object — only include fields that were actually sent
   const updateData = {};
@@ -528,23 +529,17 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
 
   // Image handling
   if (req.file) {
-    // Delete old image from Cloudinary
-    await deleteCloudinaryImage(member.image_public_id);
-
     const imageData = extractImageData(req.file);
     updateData.image_url = imageData.image_url;
     updateData.image_public_id = imageData.image_public_id;
   } else if (req.body.image_url !== undefined) {
-    // If URL changed and old was cloudinary, clean up
     if (req.body.image_url !== member.image_url && member.image_public_id) {
-      await deleteCloudinaryImage(member.image_public_id);
       updateData.image_public_id = null;
     }
     updateData.image_url = req.body.image_url || null;
   } else if (req.body.image !== undefined) {
     // Support "image" field name
     if (req.body.image !== member.image_url && member.image_public_id) {
-      await deleteCloudinaryImage(member.image_public_id);
       updateData.image_public_id = null;
     }
     updateData.image_url = req.body.image || null;
@@ -552,7 +547,6 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
 
   // Remove image explicitly
   if (req.body.remove_image === true || req.body.remove_image === "true") {
-    await deleteCloudinaryImage(member.image_public_id);
     updateData.image_url = null;
     updateData.image_public_id = null;
   }
@@ -585,6 +579,9 @@ exports.updateTeamMember = catchAsync(async (req, res, next) => {
 
   // Reload to get updated slug and computed fields
   await member.reload();
+  if (previousImagePublicId && previousImagePublicId !== member.image_public_id) {
+    await deleteCloudinaryImage(previousImagePublicId);
+  }
 
   res.status(200).json({
     status: "success",
@@ -606,11 +603,10 @@ exports.deleteTeamMember = catchAsync(async (req, res, next) => {
     return next(new AppError("Team member not found", 404));
   }
 
-  // Clean up Cloudinary image
-  await deleteCloudinaryImage(member.image_public_id);
-
   const memberName = member.name;
+  const imagePublicId = member.image_public_id;
   await member.destroy();
+  await deleteCloudinaryImage(imagePublicId);
 
   res.status(200).json({
     status: "success",
@@ -634,13 +630,9 @@ exports.bulkDeleteTeamMembers = catchAsync(async (req, res, next) => {
   // Find all members to delete their images
   const members = await TeamMember.findAll({ where: { id: { [Op.in]: ids } } });
 
-  // Delete Cloudinary images
-  const deletePromises = members
-    .filter((m) => m.image_public_id)
-    .map((m) => deleteCloudinaryImage(m.image_public_id));
-  await Promise.all(deletePromises);
-
+  const publicIds = members.map((m) => m.image_public_id).filter(Boolean);
   const deletedCount = await TeamMember.destroy({ where: { id: { [Op.in]: ids } } });
+  await deleteCloudinaryImageBatch(publicIds);
 
   res.status(200).json({
     status: "success",

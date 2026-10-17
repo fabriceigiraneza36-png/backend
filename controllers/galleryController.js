@@ -2,6 +2,7 @@
 const { query } = require("../config/db");
 const { paginate } = require("../utils/helpers");
 const { getUploadedFileUrl } = require("../utils/uploadHelpers");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 // ─── Allowed sort options ────────────────────────────────────────────────────
 const SORT_OPTIONS = {
@@ -431,6 +432,7 @@ exports.remove = async (req, res, next) => {
       if (result.rows.length === 0)
         return res.status(404).json({ success: false, error: "Image not found" });
 
+      await destroyCloudinaryUrls([result.rows[0].image_url]);
       return res.json({ success: true, message: "Image permanently deleted", data: result.rows[0] });
     }
 

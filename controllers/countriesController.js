@@ -778,11 +778,14 @@ const remove = async (req, res, next) => {
     const destinationImageRows = destinationRows.rows.length
       ? await query(`SELECT di.image_url FROM destination_images di JOIN destinations d ON d.id = di.destination_id WHERE d.country_id = $1`, [id]).catch(() => ({ rows: [] }))
       : { rows: [] };
+    const countryImageRows = await query('SELECT image_url FROM country_images WHERE country_id = $1', [id]).catch(() => ({ rows: [] }));
 
     const urls = [
+      ...countryImageRows.rows.map(row => row.image_url),
       country.flag_url, country.image_url, country.cover_image_url, country.hero_image,
       ...(Array.isArray(country.images) ? country.images : []),
       ...normalizeImages(country.hero_images).map((x) => x.url),
+      ...(() => { try { const a = Array.isArray(country.attractions) ? country.attractions : JSON.parse(country.attractions || '[]'); return Array.isArray(a) ? a.map(item => item?.imageUrl || item?.image_url || item?.image).filter(Boolean) : []; } catch { return []; } })(),
       ...destinationRows.rows.flatMap((d) => [
         d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
         ...(Array.isArray(d.image_urls) ? d.image_urls : []),
@@ -1009,7 +1012,13 @@ module.exports = {
         mediaUrls.push(country.flag_url, country.image_url, country.cover_image_url, country.hero_image);
         mediaUrls.push(...normalizeImages(country.hero_images).map(item => item.url));
         mediaUrls.push(...normalizeImages(country.images).map(item => item.url));
+        mediaUrls.push(...(() => { try {
+          const a = Array.isArray(country.attractions) ? country.attractions : JSON.parse(country.attractions || '[]');
+          return Array.isArray(a) ? a.map(item => item?.imageUrl || item?.image_url || item?.image).filter(Boolean) : [];
+        } catch { return []; } })());
       }
+      const countryImageRows = await query('SELECT image_url FROM country_images WHERE country_id = ANY($1::integer[])', [ids]).catch(() => ({ rows: [] }));
+      mediaUrls.push(...countryImageRows.rows.map(row => row.image_url));
       if (linkedDestinations.length) {
         const destinationIds = linkedDestinations.map(row => row.id);
         const { rows: destinations } = await query(

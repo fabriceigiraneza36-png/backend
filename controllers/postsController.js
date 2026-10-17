@@ -7,20 +7,16 @@
 const { query } = require("../config/db");
 const { slugify, paginate, calculateReadTime } = require("../utils/helpers");
 const { getUploadedFileUrl } = require("../utils/uploadHelpers");
-const { cloudinary } = require("../config/cloudinary");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
-// ─── Helper: Delete Cloudinary image silently ──────────────────────
+// Clean up only after the database no longer references an asset.
 const deleteCloudinaryImage = async (url) => {
-  if (!url || !url.includes("cloudinary")) return;
-  try {
-    const parts = url.split("/");
-    const filename = parts[parts.length - 1];
-    const publicId = filename.split(".")[0];
-    const folder = parts[parts.length - 2];
-    await cloudinary.uploader.destroy(`${folder}/${publicId}`);
-  } catch (err) {
-    console.error("[Cloudinary] Failed to delete:", err.message);
-  }
+  if (!url) return;
+  await destroyCloudinaryUrls([url]);
+};
+const deleteCloudinaryImages = async (urls) => {
+  const unique = [...new Set((urls || []).filter(Boolean))];
+  if (unique.length) await destroyCloudinaryUrls(unique);
 };
 
 // ─── Helper: Ensure unique slug ────────────────────────────────────
@@ -608,7 +604,6 @@ exports.update = async (req, res, next) => {
 
     // Image
     if (req.file) {
-      await deleteCloudinaryImage(existing.rows[0].image_url);
       fields.image_url = getUploadedFileUrl(req.file);
     }
 
@@ -649,6 +644,9 @@ exports.update = async (req, res, next) => {
       values
     );
 
+    if (req.file && existing.rows[0].image_url) {
+      await deleteCloudinaryImage(existing.rows[0].image_url);
+    }
     res.json({ status: "success", data: result.rows[0] });
   } catch (err) {
     if (err.code === "23505") {
@@ -664,17 +662,16 @@ exports.update = async (req, res, next) => {
  */
 exports.remove = async (req, res, next) => {
   try {
-    const existing = await query("SELECT image_url, title FROM posts WHERE id = $1", [req.params.id]);
+    const existing = await query("SELECT image_url, author_avatar, title FROM posts WHERE id = $1", [req.params.id]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ status: "error", message: "Post not found" });
     }
-
-    await deleteCloudinaryImage(existing.rows[0].image_url);
 
     // Delete comments first
     await query("DELETE FROM post_comments WHERE post_id = $1", [req.params.id]).catch(() => {});
 
     await query("DELETE FROM posts WHERE id = $1", [req.params.id]);
+    await deleteCloudinaryImages([existing.rows[0].image_url, existing.rows[0].author_avatar]);
 
     res.json({
       status: "success",
@@ -745,18 +742,15 @@ exports.bulkDelete = async (req, res, next) => {
 
     // Get images for cleanup
     const posts = await query(
-      `SELECT image_url FROM posts WHERE id = ANY($1)`,
+      `SELECT image_url, author_avatar FROM posts WHERE id = ANY($1)`
       [ids]
     );
-
-    for (const post of posts.rows) {
-      await deleteCloudinaryImage(post.image_url);
-    }
 
     // Delete comments
     await query("DELETE FROM post_comments WHERE post_id = ANY($1)", [ids]).catch(() => {});
 
     const result = await query("DELETE FROM posts WHERE id = ANY($1)", [ids]);
+    await deleteCloudinaryImages(posts.rows.flatMap((post) => [post.image_url, post.author_avatar]));
 
     res.json({
       status: "success",

@@ -5,6 +5,7 @@
 'use strict';
 
 const pool = require('../config/db');
+const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup');
 
 /* ── helpers ── */
 const ok  = (res, data, meta = {}) =>
@@ -116,10 +117,11 @@ exports.update = async (req, res) => {
 exports.remove = async (req, res) => {
   try {
     const { rows } = await pool.query(
-      `DELETE FROM hero_slides WHERE id = $1 RETURNING id`,
+      `DELETE FROM hero_slides WHERE id = $1 RETURNING id, image_url`,
       [req.params.id],
     );
     if (!rows.length) return err(res, 404, 'Hero slide not found');
+    await destroyCloudinaryUrls([rows[0].image_url]);
     return ok(res, { deleted: rows[0].id });
   } catch (e) {
     console.error('[heroSlides.remove]', e);

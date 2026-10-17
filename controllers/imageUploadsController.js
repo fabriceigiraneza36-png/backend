@@ -5,6 +5,7 @@
 
 const { query } = require("../config/database");
 const { cloudinary, ensureCloudinaryConfigured } = require("../config/cloudinary");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 // ==========================================
 // DESTINATION IMAGE UPLOADS
@@ -164,20 +165,38 @@ exports.deleteDestinationImage = async (req, res, next) => {
 
     const image = imageResult.rows[0];
 
-    // Delete from Cloudinary
-    const publicId = image.image_url.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Remove database references first; shared assets are preserved by the cleanup utility.
     await query("DELETE FROM destination_images WHERE id = $1", [imageId]);
 
     // Update destination's image_urls array
     await query(
-      `UPDATE destinations 
-       SET image_urls = array_remove(image_urls, $1), updated_at = NOW()
+      `UPDATE destinations
+       SET image_urls = array_remove(COALESCE(image_urls, '{}'::TEXT[]), $1),
+           image_url = CASE WHEN image_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE image_url END,
+           hero_image = CASE WHEN hero_image = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE hero_image END,
+           cover_image_url = CASE WHEN cover_image_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE cover_image_url END,
+           thumbnail_url = CASE WHEN thumbnail_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE thumbnail_url END,
+           updated_at = NOW()
        WHERE id = $2`,
       [image.image_url, destinationId]
     );
+    await destroyCloudinaryUrls([image.image_url]);
 
     res.json({
       success: true,
@@ -334,12 +353,9 @@ exports.deleteGalleryImage = async (req, res, next) => {
 
     const image = imageResult.rows[0];
 
-    // Delete from Cloudinary
-    const publicId = image.image_url.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Delete the row first so shared-reference detection can decide safely.
     await query("DELETE FROM gallery WHERE id = $1", [id]);
+    await destroyCloudinaryUrls([image.image_url]);
 
     res.json({
       success: true,
@@ -569,11 +585,7 @@ exports.deleteCountryImage = async (req, res, next) => {
     // Check if this is the flag image
     const isFlagImage = countryData.flag_url === decodedImageUrl;
 
-    // Delete from Cloudinary
-    const publicId = decodedImageUrl.split("/").pop().split(".")[0];
-    await cloudinary.uploader.destroy(publicId);
-
-    // Delete from database
+    // Remove database references first; shared assets are never destroyed.
     if (isFlagImage) {
       await query(
         `UPDATE countries 
@@ -592,6 +604,7 @@ exports.deleteCountryImage = async (req, res, next) => {
         [decodedImageUrl, countryId]
       );
     }
+    await destroyCloudinaryUrls([decodedImageUrl]);
 
     res.json({
       success: true,

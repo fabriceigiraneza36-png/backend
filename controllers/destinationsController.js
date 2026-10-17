@@ -3304,6 +3304,7 @@ exports.removeImage = async (req, res, next) => {
       )
     }
 
+    await destroyCloudinaryUrls([deleted.image_url])
     return res.json({ success: true, message: 'Image deleted' })
   } catch (err) { next(err) }
 }

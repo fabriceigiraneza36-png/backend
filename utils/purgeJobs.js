@@ -87,12 +87,20 @@ const mediaUrlsForCountries = async (client, ids) => {
   )
   for (const row of rows) {
     urls.push(row.image_url, row.cover_image_url, row.hero_image, row.flag_url)
+    try {
+      const attractions = Array.isArray(row.attractions) ? row.attractions : JSON.parse(row.attractions || '[]')
+      if (Array.isArray(attractions)) urls.push(...attractions.map(x => x?.imageUrl || x?.image_url || x?.image))
+    } catch {}
     for (const value of [row.hero_images, row.images]) {
       try {
         const parsed = Array.isArray(value) ? value : (typeof value === 'string' ? JSON.parse(value) : [])
         if (Array.isArray(parsed)) urls.push(...parsed.map(x => typeof x === 'string' ? x : x?.url))
       } catch {}
     }
+  }
+  if (await tableExists(client, 'country_images')) {
+    const countryImages = await client.query('SELECT image_url FROM country_images WHERE country_id = ANY($1::integer[])', [ids])
+    urls.push(...countryImages.rows.map(row => row.image_url))
   }
   const dests = await client.query('SELECT id FROM destinations WHERE country_id = ANY($1::integer[])', [ids])
   if (dests.rows.length) {
