@@ -1,5 +1,6 @@
 const { query } = require("../config/db");
 const { slugify } = require("../utils/helpers");
+const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require("../utils/cloudinaryCleanup");
 
 exports.getBySlug = async (req, res, next) => {
   try {
@@ -64,9 +65,15 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const result = await query("DELETE FROM pages WHERE id = $1 RETURNING id", [req.params.id]);
+    // Capture every Cloudinary URL stored anywhere on the page (including rich HTML/content)
+    // before deletion. The shared-reference check prevents deleting assets still used elsewhere.
+    const result = await query("DELETE FROM pages WHERE id = $1 RETURNING *", [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: "Page not found" });
-    res.json({ message: "Page deleted" });
+    const mediaUrls = extractCloudinaryUrlsFromValue(result.rows[0]);
+    void destroyCloudinaryUrls(mediaUrls).catch((err) =>
+      console.error("[Pages] Cloudinary cleanup failed:", err.message)
+    );
+    res.json({ message: "Page deleted", mediaCleanup: "queued" });
   } catch (err) {
     next(err);
   }

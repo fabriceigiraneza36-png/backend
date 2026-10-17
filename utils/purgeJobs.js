@@ -72,9 +72,9 @@ const mediaUrlsForDestinations = async (client, ids) => {
   }
   if (await tableExists(client, 'destination_images')) {
     const images = await client.query(
-      'SELECT image_url FROM destination_images WHERE destination_id = ANY($1::integer[])', [ids],
+      'SELECT * FROM destination_images WHERE destination_id = ANY($1::integer[])', [ids],
     )
-    urls.push(...images.rows.map(x => x.image_url))
+    urls.push(...images.rows.flatMap(x => extractCloudinaryUrls(x)))
   }
   return urls.filter(Boolean)
 }
@@ -99,8 +99,8 @@ const mediaUrlsForCountries = async (client, ids) => {
     }
   }
   if (await tableExists(client, 'country_images')) {
-    const countryImages = await client.query('SELECT image_url FROM country_images WHERE country_id = ANY($1::integer[])', [ids])
-    urls.push(...countryImages.rows.map(row => row.image_url))
+    const countryImages = await client.query('SELECT * FROM country_images WHERE country_id = ANY($1::integer[])', [ids])
+    urls.push(...countryImages.rows.flatMap(row => extractCloudinaryUrls(row)))
   }
   const dests = await client.query('SELECT id FROM destinations WHERE country_id = ANY($1::integer[])', [ids])
   if (dests.rows.length) {

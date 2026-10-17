@@ -1,4 +1,5 @@
 const { query } = require("../config/db");
+const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require("../utils/cloudinaryCleanup");
 
 exports.getAll = async (req, res, next) => {
   try {
@@ -78,9 +79,13 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const result = await query("DELETE FROM faqs WHERE id = $1 RETURNING id", [req.params.id]);
+    const result = await query("DELETE FROM faqs WHERE id = $1 RETURNING *", [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: "FAQ not found" });
-    res.json({ message: "FAQ deleted" });
+    const mediaUrls = extractCloudinaryUrlsFromValue(result.rows[0]);
+    void destroyCloudinaryUrls(mediaUrls).catch((err) =>
+      console.error("[FAQs] Cloudinary cleanup failed:", err.message)
+    );
+    res.json({ message: "FAQ deleted", mediaCleanup: "queued" });
   } catch (err) {
     next(err);
   }

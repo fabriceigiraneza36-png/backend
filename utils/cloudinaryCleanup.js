@@ -57,7 +57,7 @@ const findDatabaseReferences = async (publicIds) => {
     WHERE c.table_schema = 'public'
       AND t.table_type = 'BASE TABLE'
       AND c.data_type IN ('text', 'character varying', 'character', 'json', 'jsonb', 'ARRAY')
-      AND c.column_name ~* '(image|media|thumbnail|avatar|cover|hero|logo|banner|poster|video|file|url|gallery|content|body|html|attraction|attachment|photo|icon|flag)'
+      AND c.column_name ~* '(image|media|thumbnail|avatar|cover|hero|logo|banner|poster|video|file|url|gallery|content|body|html|attraction|attachment|photo|icon|flag|answer|description|summary|details|text|markdown|value|data)'
     ORDER BY c.table_name, c.ordinal_position
   `)
   const grouped = new Map()
@@ -78,6 +78,21 @@ const findDatabaseReferences = async (publicIds) => {
     if (referenced.size === candidates.length) break
   }
   return referenced
+}
+
+const extractCloudinaryUrlsFromValue = (value, urls = []) => {
+  if (typeof value === 'string') {
+    const matches = value.match(/https?:\/\/res\.cloudinary\.com\/[^\s"'<>]+/gi) || []
+    for (const match of matches) {
+      const url = match.replace(/[),.;]+$/, '')
+      if (url) urls.push(url)
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach(item => extractCloudinaryUrlsFromValue(item, urls))
+  } else if (value && typeof value === 'object') {
+    Object.values(value).forEach(item => extractCloudinaryUrlsFromValue(item, urls))
+  }
+  return [...new Set(urls)]
 }
 
 const quoteIdentifier = (identifier) => `"${String(identifier).replace(/"/g, '""')}"`
@@ -138,4 +153,4 @@ const destroyCloudinaryUrls = async (urls = []) => {
   return totals
 }
 
-module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls, destroyCloudinaryPublicIds }
+module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls, destroyCloudinaryPublicIds, extractCloudinaryUrlsFromValue }

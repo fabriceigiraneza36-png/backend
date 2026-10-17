@@ -742,7 +742,7 @@ exports.bulkDelete = async (req, res, next) => {
 
     // Get images for cleanup
     const posts = await query(
-      `SELECT image_url, author_avatar FROM posts WHERE id = ANY($1)`
+      `SELECT image_url, author_avatar FROM posts WHERE id = ANY($1)` ,
       [ids]
     );
 

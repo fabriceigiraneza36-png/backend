@@ -5,7 +5,7 @@ const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const { slugify } = require("../utils/slugify");
 const { normalizeImages, urlsOnly } = require("../utils/media");
-const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
+const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require("../utils/cloudinaryCleanup");
 
 /* ═══════════════════════════════════════════════════════════════════════════
     SAFE REQUIRE: HELPERS & SERVICE RESOLUTION
@@ -776,12 +776,12 @@ const remove = async (req, res, next) => {
     }
 
     const destinationImageRows = destinationRows.rows.length
-      ? await query(`SELECT di.image_url FROM destination_images di JOIN destinations d ON d.id = di.destination_id WHERE d.country_id = $1`, [id]).catch(() => ({ rows: [] }))
+      ? await query(`SELECT di.* FROM destination_images di JOIN destinations d ON d.id = di.destination_id WHERE d.country_id = $1`, [id]).catch(() => ({ rows: [] }))
       : { rows: [] };
-    const countryImageRows = await query('SELECT image_url FROM country_images WHERE country_id = $1', [id]).catch(() => ({ rows: [] }));
+    const countryImageRows = await query('SELECT * FROM country_images WHERE country_id = $1', [id]).catch(() => ({ rows: [] }));
 
     const urls = [
-      ...countryImageRows.rows.map(row => row.image_url),
+      ...countryImageRows.rows.flatMap(row => extractCloudinaryUrlsFromValue(row)),
       country.flag_url, country.image_url, country.cover_image_url, country.hero_image,
       ...(Array.isArray(country.images) ? country.images : []),
       ...normalizeImages(country.hero_images).map((x) => x.url),
@@ -791,7 +791,7 @@ const remove = async (req, res, next) => {
         ...(Array.isArray(d.image_urls) ? d.image_urls : []),
         ...(() => { try { const a = Array.isArray(d.attractions) ? d.attractions : JSON.parse(d.attractions || '[]'); return a.map((item) => item?.imageUrl || item?.image_url || item?.image).filter(Boolean); } catch { return []; } })(),
       ]),
-      ...destinationImageRows.rows.map((x) => x.image_url),
+      ...destinationImageRows.rows.flatMap((x) => extractCloudinaryUrlsFromValue(x)),
     ].filter(Boolean);
 
     await query(`DELETE FROM countries WHERE id = $1`, [id]);
@@ -1017,8 +1017,8 @@ module.exports = {
           return Array.isArray(a) ? a.map(item => item?.imageUrl || item?.image_url || item?.image).filter(Boolean) : [];
         } catch { return []; } })());
       }
-      const countryImageRows = await query('SELECT image_url FROM country_images WHERE country_id = ANY($1::integer[])', [ids]).catch(() => ({ rows: [] }));
-      mediaUrls.push(...countryImageRows.rows.map(row => row.image_url));
+      const countryImageRows = await query('SELECT * FROM country_images WHERE country_id = ANY($1::integer[])', [ids]).catch(() => ({ rows: [] }));
+      mediaUrls.push(...countryImageRows.rows.flatMap(row => extractCloudinaryUrlsFromValue(row)));
       if (linkedDestinations.length) {
         const destinationIds = linkedDestinations.map(row => row.id);
         const { rows: destinations } = await query(
@@ -1026,7 +1026,7 @@ module.exports = {
            FROM destinations WHERE id = ANY($1::integer[])`, [destinationIds]
         );
         const { rows: images } = await query(
-          'SELECT image_url FROM destination_images WHERE destination_id = ANY($1::integer[])', [destinationIds]
+          'SELECT * FROM destination_images WHERE destination_id = ANY($1::integer[])', [destinationIds]
         ).catch(() => ({ rows: [] }));
         mediaUrls.push(...destinations.flatMap(d => [
           d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
@@ -1035,7 +1035,7 @@ module.exports = {
             const a = Array.isArray(d.attractions) ? d.attractions : JSON.parse(d.attractions || '[]');
             return Array.isArray(a) ? a.map(item => item?.imageUrl || item?.image_url || item?.image).filter(Boolean) : [];
           } catch { return []; } })(),
-        ]), ...images.map(image => image.image_url));
+        ]), ...images.flatMap(image => extractCloudinaryUrlsFromValue(image)));
       }
 
       const { rows } = await query(

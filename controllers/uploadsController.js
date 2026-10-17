@@ -1,5 +1,6 @@
 const realTimeTracker = require("../utils/realTimeTracker");
-const { cloudinary, ensureCloudinaryConfigured } = require("../config/cloudinary");
+const { ensureCloudinaryConfigured } = require("../config/cloudinary");
+const { destroyCloudinaryPublicIds } = require("../utils/cloudinaryCleanup");
 
 const toAsset = (file) => {
   const cloud = file?.cloudinary || {};
@@ -126,22 +127,20 @@ exports.deleteAsset = async (req, res, next) => {
       throw badRequest("Public ID is required.", "MISSING_PUBLIC_ID");
     }
 
-    // Delete from Cloudinary
-    const result = await cloudinary.uploader.destroy(publicId);
+    // Never remove a media asset while any database record still references it.
+    const cleanup = await destroyCloudinaryPublicIds([publicId], "image");
+    const result = cleanup.deleted > 0 ? "ok" : cleanup.preserved > 0 ? "preserved_in_use" : "not_deleted";
 
-    // Track deletion
-    realTimeTracker.trackEvent("upload:delete", {
-      publicId,
-      result: result.result,
-    });
+    realTimeTracker.trackEvent("upload:delete", { publicId, result });
 
     res.json({
       success: true,
-      message: "Asset deleted successfully.",
-      data: {
-        publicId,
-        result: result.result,
-      },
+      message: cleanup.preserved > 0
+        ? "Asset is still referenced by Altuvera data and was preserved."
+        : cleanup.deleted > 0
+          ? "Unreferenced asset deleted successfully."
+          : "Asset cleanup was not completed.",
+      data: { publicId, result, cleanup },
     });
   } catch (err) {
     next(err);
