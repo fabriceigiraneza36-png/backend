@@ -170,8 +170,29 @@ exports.deleteDestinationImage = async (req, res, next) => {
 
     // Update destination's image_urls array
     await query(
-      `UPDATE destinations 
-       SET image_urls = array_remove(image_urls, $1), updated_at = NOW()
+      `UPDATE destinations
+       SET image_urls = array_remove(COALESCE(image_urls, '{}'::TEXT[]), $1),
+           image_url = CASE WHEN image_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE image_url END,
+           hero_image = CASE WHEN hero_image = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE hero_image END,
+           cover_image_url = CASE WHEN cover_image_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE cover_image_url END,
+           thumbnail_url = CASE WHEN thumbnail_url = $1 THEN (
+             SELECT image_url FROM destination_images
+             WHERE destination_id = $2 AND is_active = true
+             ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 1
+           ) ELSE thumbnail_url END,
+           updated_at = NOW()
        WHERE id = $2`,
       [image.image_url, destinationId]
     );
