@@ -76,6 +76,10 @@ router.post("/:id/reviews/:reviewId/helpful", ctrl.markReviewHelpful);
 // CRUD
 router.post("/", protect, adminOnly, upload.single("image"), ctrl.create);
 router.put("/:id", protect, adminOnly, upload.single("image"), ctrl.update);
+router.get("/purge/preview", protect, adminOnly, ctrl.purgePreview);
+router.delete("/purge", protect, adminOnly, ctrl.purgeAll);
+router.get("/purge/:jobId", protect, adminOnly, ctrl.getPurgeJob);
+router.delete("/", protect, adminOnly, ctrl.bulkDelete);
 router.delete("/:id", protect, adminOnly, ctrl.remove);
 router.post("/:id/restore", protect, adminOnly, ctrl.restore);
 router.patch("/bulk", protect, adminOnly, ctrl.bulkUpdate);
