@@ -4,6 +4,7 @@
 
 const { query } = require('../config/db')
 const logger = require('../utils/logger')
+const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
 
 const CATEGORY_TABLES = {
   destinations: [
@@ -48,7 +49,22 @@ const CATEGORY_TABLES = {
 }
 
 const ALL_CATEGORIES = Object.keys(CATEGORY_TABLES)
-const BATCH_SIZE = 250
+const BATCH_SIZE = 100
+
+const extractCloudinaryUrls = (value, urls = []) => {
+  if (typeof value === 'string') {
+    const matches = value.match(/https?:\\/\\/res\\.cloudinary\\.com\\/[^\\s"'<>]+/gi) || []
+    for (const match of matches) {
+      const url = match.replace(/[),.;]+$/, '')
+      if (url) urls.push(url)
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach(item => extractCloudinaryUrls(item, urls))
+  } else if (value && typeof value === 'object') {
+    Object.values(value).forEach(item => extractCloudinaryUrls(item, urls))
+  }
+  return urls
+}
 let schemaPromise
 
 const ensureJobsSchema = async () => {
@@ -226,12 +242,15 @@ const processPurgeJob = async (jobId) => {
         const batch = await query(
           `WITH batch AS (
              SELECT ctid FROM "${table}" LIMIT $1
+           ), deleted AS (
+             DELETE FROM "${table}" WHERE ctid IN (SELECT ctid FROM batch) RETURNING *
            )
-           DELETE FROM "${table}" WHERE ctid IN (SELECT ctid FROM batch)`,
+           SELECT to_jsonb(deleted) AS row_data FROM deleted`,
           [BATCH_SIZE],
         )
-        const removed = Number(batch.rowCount || 0)
+        const removed = Number(batch.rows.length || 0)
         if (!removed) break
+        const mediaUrls = batch.rows.flatMap(row => extractCloudinaryUrls(row.row_data))
         deletedForTable += removed
         deletedRecords += removed
         results = {
@@ -241,6 +260,12 @@ const processPurgeJob = async (jobId) => {
         await updateJob(jobId, {
           currentTable: table, totalRecords, deletedRecords, tableResults: results, error: null,
         })
+        // Run Cloudinary cleanup outside the SQL delete statement. Shared assets
+        // are preserved by the reference scan; cleanup failures never undo DB purges.
+        if (mediaUrls.length) {
+          await destroyCloudinaryUrls(mediaUrls).catch(err =>
+            logger.error(`[Maintenance] Cloudinary cleanup failed for ${table} batch: ${err.message}`))
+        }
       }
 
       results = {
