@@ -80,6 +80,21 @@ const findDatabaseReferences = async (publicIds) => {
   return referenced
 }
 
+const extractCloudinaryUrlsFromValue = (value, urls = []) => {
+  if (typeof value === 'string') {
+    const matches = value.match(/https?:\\/\\/res\\.cloudinary\\.com\\/[^\\s"'<>]+/gi) || []
+    for (const match of matches) {
+      const url = match.replace(/[),.;]+$/, '')
+      if (url) urls.push(url)
+    }
+  } else if (Array.isArray(value)) {
+    value.forEach(item => extractCloudinaryUrlsFromValue(item, urls))
+  } else if (value && typeof value === 'object') {
+    Object.values(value).forEach(item => extractCloudinaryUrlsFromValue(item, urls))
+  }
+  return [...new Set(urls)]
+}
+
 const quoteIdentifier = (identifier) => `"${String(identifier).replace(/"/g, '""')}"`
 
 const destroyCloudinaryPublicIds = async (publicIds = [], resourceType = 'image') => {
@@ -138,4 +153,4 @@ const destroyCloudinaryUrls = async (urls = []) => {
   return totals
 }
 
-module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls, destroyCloudinaryPublicIds }
+module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls, destroyCloudinaryPublicIds, extractCloudinaryUrlsFromValue }
