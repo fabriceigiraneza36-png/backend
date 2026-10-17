@@ -82,7 +82,7 @@ const findDatabaseReferences = async (publicIds) => {
 
 const extractCloudinaryUrlsFromValue = (value, urls = []) => {
   if (typeof value === 'string') {
-    const matches = value.match(/https?:\\/\\/res\\.cloudinary\\.com\\/[^\\s"'<>]+/gi) || []
+    const matches = value.match(/https?:\/\/res\.cloudinary\.com\/[^\s"'<>]+/gi) || []
     for (const match of matches) {
       const url = match.replace(/[),.;]+$/, '')
       if (url) urls.push(url)
