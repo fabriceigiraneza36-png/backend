@@ -53,8 +53,17 @@ function getSmtp() {
 
 /* ── Connection Verifier for Server Boot ──────────────────────────────────── */
 async function verifyEmailConnection() {
+  // Resend is the active provider when configured; SMTP credentials are optional.
+  // Avoid a misleading SMTP warning when the application is using the Resend API.
+  if (cfg.resendApiKey) {
+    logger.info('[Email] Resend API configured; SMTP verification skipped');
+    return true;
+  }
   const smtp = getSmtp();
-  if (!smtp) return false;
+  if (!smtp) {
+    logger.info('[Email] SMTP is not configured; SMTP delivery is disabled');
+    return false;
+  }
   try {
     await smtp.verify();
     logger.info("[Email] SMTP connection verified successfully");
