@@ -115,15 +115,11 @@ const safePage   = (v, def = 1)   => Math.max(parseInt(v, 10) || def, 1)
 const safeOffset = (page, limit)  => (page - 1) * limit
 
 /** Detect admin request (bypass published/active filters) */
-const isAdminRequest = (req) => {
-  return (
-    toBool(req.query.admin)                                     ||
-    toBool(req.query.includeAll)                                ||
-    toBool(req.query.includeUnpublished)                        ||
-    toBool(req.headers['x-admin-request'])                      ||
-    (req.user && (req.user.role === 'admin' || req.user.role === 'super_admin'))
-  )
-}
+// Only a verified administrator may bypass public visibility filters.
+// Do not trust query parameters or caller-supplied headers for privileged reads.
+const isAdminRequest = (req) => Boolean(
+  req.user && (req.user.role === 'admin' || req.user.role === 'super_admin')
+)
 
 const pgMsg = (err) => {
   switch (err.code) {

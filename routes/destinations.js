@@ -41,6 +41,10 @@ router.get("/map", ctrl.getMapData);
 // By Country
 router.get("/country/:countrySlug", ctrl.getByCountry);
 
+// Authenticated admin list: includes drafts and archived records for management.
+// Register before /:idOrSlug so "admin/all" is not treated as a destination slug.
+router.get("/admin/all", protect, adminOnly, ctrl.getAll);
+
 // Single Destination
 router.get("/:idOrSlug", ctrl.getOne);
 router.get("/:idOrSlug/related", ctrl.getRelated);
