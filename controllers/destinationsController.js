@@ -5,7 +5,7 @@ const { query }              = require('../config/db')
 const { slugify }            = require('../utils/helpers')
 const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
-const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
+const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require('../utils/cloudinaryCleanup')
 const { startPurge, getPurgeJob } = require('../utils/purgeJobs')
 
 const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
@@ -2478,7 +2478,7 @@ exports.remove = async (req, res, next) => {
 
     if (permanent) {
       const imageRows = await safeQuery(
-        `SELECT image_url FROM destination_images WHERE destination_id = $1`,
+        `SELECT * FROM destination_images WHERE destination_id = $1`,
         [id], 'remove:images',
       )
       const urls = [
@@ -2487,7 +2487,7 @@ exports.remove = async (req, res, next) => {
         destination.cover_image_url,
         destination.thumbnail_url,
         ...(Array.isArray(destination.image_urls) ? destination.image_urls : []),
-        ...imageRows.map((row) => row.image_url),
+        ...imageRows.flatMap((row) => extractCloudinaryUrlsFromValue(row)),
         ...parseJson(destination.attractions, []).map((item) => item?.imageUrl || item?.image_url || item?.image).filter(Boolean),
       ].filter(Boolean)
       await query('DELETE FROM destinations WHERE id = $1', [id])
@@ -2622,7 +2622,7 @@ exports.bulkDelete = async (req, res, next) => {
          FROM destinations WHERE id = ANY($1::INTEGER[])`, [safeIds],
       )
       const imageRows = await query(
-        'SELECT image_url FROM destination_images WHERE destination_id = ANY($1::INTEGER[])', [safeIds],
+        'SELECT * FROM destination_images WHERE destination_id = ANY($1::INTEGER[])', [safeIds],
       ).catch(() => ({ rows: [] }))
       mediaUrls = [
         ...destinations.flatMap(d => [
@@ -2630,7 +2630,7 @@ exports.bulkDelete = async (req, res, next) => {
           ...(Array.isArray(d.image_urls) ? d.image_urls : []),
           ...parseJson(d.attractions, []).map(x => x?.imageUrl || x?.image_url || x?.image).filter(Boolean),
         ]),
-        ...imageRows.rows.map(row => row.image_url),
+        ...imageRows.rows.flatMap(row => extractCloudinaryUrlsFromValue(row)),
       ].filter(Boolean)
       result = await query(
         'DELETE FROM destinations WHERE id = ANY($1::INTEGER[]) RETURNING id, name, slug, country_id',
