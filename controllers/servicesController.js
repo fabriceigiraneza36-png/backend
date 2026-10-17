@@ -1,5 +1,6 @@
 const { query } = require("../config/db");
 const { slugify } = require("../utils/helpers");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
 exports.getAll = async (req, res, next) => {
   try {
@@ -81,8 +82,9 @@ exports.update = async (req, res, next) => {
 
 exports.remove = async (req, res, next) => {
   try {
-    const result = await query("DELETE FROM services WHERE id = $1 RETURNING id", [req.params.id]);
+    const result = await query("DELETE FROM services WHERE id = $1 RETURNING id, image_url", [req.params.id]);
     if (result.rows.length === 0) return res.status(404).json({ error: "Service not found" });
+    await destroyCloudinaryUrls([result.rows[0].image_url]);
     res.json({ message: "Service deleted" });
   } catch (err) {
     next(err);
