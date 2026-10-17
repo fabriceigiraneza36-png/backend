@@ -763,6 +763,18 @@ const remove = async (req, res, next) => {
       `SELECT id, image_url, image_urls, hero_image, cover_image_url, thumbnail_url, attractions FROM destinations WHERE country_id = $1`,
       [id]
     ).catch(() => ({ rows: [] }));
+
+    const force = String(req.query.force || '').toLowerCase() === 'true';
+    if (destinationRows.rows.length && !force) {
+      return res.status(409).json({
+        success: false,
+        code: 'COUNTRY_HAS_DESTINATIONS',
+        error: 'This country contains destinations. Confirm force deletion to remove the country and its linked destinations.',
+        destinationCount: destinationRows.rows.length,
+        requiresForce: true,
+      });
+    }
+
     const destinationImageRows = destinationRows.rows.length
       ? await query(`SELECT di.image_url FROM destination_images di JOIN destinations d ON d.id = di.destination_id WHERE d.country_id = $1`, [id]).catch(() => ({ rows: [] }))
       : { rows: [] };
@@ -780,7 +792,7 @@ const remove = async (req, res, next) => {
     ].filter(Boolean);
 
     await query(`DELETE FROM countries WHERE id = $1`, [id]);
-    await destroyCloudinaryUrls(urls).catch((cleanupErr) =>
+    void destroyCloudinaryUrls(urls).catch((cleanupErr) =>
       logger.error(`[Countries] Cloudinary cleanup failed for ${id}: ${cleanupErr.message}`)
     );
 
@@ -851,6 +863,43 @@ const getImages = async (req, res, next) => {
   }
 };
 
+const { startPurge, getPurgeJob } = require("../utils/purgeJobs");
+
+const purgePreview = async (req, res, next) => {
+  try {
+    const resource = String(req.query.resource || '').toLowerCase();
+    if (!['countries', 'destinations'].includes(resource)) {
+      return res.status(400).json({ success: false, error: 'resource must be countries or destinations' });
+    }
+    const { rows } = await query(`SELECT COUNT(*)::integer AS count FROM "${resource}"`);
+    return res.json({ success: true, data: { resource, count: rows[0].count, confirmation: `PURGE ALL ${resource.toUpperCase()}` } });
+  } catch (err) { next(err); }
+};
+
+const purgeAll = async (req, res, next) => {
+  try {
+    const resource = String(req.body?.resource || '').toLowerCase();
+    const expected = `PURGE ALL ${resource.toUpperCase()}`;
+    if (!['countries', 'destinations'].includes(resource)) {
+      return res.status(400).json({ success: false, error: 'resource must be countries or destinations' });
+    }
+    if (String(req.body?.confirm || '') !== expected) {
+      return res.status(400).json({ success: false, error: `Explicit confirmation required: ${expected}` });
+    }
+    const jobId = await startPurge({ resource, requestedBy: req.user?.email || req.user?.id || req.user?.username });
+    return res.status(202).json({ success: true, message: 'Purge queued; check job status to monitor progress', jobId, statusUrl: `/api/${resource}/purge/${jobId}` });
+  } catch (err) { next(err); }
+};
+
+const getPurgeJob = async (req, res, next) => {
+  try {
+    const job = await getPurgeJobRecord(req.params.jobId);
+    if (!job) return res.status(404).json({ success: false, error: 'Purge job not found' });
+    return res.json({ success: true, data: job });
+  } catch (err) { next(err); }
+};
+const getPurgeJobRecord = getPurgeJob;
+
 module.exports = {
   getAll,
   getById,
@@ -859,6 +908,9 @@ module.exports = {
   update,
   remove,
   getImages,
+  purgePreview,
+  purgeAll,
+  getPurgeJob,
   getFeatured: async (req, res, next) => {
     try {
       const { rows } = await query(
@@ -915,25 +967,75 @@ module.exports = {
   },
   bulkDelete: async (req, res, next) => {
     try {
-      const { ids } = req.body;
+      const ids = [...new Set((Array.isArray(req.body?.ids) ? req.body.ids : [])
+        .map(value => Number.parseInt(value, 10))
+        .filter(value => Number.isInteger(value) && value > 0))];
+      const force = req.body?.force === true || String(req.body?.force).toLowerCase() === 'true';
+      if (!ids.length) {
+        return res.status(400).json({ success: false, error: "Please provide an array of valid country IDs to delete" });
+      }
 
-      if (!Array.isArray(ids) || ids.length === 0) {
-        return res.status(400).json({
+      const { rows: countries } = await query(
+        'SELECT * FROM countries WHERE id = ANY($1::integer[])', [ids]
+      );
+      if (!countries.length) {
+        return res.status(404).json({ success: false, error: "No matching countries found" });
+      }
+
+      const { rows: linkedDestinations } = await query(
+        'SELECT id, country_id FROM destinations WHERE country_id = ANY($1::integer[])', [ids]
+      );
+      if (linkedDestinations.length && !force) {
+        const byCountry = linkedDestinations.reduce((acc, row) => {
+          acc[row.country_id] = (acc[row.country_id] || 0) + 1;
+          return acc;
+        }, {});
+        return res.status(409).json({
           success: false,
-          error: "Please provide an array of country IDs to delete",
+          code: 'COUNTRY_HAS_DESTINATIONS',
+          error: 'One or more countries contain destinations. Confirm force deletion to remove linked destinations.',
+          destinationCount: linkedDestinations.length,
+          destinationsByCountry: byCountry,
+          requiresForce: true,
         });
       }
 
-      const placeholders = ids.map((_, index) => `$${index + 1}`).join(',');
+      let mediaUrls = [];
+      for (const country of countries) {
+        mediaUrls.push(country.flag_url, country.image_url, country.cover_image_url, country.hero_image);
+        mediaUrls.push(...normalizeImages(country.hero_images).map(item => item.url));
+        mediaUrls.push(...normalizeImages(country.images).map(item => item.url));
+      }
+      if (linkedDestinations.length) {
+        const destinationIds = linkedDestinations.map(row => row.id);
+        const { rows: destinations } = await query(
+          `SELECT image_url, image_urls, hero_image, cover_image_url, thumbnail_url, attractions
+           FROM destinations WHERE id = ANY($1::integer[])`, [destinationIds]
+        );
+        const { rows: images } = await query(
+          'SELECT image_url FROM destination_images WHERE destination_id = ANY($1::integer[])', [destinationIds]
+        ).catch(() => ({ rows: [] }));
+        mediaUrls.push(...destinations.flatMap(d => [
+          d.image_url, d.hero_image, d.cover_image_url, d.thumbnail_url,
+          ...(Array.isArray(d.image_urls) ? d.image_urls : []),
+          ...(() => { try {
+            const a = Array.isArray(d.attractions) ? d.attractions : JSON.parse(d.attractions || '[]');
+            return Array.isArray(a) ? a.map(item => item?.imageUrl || item?.image_url || item?.image).filter(Boolean) : [];
+          } catch { return []; } })(),
+        ]), ...images.map(image => image.image_url));
+      }
+
       const { rows } = await query(
-        `DELETE FROM countries WHERE id IN (${placeholders}) RETURNING *`,
-        ids
+        'DELETE FROM countries WHERE id = ANY($1::integer[]) RETURNING id, name, slug', [countries.map(row => row.id)]
       );
+      void destroyCloudinaryUrls(mediaUrls.filter(Boolean)).catch(err =>
+        logger.error('[Countries] bulk Cloudinary cleanup failed:', err.message));
 
       return res.json({
         success: true,
         data: rows,
         message: `${rows.length} countries deleted successfully`,
+        mediaCleanup: 'queued',
       });
     } catch (err) {
       logger.error("[Countries] bulkDelete:", err.message);
