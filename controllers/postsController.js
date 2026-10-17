@@ -76,7 +76,7 @@ exports.getAll = async (req, res, next) => {
       author,
     } = req.query;
 
-    let where = "WHERE is_published = true";
+    let where = "WHERE is_published = true AND is_active = true";
     const params = [];
     let idx = 1;
 
@@ -219,7 +219,7 @@ exports.getFeatured = async (req, res, next) => {
       `SELECT id, title, slug, excerpt, image_url, author_name, author_avatar,
               category, tags, view_count, like_count, read_time, published_at
        FROM posts 
-       WHERE is_featured = true AND is_published = true
+       WHERE is_featured = true AND is_published = true AND is_active = true
        ORDER BY published_at DESC 
        LIMIT $1`,
       [limit]
@@ -239,7 +239,7 @@ exports.getCategories = async (req, res, next) => {
     const result = await query(
       `SELECT category, COUNT(*) AS count 
        FROM posts
-       WHERE is_published = true AND category IS NOT NULL
+       WHERE is_published = true AND is_active = true AND category IS NOT NULL
        GROUP BY category 
        ORDER BY count DESC`
     );
@@ -258,7 +258,7 @@ exports.getTags = async (req, res, next) => {
     const result = await query(
       `SELECT tag, COUNT(*) AS count 
        FROM posts, UNNEST(tags) AS tag
-       WHERE is_published = true
+       WHERE is_published = true AND is_active = true
        GROUP BY tag 
        ORDER BY count DESC`
     );
@@ -276,12 +276,12 @@ exports.getStats = async (req, res, next) => {
   try {
     const result = await query(
       `SELECT 
-        COUNT(*) FILTER (WHERE is_published = true) AS total_published,
-        COUNT(*) FILTER (WHERE is_published = false) AS total_drafts,
-        COUNT(*) FILTER (WHERE is_featured = true AND is_published = true) AS total_featured,
-        COALESCE(SUM(view_count) FILTER (WHERE is_published = true), 0) AS total_views,
-        COALESCE(SUM(like_count) FILTER (WHERE is_published = true), 0) AS total_likes,
-        COUNT(DISTINCT category) FILTER (WHERE is_published = true) AS total_categories
+        COUNT(*) FILTER (WHERE is_published = true AND is_active = true) AS total_published,
+        COUNT(*) FILTER (WHERE is_published = false AND is_active = true) AS total_drafts,
+        COUNT(*) FILTER (WHERE is_featured = true AND is_published = true AND is_active = true) AS total_featured,
+        COALESCE(SUM(view_count) FILTER (WHERE is_published = true AND is_active = true), 0) AS total_views,
+        COALESCE(SUM(like_count) FILTER (WHERE is_published = true AND is_active = true), 0) AS total_likes,
+        COUNT(DISTINCT category) FILTER (WHERE is_published = true AND is_active = true) AS total_categories
        FROM posts`
     );
     res.json({ status: "success", data: result.rows[0] });
@@ -308,7 +308,7 @@ exports.search = async (req, res, next) => {
                 plainto_tsquery('english', $1)
               ) AS relevance
        FROM posts
-       WHERE is_published = true
+       WHERE is_published = true AND is_active = true
          AND to_tsvector('english', COALESCE(title,'') || ' ' || COALESCE(excerpt,'') || ' ' || COALESCE(content,''))
              @@ plainto_tsquery('english', $1)
        ORDER BY relevance DESC
@@ -331,7 +331,7 @@ exports.getBySlug = async (req, res, next) => {
     const { slug } = req.params;
 
     const result = await query(
-      "SELECT * FROM posts WHERE slug = $1 AND is_published = true",
+      "SELECT * FROM posts WHERE slug = $1 AND is_published = true AND is_active = true",
       [slug]
     );
 
@@ -353,7 +353,7 @@ exports.getBySlug = async (req, res, next) => {
       `SELECT id, title, slug, excerpt, image_url, author_name, author_avatar,
               category, tags, read_time, published_at, view_count, like_count
        FROM posts 
-       WHERE category = $1 AND id != $2 AND is_published = true
+       WHERE category = $1 AND id != $2 AND is_published = true AND is_active = true
        ORDER BY published_at DESC 
        LIMIT 3`,
       [post.category, post.id]
@@ -363,7 +363,7 @@ exports.getBySlug = async (req, res, next) => {
     const prevPost = await query(
       `SELECT id, title, slug, image_url, category 
        FROM posts 
-       WHERE is_published = true AND published_at < $1
+       WHERE is_published = true AND is_active = true AND published_at < $1
        ORDER BY published_at DESC 
        LIMIT 1`,
       [post.published_at || post.created_at]
@@ -372,7 +372,7 @@ exports.getBySlug = async (req, res, next) => {
     const nextPost = await query(
       `SELECT id, title, slug, image_url, category 
        FROM posts 
-       WHERE is_published = true AND published_at > $1
+       WHERE is_published = true AND is_active = true AND published_at > $1
        ORDER BY published_at ASC 
        LIMIT 1`,
       [post.published_at || post.created_at]
