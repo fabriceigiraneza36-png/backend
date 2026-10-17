@@ -14,6 +14,10 @@ const deleteCloudinaryImage = async (url) => {
   if (!url) return;
   await destroyCloudinaryUrls([url]);
 };
+const deleteCloudinaryImages = async (urls) => {
+  const unique = [...new Set((urls || []).filter(Boolean))];
+  if (unique.length) await destroyCloudinaryUrls(unique);
+};
 
 // ─── Helper: Ensure unique slug ────────────────────────────────────
 const ensureUniqueSlug = async (baseSlug, excludeId = null) => {
@@ -658,7 +662,7 @@ exports.update = async (req, res, next) => {
  */
 exports.remove = async (req, res, next) => {
   try {
-    const existing = await query("SELECT image_url, title FROM posts WHERE id = $1", [req.params.id]);
+    const existing = await query("SELECT image_url, author_avatar, title FROM posts WHERE id = $1", [req.params.id]);
     if (existing.rows.length === 0) {
       return res.status(404).json({ status: "error", message: "Post not found" });
     }
@@ -667,7 +671,7 @@ exports.remove = async (req, res, next) => {
     await query("DELETE FROM post_comments WHERE post_id = $1", [req.params.id]).catch(() => {});
 
     await query("DELETE FROM posts WHERE id = $1", [req.params.id]);
-    await deleteCloudinaryImage(existing.rows[0].image_url);
+    await deleteCloudinaryImages([existing.rows[0].image_url, existing.rows[0].author_avatar]);
 
     res.json({
       status: "success",
@@ -738,7 +742,7 @@ exports.bulkDelete = async (req, res, next) => {
 
     // Get images for cleanup
     const posts = await query(
-      `SELECT image_url FROM posts WHERE id = ANY($1)`,
+      `SELECT image_url, author_avatar FROM posts WHERE id = ANY($1)`
       [ids]
     );
 
@@ -746,7 +750,7 @@ exports.bulkDelete = async (req, res, next) => {
     await query("DELETE FROM post_comments WHERE post_id = ANY($1)", [ids]).catch(() => {});
 
     const result = await query("DELETE FROM posts WHERE id = ANY($1)", [ids]);
-    await Promise.allSettled(posts.rows.map((post) => deleteCloudinaryImage(post.image_url)));
+    await deleteCloudinaryImages(posts.rows.flatMap((post) => [post.image_url, post.author_avatar]));
 
     res.json({
       status: "success",
