@@ -4,6 +4,7 @@ const router   = express.Router()
 const { query: db } = require('../config/db')
 const { authenticate, optionalAuth, requireAdmin } = require('../middleware/auth')
 const logger   = require('../utils/logger')
+const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
 const { notifyPackageBookingCreated, createNotificationInternal } = require('../controllers/notificationsController')
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -418,8 +419,24 @@ router.patch('/:id', requireAdmin, async (req, res) => {
 
 router.delete('/:id', requireAdmin, async (req, res) => {
   try {
+    const media = await db('SELECT cover_image_url, image_gallery FROM packages WHERE id = $1', [req.params.id])
+    if (!media.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
+    const row = media.rows[0]
+    const urls = [row.cover_image_url]
+    const collectUrls = (value) => {
+      if (!value) return
+      if (typeof value === 'string') {
+        if (/res\.cloudinary\.com\//i.test(value)) urls.push(value)
+        else {
+          try { collectUrls(JSON.parse(value)) } catch {}
+        }
+      } else if (Array.isArray(value)) value.forEach(collectUrls)
+      else if (typeof value === 'object') Object.values(value).forEach(collectUrls)
+    }
+    collectUrls(row.image_gallery)
     const result = await db('DELETE FROM packages WHERE id = $1 RETURNING id', [req.params.id])
     if (!result.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
+    await destroyCloudinaryUrls(urls)
     return res.json({ success: true, data: { id: result.rows[0].id } })
   } catch (err) {
     logger.error('[Packages] delete error:', err.message)
