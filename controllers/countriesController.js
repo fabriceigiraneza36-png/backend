@@ -863,7 +863,7 @@ const getImages = async (req, res, next) => {
   }
 };
 
-const { startPurge, getPurgeJob } = require("../utils/purgeJobs");
+const { startPurge, getPurgeJob: getPurgeJobRecord } = require("../utils/purgeJobs");
 
 const purgePreview = async (req, res, next) => {
   try {
@@ -898,7 +898,6 @@ const getPurgeJob = async (req, res, next) => {
     return res.json({ success: true, data: job });
   } catch (err) { next(err); }
 };
-const getPurgeJobRecord = getPurgeJob;
 
 module.exports = {
   getAll,
