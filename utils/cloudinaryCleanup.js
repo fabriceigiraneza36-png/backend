@@ -82,30 +82,23 @@ const findDatabaseReferences = async (publicIds) => {
 
 const quoteIdentifier = (identifier) => `"${String(identifier).replace(/"/g, '""')}"`
 
-const destroyCloudinaryUrls = async (urls = []) => {
-  const unique = [...new Set((Array.isArray(urls) ? urls : [urls]).filter(Boolean))]
+const destroyCloudinaryPublicIds = async (publicIds = [], resourceType = 'image') => {
+  const unique = [...new Set((Array.isArray(publicIds) ? publicIds : [publicIds]).filter(Boolean))]
   if (!unique.length) return { attempted: 0, deleted: 0, preserved: 0, failed: 0 }
   ensureCloudinaryConfigured()
   let deleted = 0
   let preserved = 0
   let failed = 0
-  const assets = unique.map((url) => ({
-    url,
-    publicId: publicIdFromUrl(url),
-    resourceType: resourceTypeFromUrl(url),
-  }))
-  const validAssets = assets.filter((asset) => asset.publicId && asset.resourceType)
-  preserved += assets.length - validAssets.length
   try {
-    const referenced = await findDatabaseReferences(validAssets.map((asset) => asset.publicId))
-    for (const asset of validAssets) {
-      if (referenced.has(asset.publicId)) {
+    const referenced = await findDatabaseReferences(unique)
+    for (const publicId of unique) {
+      if (referenced.has(publicId)) {
         preserved += 1
         continue
       }
       try {
-        const result = await cloudinary.uploader.destroy(asset.publicId, {
-          resource_type: asset.resourceType,
+        const result = await cloudinary.uploader.destroy(publicId, {
+          resource_type: resourceType,
           invalidate: true,
         })
         if (result?.result === 'ok' || result?.result === 'not found') deleted += 1
@@ -117,10 +110,32 @@ const destroyCloudinaryUrls = async (urls = []) => {
     }
   } catch (err) {
     // If the database reference scan fails, fail closed and preserve every asset.
-    preserved += validAssets.length
+    preserved += unique.length
     console.error('[CloudinaryCleanup] Reference scan failed; preserving assets:', err.message)
   }
   return { attempted: unique.length, deleted, preserved, failed }
 }
 
-module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls }
+const destroyCloudinaryUrls = async (urls = []) => {
+  const unique = [...new Set((Array.isArray(urls) ? urls : [urls]).filter(Boolean))]
+  const assets = unique.map((url) => ({
+    url,
+    publicId: publicIdFromUrl(url),
+    resourceType: resourceTypeFromUrl(url),
+  }))
+  const valid = assets.filter((asset) => asset.publicId && asset.resourceType)
+  const invalidCount = assets.length - valid.length
+  const results = await Promise.all(['image', 'video', 'raw'].map(async (resourceType) => {
+    const ids = valid.filter(asset => asset.resourceType === resourceType).map(asset => asset.publicId)
+    return ids.length ? destroyCloudinaryPublicIds(ids, resourceType) : { attempted: 0, deleted: 0, preserved: 0, failed: 0 }
+  }))
+  const totals = results.reduce((sum, result) => ({
+    attempted: sum.attempted + result.attempted,
+    deleted: sum.deleted + result.deleted,
+    preserved: sum.preserved + result.preserved,
+    failed: sum.failed + result.failed,
+  }), { attempted: 0, deleted: 0, preserved: invalidCount, failed: 0 })
+  return totals
+}
+
+module.exports = { isCloudinaryUrl, publicIdFromUrl, resourceTypeFromUrl, destroyCloudinaryUrls, destroyCloudinaryPublicIds }
