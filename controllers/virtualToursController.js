@@ -3,6 +3,7 @@
 const { query } = require("../config/db");
 const { slugify } = require("../utils/helpers");
 const { getUploadedFileUrl } = require("../utils/uploadHelpers");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 const {
   validateTourCreate,
   validateTourUpdate,
@@ -618,7 +619,7 @@ exports.remove = async (req, res, next) => {
     const { id } = req.params;
 
     const result = await query(
-      "DELETE FROM virtual_tours WHERE id = $1 RETURNING id, title, slug",
+      "DELETE FROM virtual_tours WHERE id = $1 RETURNING id, title, slug, video_url, thumbnail_url, panorama_url",
       [parseInt(id)]
     );
 
@@ -629,9 +630,14 @@ exports.remove = async (req, res, next) => {
       });
     }
 
+    await destroyCloudinaryUrls([
+      result.rows[0].video_url,
+      result.rows[0].thumbnail_url,
+      result.rows[0].panorama_url,
+    ]);
     res.json({
       message: "Virtual tour deleted permanently",
-      data:    result.rows[0],
+      data:    { id: result.rows[0].id, title: result.rows[0].title, slug: result.rows[0].slug },
     });
   } catch (err) {
     next(err);
