@@ -53,7 +53,7 @@ let schemaPromise
 
 const ensureJobsSchema = async () => {
   if (!schemaPromise) {
-    schemaPromise = query(\`
+    schemaPromise = query(`
       CREATE TABLE IF NOT EXISTS maintenance_purge_jobs (
         id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
         category TEXT NOT NULL,
@@ -69,13 +69,13 @@ const ensureJobsSchema = async () => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
-    \`).then(() => query(\`
+    `).then(() => query(`
       CREATE INDEX IF NOT EXISTS idx_maintenance_purge_jobs_created
       ON maintenance_purge_jobs(created_at DESC)
-    \`)).then(() => query(\`
+    `)).then(() => query(`
       CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_purge_one_active_category
       ON maintenance_purge_jobs(category) WHERE status IN ('queued', 'running')
-    \`)).catch((err) => {
+    `)).catch((err) => {
       schemaPromise = null
       throw err
     })
@@ -99,12 +99,12 @@ const existingTables = async (tables) => {
 // render the dashboard or start a purge. Actual deletions are counted per batch.
 const estimateTable = async (table) => {
   const { rows } = await query(
-    \`SELECT GREATEST(c.reltuples, 0)::bigint AS count
+    `SELECT GREATEST(c.reltuples, 0)::bigint AS count
      FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-     WHERE n.nspname = 'public' AND c.relname = $1 AND c.relkind IN ('r', 'p')\`,
+     WHERE n.nspname = 'public' AND c.relname = $1 AND c.relkind IN ('r', 'p')`,
     [table],
   )
-  if (!rows.length) throw new Error(\`Table public."\${table}" is missing or is not a table\`)
+  if (!rows.length) throw new Error(`Table public."${table}" is missing or is not a table`)
   return Number(rows[0].count || 0)
 }
 
@@ -165,7 +165,7 @@ exports.listCategories = async (req, res) => {
 const updateJob = async (jobId, fields) => {
   const { status, currentTable, totalRecords, deletedRecords, tableResults, error } = fields
   await query(
-    \`UPDATE maintenance_purge_jobs SET
+    `UPDATE maintenance_purge_jobs SET
       status = COALESCE($2, status),
       current_table = $3,
       total_records = COALESCE($4, total_records),
@@ -173,7 +173,7 @@ const updateJob = async (jobId, fields) => {
       table_results = COALESCE($6::jsonb, table_results),
       error = $7,
       updated_at = NOW()
-     WHERE id = $1\`,
+     WHERE id = $1`,
     [
       jobId, status ?? null, currentTable ?? null,
       totalRecords ?? null, deletedRecords ?? null,
@@ -188,8 +188,8 @@ const processPurgeJob = async (jobId) => {
     await ensureJobsSchema()
     // Atomic claim prevents two workers from processing the same queued job.
     const claimed = await query(
-      \`UPDATE maintenance_purge_jobs SET status = 'running', updated_at = NOW()
-       WHERE id = $1 AND status = 'queued' RETURNING id\`,
+      `UPDATE maintenance_purge_jobs SET status = 'running', updated_at = NOW()
+       WHERE id = $1 AND status = 'queued' RETURNING id`,
       [jobId],
     )
     if (!claimed.rows.length) return
@@ -224,10 +224,10 @@ const processPurgeJob = async (jobId) => {
         // Each statement is deliberately small and commits independently, keeping
         // locks, transaction size, and statement duration bounded.
         const batch = await query(
-          \`WITH batch AS (
-             SELECT ctid FROM "\${table}" LIMIT $1
+          `WITH batch AS (
+             SELECT ctid FROM "${table}" LIMIT $1
            )
-           DELETE FROM "\${table}" WHERE ctid IN (SELECT ctid FROM batch)\`,
+           DELETE FROM "${table}" WHERE ctid IN (SELECT ctid FROM batch)`,
           [BATCH_SIZE],
         )
         const removed = Number(batch.rowCount || 0)
@@ -257,10 +257,10 @@ const processPurgeJob = async (jobId) => {
       tableResults: results, error: null,
     })
     logger.warn(
-      \`[Maintenance] PURGE COMPLETE category="\${job.category}" job=\${jobId} deleted=\${deletedRecords}\`,
+      `[Maintenance] PURGE COMPLETE category="${job.category}" job=${jobId} deleted=${deletedRecords}`,
     )
   } catch (err) {
-    logger.error(\`[Maintenance] purge job \${jobId} failed:\`, err.message)
+    logger.error(`[Maintenance] purge job ${jobId} failed:`, err.message)
     await updateJob(jobId, {
       status: 'failed', currentTable: null, error: String(err.message || err).slice(0, 3000),
     }).catch(updateErr => logger.error('[Maintenance] could not save purge failure:', updateErr.message))
@@ -274,7 +274,7 @@ exports.purgeCategory = async (req, res) => {
     if (!CATEGORY_TABLES[category]) {
       return res.status(400).json({
         success: false,
-        message: \`Unknown category "\${category}". Allowed: \${ALL_CATEGORIES.join(', ')}.\`,
+        message: `Unknown category "${category}". Allowed: ${ALL_CATEGORIES.join(', ')}.`,
       })
     }
     if (confirm !== 'DELETE_ALL') {
@@ -287,11 +287,11 @@ exports.purgeCategory = async (req, res) => {
     await ensureJobsSchema()
     const tables = await existingTables(uniqueTables(category))
     if (!tables.length) {
-      return res.status(400).json({ success: false, message: \`No existing tables found for category "\${category}".\` })
+      return res.status(400).json({ success: false, message: `No existing tables found for category "${category}".` })
     }
     const { rows } = await query(
-      \`INSERT INTO maintenance_purge_jobs (category, status, tables, requested_by)
-       VALUES ($1, 'queued', $2::jsonb, $3) RETURNING id, category, status, total_records, deleted_records, current_table\`,
+      `INSERT INTO maintenance_purge_jobs (category, status, tables, requested_by)
+       VALUES ($1, 'queued', $2::jsonb, $3) RETURNING id, category, status, total_records, deleted_records, current_table`,
       [category, JSON.stringify(tables), String(req.user?.email || req.user?.id || 'unknown').slice(0, 255)],
     ).catch(err => {
       if (err.code === '23505') {
@@ -305,7 +305,7 @@ exports.purgeCategory = async (req, res) => {
     setImmediate(() => { void processPurgeJob(job.id) })
     return res.status(202).json({
       success: true,
-      message: \`Purge queued for "\${category}". Track progress until status is completed.\`,
+      message: `Purge queued for "${category}". Track progress until status is completed.`,
       jobId: job.id,
       category,
       status: job.status,
@@ -315,7 +315,7 @@ exports.purgeCategory = async (req, res) => {
     if (err.code === 'PURGE_ALREADY_RUNNING') {
       return res.status(409).json({ success: false, message: err.message })
     }
-    logger.error(\`[Maintenance] purgeCategory "\${req.params?.category}" failed:\`, err.message)
+    logger.error(`[Maintenance] purgeCategory "${req.params?.category}" failed:`, err.message)
     return res.status(500).json({
       success: false,
       message: 'Could not queue purge. No success response was issued.',
@@ -328,9 +328,9 @@ exports.getPurgeJob = async (req, res) => {
   try {
     await ensureJobsSchema()
     const { rows } = await query(
-      \`SELECT id, category, status, tables, total_records, deleted_records,
+      `SELECT id, category, status, tables, total_records, deleted_records,
               current_table, table_results, error, created_at, updated_at
-       FROM maintenance_purge_jobs WHERE id = $1\`,
+       FROM maintenance_purge_jobs WHERE id = $1`,
       [req.params.jobId],
     )
     if (!rows.length) return res.status(404).json({ success: false, message: 'Purge job not found' })
