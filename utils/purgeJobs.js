@@ -149,6 +149,14 @@ const processJob = async (jobId, resource) => {
       }
     }
 
+    // Clear legacy orphan rows that no longer have a parent record.
+    for (const table of CHILD_TABLES[resource]) {
+      const exists = await query(
+        'SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = $2) AS present',
+        ['public', table],
+      )
+      if (exists.rows[0]?.present) await query(`DELETE FROM "${table}"`)
+    }
     await query("UPDATE admin_purge_jobs SET status = 'completed', updated_at = NOW() WHERE id = $1", [jobId])
   } catch (err) {
     await query(
