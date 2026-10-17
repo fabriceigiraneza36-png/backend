@@ -29,6 +29,13 @@ const asyncHandler = require('../middleware/asyncHandler')
  * }
  */
 router.get(
+  '/jobs/:jobId',
+  protect,
+  adminOnly,
+  asyncHandler(ctrl.getPurgeJob),
+)
+
+router.get(
   '/categories',
   protect,
   adminOnly,
