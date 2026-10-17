@@ -1,259 +1,361 @@
 // controllers/maintenanceController.js
-// ═══════════════════════════════════════════════════════════════════════════════
-// Maintenance / Data Cleanup Utility v2.0
-// -----------------------------------------------------------------------------
-// Admin-only endpoints to:
-//   GET  /api/maintenance/categories  — record counts per table per category
-//   POST /api/maintenance/purge/:cat  — delete all records (requires confirm)
-//
-// Every table count is wrapped in its own try/catch so a missing table
-// never crashes the whole endpoint.
-// ═══════════════════════════════════════════════════════════════════════════════
-
+// Admin-only maintenance category inspection and resumable asynchronous purges.
 'use strict'
 
 const { query } = require('../config/db')
-const logger    = require('../utils/logger')
+const logger = require('../utils/logger')
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   CATEGORY → TABLES MAP
-   Delete order within each category: children before parents (FK safety).
-───────────────────────────────────────────────────────────────────────────── */
 const CATEGORY_TABLES = {
   destinations: [
-    'destination_tips',
-    'destination_practical_info',
-    'destination_tags',
-    'destination_reviews',
-    'destination_itineraries',
-    'destination_images',
-    'destinations',
+    'destination_tips', 'destination_practical_info', 'destination_tags',
+    'destination_reviews', 'destination_itineraries', 'destination_faqs',
+    'destination_images', 'destination_comments', 'destination_exclusions',
+    'destination_inclusions', 'destination_likes', 'destination_pricing',
+    'destination_ratings', 'destination_seasons', 'destinations',
   ],
   countries: [
-    'destination_tips',
-    'destination_practical_info',
-    'destination_tags',
-    'destination_reviews',
-    'destination_itineraries',
-    'destination_images',
-    'destinations',
-    'bookings',
-    'countries',
+    'country_comments', 'country_images', 'country_likes', 'country_ratings',
+    'country_historical_events', 'country_unesco_sites',
+    'destination_tips', 'destination_practical_info', 'destination_tags',
+    'destination_reviews', 'destination_itineraries', 'destination_faqs',
+    'destination_images', 'destination_comments', 'destination_exclusions',
+    'destination_inclusions', 'destination_likes', 'destination_pricing',
+    'destination_ratings', 'destination_seasons', 'destinations', 'countries',
   ],
-  bookings: [
-    'package_bookings',
-    'admin_info_requests',
-    'bookings',
-  ],
-  packages: [
-    'package_chat_preferences',
-    'package_messages',
-    'package_bookings',
-    'admin_info_requests',
-    'packages',
-  ],
+  bookings: ['package_bookings', 'admin_info_requests', 'bookings'],
+  packages: ['package_chat_preferences', 'package_messages', 'package_bookings', 'admin_info_requests', 'packages'],
   messaging: [
-    'typing_indicators',
-    'messages',
-    'conversations',
+    'typing_indicators', 'message_receipts', 'message_group_members',
+    'messages', 'message_groups', 'message_preferences', 'conversations',
+    'chat_messages', 'chat_sessions',
   ],
-  comments: [
-    'destination_comments',
-    'country_comments',
-  ],
-  posts: [
-    'post_comments',
-    'posts',
-  ],
-  contact: [
-    'contact_replies',
-    'contact_messages',
-  ],
-  users:         ['users'],
-  reviews:       ['reviews'],
-  gallery:       ['gallery'],
-  team:          ['team'],
-  testimonials:  ['testimonials'],
-  faqs:          ['faqs'],
-  services:      ['services'],
-  tips:          ['tips'],
-  pages:         ['pages'],
-  subscribers:   ['subscribers'],
-  notifications: ['notifications'],
+  comments: ['destination_comments', 'country_comments', 'post_comments'],
+  posts: ['post_comments', 'posts'],
+  contact: ['contact_replies', 'contact_messages'],
+  users: ['user_sessions', 'message_group_members', 'message_preferences', 'notification_preferences', 'users'],
+  reviews: ['destination_reviews', 'reviews'],
+  gallery: ['gallery'],
+  team: ['team_members', 'team'],
+  testimonials: ['testimonials'],
+  faqs: ['destination_faqs', 'faqs'],
+  services: ['services'],
+  tips: ['destination_tips', 'tips'],
+  pages: ['pages'],
+  subscribers: ['subscribers'],
+  notifications: ['push_subscriptions', 'notification_preferences', 'notifications'],
+  system_logs: ['activity_log', 'email_log'],
+  media: ['hero_slides', 'virtual_tours'],
 }
 
 const ALL_CATEGORIES = Object.keys(CATEGORY_TABLES)
+const BATCH_SIZE = 250
+let schemaPromise
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   HELPERS
-───────────────────────────────────────────────────────────────────────────── */
-
-/**
- * Returns the row count for a single table.
- * Returns 0 (never throws) if the table does not exist.
- */
-const countTable = async (table) => {
-  try {
-    const { rows } = await query(
-      `SELECT COUNT(*)::INT AS cnt FROM "${table}"`,
-    )
-    return rows[0]?.cnt ?? 0
-  } catch {
-    return 0
+const ensureJobsSchema = async () => {
+  if (!schemaPromise) {
+    schemaPromise = query(\`
+      CREATE TABLE IF NOT EXISTS maintenance_purge_jobs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        category TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'queued'
+          CHECK (status IN ('queued', 'running', 'completed', 'failed')),
+        tables JSONB NOT NULL DEFAULT '[]'::jsonb,
+        total_records BIGINT NOT NULL DEFAULT 0,
+        deleted_records BIGINT NOT NULL DEFAULT 0,
+        current_table TEXT,
+        table_results JSONB NOT NULL DEFAULT '{}'::jsonb,
+        error TEXT,
+        requested_by TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    \`).then(() => query(\`
+      CREATE INDEX IF NOT EXISTS idx_maintenance_purge_jobs_created
+      ON maintenance_purge_jobs(created_at DESC)
+    \`)).then(() => query(\`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_maintenance_purge_one_active_category
+      ON maintenance_purge_jobs(category) WHERE status IN ('queued', 'running')
+    \`)).catch((err) => {
+      schemaPromise = null
+      throw err
+    })
   }
+  return schemaPromise
 }
 
-/**
- * Deletes every row from a table and returns how many were removed.
- * Returns 0 (never throws) if the table does not exist.
- */
-const deleteFromTable = async (table) => {
-  try {
-    const { rowCount } = await query(`DELETE FROM "${table}"`)
-    return rowCount ?? 0
-  } catch (err) {
-    logger.warn(`[Maintenance] deleteFromTable skipped "${table}": ${err.message}`)
-    return 0
-  }
+const uniqueTables = (category) => [...new Set(CATEGORY_TABLES[category] || [])]
+
+const existingTables = async (tables) => {
+  if (!tables.length) return []
+  const { rows } = await query(
+    'SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename = ANY($2::text[])',
+    ['public', tables],
+  )
+  const found = new Set(rows.map(row => row.tablename))
+  return tables.filter(table => found.has(table))
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   GET /api/maintenance/categories
-   Returns:
-   {
-     success: true,
-     data: [
-       {
-         category:     "posts",
-         tables:       [{ table: "post_comments", count: 3 }, { table: "posts", count: 7 }],
-         totalRecords: 10,
-       },
-       …
-     ]
-   }
-───────────────────────────────────────────────────────────────────────────── */
+// Fast estimate from PostgreSQL statistics: avoids scanning every row just to
+// render the dashboard or start a purge. Actual deletions are counted per batch.
+const estimateTable = async (table) => {
+  const { rows } = await query(
+    \`SELECT GREATEST(c.reltuples, 0)::bigint AS count
+     FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+     WHERE n.nspname = 'public' AND c.relname = $1 AND c.relkind IN ('r', 'p')\`,
+    [table],
+  )
+  if (!rows.length) throw new Error(\`Table public."\${table}" is missing or is not a table\`)
+  return Number(rows[0].count || 0)
+}
+
+const mapLimit = async (items, limit, worker) => {
+  const output = new Array(items.length)
+  let next = 0
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (true) {
+      const index = next++
+      if (index >= items.length) return
+      output[index] = await worker(items[index], index)
+    }
+  })
+  await Promise.all(runners)
+  return output
+}
+
 exports.listCategories = async (req, res) => {
   try {
-    const data = await Promise.all(
-      ALL_CATEGORIES.map(async (category) => {
-        const tableList = CATEGORY_TABLES[category]
-
-        // Fetch counts for all tables in this category in parallel
-        const tables = await Promise.all(
-          tableList.map(async (table) => ({
-            table,
-            count: await countTable(table),
-          })),
-        )
-
-        // De-duplicate table names that appear more than once
-        // (e.g. "countries" category re-lists destination tables)
-        const seen        = new Set()
-        const uniqueTables = tables.filter(({ table }) => {
-          if (seen.has(table)) return false
-          seen.add(table)
-          return true
-        })
-
-        const totalRecords = uniqueTables.reduce((sum, t) => sum + t.count, 0)
-
-        return { category, tables: uniqueTables, totalRecords }
-      }),
-    )
-
-    return res.json({ success: true, data })
+    const data = await Promise.all(ALL_CATEGORIES.map(async category => {
+      const configured = uniqueTables(category)
+      const tablesPresent = await existingTables(configured)
+      const missingTables = configured.filter(table => !tablesPresent.includes(table))
+      const tables = await mapLimit(tablesPresent, 5, async table => ({
+        table,
+        count: await estimateTable(table),
+        estimated: true,
+      }))
+      return {
+        category,
+        tables,
+        missingTables,
+        totalRecords: tables.reduce((sum, item) => sum + item.count, 0),
+        estimated: true,
+      }
+    }))
+    return res.json({ success: true, data, countMode: 'estimated' })
   } catch (err) {
     logger.error('[Maintenance] listCategories failed:', err.message)
     return res.status(500).json({
       success: false,
-      message: 'Failed to load maintenance categories.',
+      message: 'Failed to inspect maintenance tables. No counts were substituted with zero.',
+      error: err.message,
     })
   }
 }
 
-/* ─────────────────────────────────────────────────────────────────────────────
-   POST /api/maintenance/purge/:category
-   Body: { confirm: "DELETE_ALL" }
-   Returns:
-   {
-     success: true,
-     message: "Purged 42 records across 2 tables.",
-     category: "posts",
-     results: {
-       post_comments: { before: 35, deleted: 35, after: 0 },
-       posts:         { before:  7, deleted:  7, after: 0 },
-     }
-   }
-───────────────────────────────────────────────────────────────────────────── */
+const updateJob = async (jobId, fields) => {
+  const { status, currentTable, totalRecords, deletedRecords, tableResults, error } = fields
+  await query(
+    \`UPDATE maintenance_purge_jobs SET
+      status = COALESCE($2, status),
+      current_table = $3,
+      total_records = COALESCE($4, total_records),
+      deleted_records = COALESCE($5, deleted_records),
+      table_results = COALESCE($6::jsonb, table_results),
+      error = $7,
+      updated_at = NOW()
+     WHERE id = $1\`,
+    [
+      jobId, status ?? null, currentTable ?? null,
+      totalRecords ?? null, deletedRecords ?? null,
+      tableResults == null ? null : JSON.stringify(tableResults),
+      error ?? null,
+    ],
+  )
+}
+
+const processPurgeJob = async (jobId) => {
+  try {
+    await ensureJobsSchema()
+    // Atomic claim prevents two workers from processing the same queued job.
+    const claimed = await query(
+      \`UPDATE maintenance_purge_jobs SET status = 'running', updated_at = NOW()
+       WHERE id = $1 AND status = 'queued' RETURNING id\`,
+      [jobId],
+    )
+    if (!claimed.rows.length) return
+
+    const { rows: jobs } = await query(
+      'SELECT category, tables, total_records, deleted_records, table_results FROM maintenance_purge_jobs WHERE id = $1',
+      [jobId],
+    )
+    const job = jobs[0]
+    if (!job || !CATEGORY_TABLES[job.category]) throw new Error('Purge job has an invalid category')
+    const tables = Array.isArray(job.tables) ? job.tables : JSON.parse(job.tables || '[]')
+    let results = typeof job.table_results === 'object' && job.table_results
+      ? job.table_results
+      : JSON.parse(job.table_results || '{}')
+    let totalRecords = Number(job.total_records || 0)
+    let deletedRecords = Number(job.deleted_records || 0)
+
+    // Record quick estimates up front; exact work happens in bounded delete batches.
+    if (!totalRecords) {
+      const estimates = await Promise.all(tables.map(async table => [table, await estimateTable(table)]))
+      totalRecords = estimates.reduce((sum, [, count]) => sum + count, 0)
+      await updateJob(jobId, { totalRecords, deletedRecords, tableResults: results, currentTable: null, error: null })
+    }
+
+    for (const table of tables) {
+      if (results[table]?.status === 'completed') continue
+      const estimatedBefore = results[table]?.estimatedBefore ?? await estimateTable(table)
+      let deletedForTable = Number(results[table]?.deleted || 0)
+      await updateJob(jobId, { currentTable: table, totalRecords, deletedRecords, tableResults: results, error: null })
+
+      while (true) {
+        // Each statement is deliberately small and commits independently, keeping
+        // locks, transaction size, and statement duration bounded.
+        const batch = await query(
+          \`WITH batch AS (
+             SELECT ctid FROM "\${table}" LIMIT $1
+           )
+           DELETE FROM "\${table}" WHERE ctid IN (SELECT ctid FROM batch)\`,
+          [BATCH_SIZE],
+        )
+        const removed = Number(batch.rowCount || 0)
+        if (!removed) break
+        deletedForTable += removed
+        deletedRecords += removed
+        results = {
+          ...results,
+          [table]: { estimatedBefore, deleted: deletedForTable, status: 'running' },
+        }
+        await updateJob(jobId, {
+          currentTable: table, totalRecords, deletedRecords, tableResults: results, error: null,
+        })
+      }
+
+      results = {
+        ...results,
+        [table]: { estimatedBefore, deleted: deletedForTable, after: 0, status: 'completed' },
+      }
+      await updateJob(jobId, {
+        currentTable: null, totalRecords, deletedRecords, tableResults: results, error: null,
+      })
+    }
+
+    await updateJob(jobId, {
+      status: 'completed', currentTable: null, totalRecords, deletedRecords,
+      tableResults: results, error: null,
+    })
+    logger.warn(
+      \`[Maintenance] PURGE COMPLETE category="\${job.category}" job=\${jobId} deleted=\${deletedRecords}\`,
+    )
+  } catch (err) {
+    logger.error(\`[Maintenance] purge job \${jobId} failed:\`, err.message)
+    await updateJob(jobId, {
+      status: 'failed', currentTable: null, error: String(err.message || err).slice(0, 3000),
+    }).catch(updateErr => logger.error('[Maintenance] could not save purge failure:', updateErr.message))
+  }
+}
+
 exports.purgeCategory = async (req, res) => {
   try {
-    const { category }   = req.params
-    const { confirm }    = req.body || {}
-    const adminId        = req.user?.id
-    const adminEmail     = req.user?.email || 'unknown'
-
-    // ── Validate category ────────────────────────────────────────────────
+    const category = String(req.params?.category || '')
+    const confirm = req.body?.confirm
     if (!CATEGORY_TABLES[category]) {
       return res.status(400).json({
         success: false,
-        message: `Unknown category "${category}". Allowed: ${ALL_CATEGORIES.join(', ')}.`,
+        message: \`Unknown category "\${category}". Allowed: \${ALL_CATEGORIES.join(', ')}.\`,
       })
     }
-
-    // ── Require explicit confirmation token ──────────────────────────────
     if (confirm !== 'DELETE_ALL') {
       return res.status(400).json({
         success: false,
-        message: 'Confirmation required. Send { confirm: "DELETE_ALL" } in the request body.',
+        message: 'Explicit confirmation required. Send { confirm: "DELETE_ALL" }.',
       })
     }
 
-    const tableList = CATEGORY_TABLES[category]
-    const results   = {}
-    let   totalDeleted = 0
-
-    // De-duplicate (same reason as listCategories)
-    const seen        = new Set()
-    const uniqueTables = tableList.filter((t) => {
-      if (seen.has(t)) return false
-      seen.add(t)
-      return true
-    })
-
-    // Delete in defined order (children first)
-    for (const table of uniqueTables) {
-      const before  = await countTable(table)
-      const deleted = await deleteFromTable(table)
-      const after   = await countTable(table)
-
-      results[table] = { before, deleted, after }
-      totalDeleted  += deleted
-
-      logger.info(
-        `[Maintenance] admin=${adminEmail} purged ${deleted} rows from "${table}" ` +
-        `(category=${category})`,
-      )
+    await ensureJobsSchema()
+    const tables = await existingTables(uniqueTables(category))
+    if (!tables.length) {
+      return res.status(400).json({ success: false, message: \`No existing tables found for category "\${category}".\` })
     }
-
-    logger.warn(
-      `[Maintenance] PURGE COMPLETE — category="${category}" ` +
-      `totalDeleted=${totalDeleted} by admin id=${adminId} email=${adminEmail}`,
-    )
-
-    return res.json({
+    const { rows } = await query(
+      \`INSERT INTO maintenance_purge_jobs (category, status, tables, requested_by)
+       VALUES ($1, 'queued', $2::jsonb, $3) RETURNING id, category, status, total_records, deleted_records, current_table\`,
+      [category, JSON.stringify(tables), String(req.user?.email || req.user?.id || 'unknown').slice(0, 255)],
+    ).catch(err => {
+      if (err.code === '23505') {
+        const conflict = new Error('A purge for this category is already queued or running')
+        conflict.code = 'PURGE_ALREADY_RUNNING'
+        throw conflict
+      }
+      throw err
+    })
+    const job = rows[0]
+    setImmediate(() => { void processPurgeJob(job.id) })
+    return res.status(202).json({
       success: true,
-      message: `Purged ${totalDeleted} records across ${uniqueTables.length} table(s) in "${category}".`,
+      message: \`Purge queued for "\${category}". Track progress until status is completed.\`,
+      jobId: job.id,
       category,
-      results,
+      status: job.status,
+      data: job,
     })
   } catch (err) {
-    logger.error(
-      `[Maintenance] purgeCategory "${req.params?.category}" failed:`,
-      err.message,
-    )
+    if (err.code === 'PURGE_ALREADY_RUNNING') {
+      return res.status(409).json({ success: false, message: err.message })
+    }
+    logger.error(\`[Maintenance] purgeCategory "\${req.params?.category}" failed:\`, err.message)
     return res.status(500).json({
       success: false,
-      message: 'Purge failed. See server logs for details.',
+      message: 'Could not queue purge. No success response was issued.',
+      error: err.message,
     })
   }
 }
+
+exports.getPurgeJob = async (req, res) => {
+  try {
+    await ensureJobsSchema()
+    const { rows } = await query(
+      \`SELECT id, category, status, tables, total_records, deleted_records,
+              current_table, table_results, error, created_at, updated_at
+       FROM maintenance_purge_jobs WHERE id = $1\`,
+      [req.params.jobId],
+    )
+    if (!rows.length) return res.status(404).json({ success: false, message: 'Purge job not found' })
+    const job = rows[0]
+    // Convert snake_case DB columns to a stable API shape.
+    return res.json({
+      success: true,
+      data: {
+        id: job.id,
+        category: job.category,
+        status: job.status,
+        tables: job.tables,
+        totalRecords: Number(job.total_records || 0),
+        deletedRecords: Number(job.deleted_records || 0),
+        currentTable: job.current_table,
+        tableResults: job.table_results || {},
+        error: job.error,
+        createdAt: job.created_at,
+        updatedAt: job.updated_at,
+      },
+    })
+  } catch (err) {
+    logger.error('[Maintenance] getPurgeJob failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Could not read purge job status.', error: err.message })
+  }
+}
+
+// Resume only queued jobs on process startup. Running jobs are deliberately not
+// double-claimed; the admin can safely retry a failed job after inspecting it.
+setImmediate(async () => {
+  try {
+    await ensureJobsSchema()
+    const { rows } = await query("SELECT id FROM maintenance_purge_jobs WHERE status = 'queued' ORDER BY created_at")
+    for (const row of rows) void processPurgeJob(row.id)
+  } catch (err) {
+    logger.warn('[Maintenance] queued purge recovery skipped:', err.message)
+  }
+})
