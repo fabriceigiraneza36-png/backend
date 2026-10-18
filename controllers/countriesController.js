@@ -158,7 +158,7 @@ const getAll = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: dataRes.map(sanitizeCountryMedia),
+      data: await Promise.all(dataRes.map(attachCountryImages)),
       pagination: {
         total,
         page: pageNum,
@@ -199,7 +199,7 @@ const getById = async (req, res, next) => {
 
     return res.json({
       success: true,
-      data: sanitizeCountryMedia(rows[0]),
+      data: await attachCountryImages(rows[0]),
     });
   } catch (err) {
     logger.error("[Countries] getById:", err.message);
@@ -230,7 +230,7 @@ const getOne = async (req, res, next) => {
     if (!countryQuery.rows.length) {
       return res.status(404).json({ error: "Country not found" });
     }
-    const country = sanitizeCountryMedia(countryQuery.rows[0]);
+    const country = await attachCountryImages(countryQuery.rows[0]);
 
     // Track views asynchronously
     query("UPDATE countries SET view_count = COALESCE(view_count, 0) + 1 WHERE id = $1", [country.id]).catch(() => {});
@@ -1138,4 +1138,49 @@ const sanitizeCountryMedia = (country) => {
     hero_images: gallery.slice(0, 4),
     images: gallery.map((item) => item.url),
   };
+};
+
+// Merge the normalized legacy country fields with the dedicated gallery table.
+// The dedicated table is the source of truth for ordered hero/cover/gallery assets.
+const attachCountryImages = async (rawCountry) => {
+  if (!rawCountry) return rawCountry;
+  let rows = [];
+  try {
+    const result = await query(
+      `SELECT url, alt_text, caption, is_hero, is_cover, display_order
+       FROM country_images WHERE country_id = $1
+       ORDER BY is_cover DESC, is_hero DESC, display_order ASC, id ASC`,
+      [rawCountry.id],
+    );
+    rows = result.rows || [];
+  } catch (err) {
+    logger.warn("[Countries] country_images unavailable; using legacy image fields:", err.message);
+  }
+  const tableImages = rows.map((row) => ({
+    url: cleanCountryImage(row.url),
+    imageUrl: cleanCountryImage(row.url),
+    altText: row.alt_text || row.caption || rawCountry.name || "Country travel image",
+    caption: row.caption || null,
+    isHero: Boolean(row.is_hero),
+    isCover: Boolean(row.is_cover),
+    sortOrder: Number(row.display_order) || 0,
+  })).filter((image) => image.url);
+  const legacyImages = [
+    ...normalizeImages(rawCountry.hero_images),
+    ...normalizeImages(rawCountry.images),
+    ...normalizeImages(rawCountry.gallery),
+  ].filter((image) => image.url);
+  const combined = [...tableImages, ...legacyImages]
+    .filter((image, index, all) => all.findIndex((other) => other.url === image.url) === index);
+  const primary = tableImages.find((image) => image.isCover || image.isHero) || combined[0];
+  return sanitizeCountryMedia({
+    ...rawCountry,
+    image_url: cleanCountryImage(rawCountry.image_url) || primary?.url || null,
+    cover_image_url: cleanCountryImage(rawCountry.cover_image_url) || primary?.url || null,
+    hero_image: cleanCountryImage(rawCountry.hero_image) || primary?.url || null,
+    hero_image_url: cleanCountryImage(rawCountry.hero_image_url) || primary?.url || null,
+    images: combined.map((image) => image.url),
+    hero_images: combined,
+    gallery: combined,
+  });
 };
