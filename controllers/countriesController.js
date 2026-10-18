@@ -82,13 +82,8 @@ const ensureCountryMediaSchema = async () => {
 const validateCountryContentRequirements = ({ images = [], attractions = [], latitude, longitude, enforce = true }) => {
   if (!enforce) return null
   const uniqueImages = [...new Set(urlsOnly(images).filter(Boolean))]
-  if (uniqueImages.length < 9) return 'A country requires at least 9 images: 4 hero images plus attraction/gallery imagery'
-  if (uniqueImages.slice(0, 4).length < 4) return 'A country requires 4 hero images'
-  const items = Array.isArray(attractions) ? attractions : []
-  if (items.length < 4) return 'A country requires at least 4 attractions'
-  const complete = items.filter((item) => String(item?.name || '').trim() && String(item?.imageUrl || item?.image_url || '').trim()).length
-  if (complete < 4) return 'Every required country attraction must have a name and image'
-  if (!Number.isFinite(Number(latitude)) || !Number.isFinite(Number(longitude))) return 'Country latitude and longitude are required for the interactive map'
+  if (uniqueImages.length < 1) return 'A country requires at least one valid image'
+  // Gallery and attraction counts are optional; one image is a valid country cover.
   return null
 }
 
@@ -1140,7 +1135,7 @@ const sanitizeCountryMedia = (country) => {
     cover_image: cleanCountryImage(country.cover_image) || primaryImage,
     hero_image: cleanCountryImage(country.hero_image) || primaryImage,
     hero_image_url: cleanCountryImage(country.hero_image_url) || primaryImage,
-    hero_images: JSON.stringify(gallery.slice(0, 4)),
+    hero_images: gallery.slice(0, 4),
     images: gallery.map((item) => item.url),
   };
 };
