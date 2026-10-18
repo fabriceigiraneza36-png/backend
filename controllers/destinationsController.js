@@ -10,6 +10,29 @@ const { startPurge, getPurgeJob } = require('../utils/purgeJobs')
 
 const MAX_DESTINATION_IMAGES = Number.POSITIVE_INFINITY // Unlimited gallery images; the UI/API still deduplicates URLs
 
+const canonicalImageKey = (value) => {
+  const raw = typeof value === 'string' ? value.trim() : ''
+  if (!raw) return ''
+  try {
+    const url = new URL(raw)
+    url.hash = ''
+    url.hostname = url.hostname.toLowerCase()
+    if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, '')
+    return url.toString()
+  } catch {
+    return raw.replace(/\/+$/, '')
+  }
+}
+const uniqueImageUrls = (values) => {
+  const seen = new Set()
+  return urlsOnly(values).filter((value) => {
+    const key = canonicalImageKey(value)
+    if (!key || seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 const validateDestinationMediaRequirements = ({ imageUrls = [], attractions = [], enforce = true }) => {
   if (!enforce) return null
   const uniqueImages = [...new Set(urlsOnly(imageUrls).filter(isSafeImageUrl))]
@@ -2083,7 +2106,7 @@ exports.create = async (req, res, next) => {
     const slug = await createUniqueSlug(data.name.trim())
 
     const uploadedImg = req.file ? getUploadedFileUrl(req.file) : null
-    let   imageUrls   = urlsOnly(data.image_urls)
+    let   imageUrls   = uniqueImageUrls(data.image_urls)
     if (uploadedImg) imageUrls = [uploadedImg, ...imageUrls.filter(u => u !== uploadedImg)]
     imageUrls = imageUrls.slice(0, MAX_DESTINATION_IMAGES)
     if (!imageUrls.length && isSafeImageUrl(data.image_url)) imageUrls = [data.image_url.trim()]
@@ -2186,7 +2209,7 @@ exports.create = async (req, res, next) => {
     // destination immediately render its full visual story on the public
     // detail page, even if the admin client cannot make the follow-up
     // addImages request. Existing destinations are not modified by this path.
-    const createdImageUrls = urlsOnly(data.image_urls)
+    const createdImageUrls = uniqueImageUrls(data.image_urls)
       .filter(isSafeImageUrl)
       .slice(0, MAX_DESTINATION_IMAGES)
 
@@ -2282,7 +2305,7 @@ exports.update = async (req, res, next) => {
       const existing    = toArr(data.image_urls || current.image_urls)
       fields.image_urls = [url, ...existing.filter(u => u !== url)]
     } else if (fields.image_urls) {
-      fields.image_urls = urlsOnly(fields.image_urls)
+      fields.image_urls = uniqueImageUrls(fields.image_urls)
       if (fields.image_urls.length) fields.image_url = fields.image_urls[0]
     }
 
@@ -3166,7 +3189,7 @@ exports.addImages = async (req, res, next) => {
        WHERE destination_id = $1 AND is_active = true`,
       [id], 'addImages:existing',
     )
-    const existingUrls = new Set(existingRows.map(row => String(row.image_url).trim()))
+    const existingUrls = new Set(existingRows.map(row => canonicalImageKey(row.image_url)))
     const pendingUrls = new Set()
     const existingPrimary = await safeQuery(
       `SELECT 1 FROM destination_images
@@ -3178,8 +3201,9 @@ exports.addImages = async (req, res, next) => {
 
     const insertImage = async (url, meta = {}) => {
       const normalizedUrl = typeof url === 'string' ? url.trim() : ''
-      if (!remaining || !isSafeImageUrl(normalizedUrl) || existingUrls.has(normalizedUrl) || pendingUrls.has(normalizedUrl)) return
-      pendingUrls.add(normalizedUrl)
+      const imageKey = canonicalImageKey(normalizedUrl)
+      if (!remaining || !isSafeImageUrl(normalizedUrl) || !imageKey || existingUrls.has(imageKey) || pendingUrls.has(imageKey)) return
+      pendingUrls.add(imageKey)
       order++
       const isPrimary = !primaryAssigned && (meta.is_primary !== undefined && toBool(meta.is_primary))
       if (isPrimary) primaryAssigned = true
