@@ -809,50 +809,27 @@ const getImages = async (req, res, next) => {
   try {
     await ensureCountryMediaSchema();
     const { id } = req.params;
+    if (!/^\d+$/.test(id)) return res.status(400).json({ success: false, error: "Invalid country ID" });
 
-    if (!/^\d+$/.test(id)) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid country ID",
-      });
-    }
-
-    const { rows } = await query(
-      "SELECT hero_images, images FROM countries WHERE id = $1",
-      [id]
+    const { rows: countryRows } = await query(
+      "SELECT id, name, hero_images, images, image_url, cover_image_url, hero_image FROM countries WHERE id = $1",
+      [id],
     );
+    if (!countryRows.length) return res.status(404).json({ success: false, error: "Country not found" });
 
-    if (rows.length === 0) {
-      return res.status(404).json({
-        success: false,
-        error: "Country not found",
-      });
-    }
-
-    let heroImages = Array.isArray(rows[0].images) && rows[0].images.length ? rows[0].images : rows[0].hero_images;
-    if (typeof heroImages === 'string') {
-      try {
-        const parsed = JSON.parse(heroImages);
-        if (Array.isArray(parsed)) {
-          heroImages = parsed;
-        } else {
-          heroImages = [heroImages];
-        }
-      } catch (e) {
-        heroImages = heroImages.split(',').map(s => s.trim()).filter(s => s !== '');
-      }
-    } else if (!Array.isArray(heroImages) && heroImages !== null) {
-      heroImages = [heroImages];
-    } else if (heroImages === null) {
-      heroImages = [];
-    }
-
-    const images = urlsOnly(heroImages);
+    const country = await attachCountryImages(countryRows[0]);
+    const gallery = [
+      ...normalizeImages(country.hero_images),
+      ...normalizeImages(country.images),
+      ...normalizeImages(country.gallery),
+    ].filter((item, index, all) => item.url && all.findIndex((other) => other.url === item.url) === index);
+    const images = gallery.map((item) => item.url).filter(Boolean);
 
     return res.json({
       success: true,
       data: images,
-      heroImages: images.slice(0, 4),
+      gallery,
+      heroImages: gallery.slice(0, 4),
       total: images.length,
     });
   } catch (err) {
