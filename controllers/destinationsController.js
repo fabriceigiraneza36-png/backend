@@ -1112,10 +1112,24 @@ exports.getAll = async (req, res, next) => {
       
       // Attach gallery data to each destination
       destinations = destinations.map(dest => {
-        const images = imagesByDestination[dest.id] || []
+        const galleryRows = imagesByDestination[dest.id] || []
+        const gallery = galleryRows.map(serializeImage).filter((image) => image.imageUrl)
+        const allImages = [...new Set([
+          ...(Array.isArray(dest.images) ? dest.images : []),
+          ...gallery.map((image) => image.imageUrl),
+        ].filter((url) => isSafeImageUrl(url)))]
+        const primary = gallery.find((image) => image.isPrimary)?.imageUrl || allImages[0] || dest.imageUrl || null
         return {
           ...dest,
-          gallery: images.map(serializeImage)
+          images: allImages,
+          imageUrl: primary,
+          heroImage: dest.heroImage || primary,
+          coverImageUrl: dest.coverImageUrl || primary,
+          thumbnailUrl: dest.thumbnailUrl || primary,
+          gallery,
+          heroImages: gallery.filter((image) => image.isPrimary).length
+            ? gallery.filter((image) => image.isPrimary)
+            : gallery.slice(0, 1),
         }
       })
     }
