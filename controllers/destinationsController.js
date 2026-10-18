@@ -8,19 +8,14 @@ const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require('../utils/cloudinaryCleanup')
 const { startPurge, getPurgeJob } = require('../utils/purgeJobs')
 
-const MAX_DESTINATION_IMAGES = 50 // Prevent ReferenceError crashes
+const MAX_DESTINATION_IMAGES = Number.POSITIVE_INFINITY // Unlimited gallery images; the UI/API still deduplicates URLs
 
 const validateDestinationMediaRequirements = ({ imageUrls = [], attractions = [], enforce = true }) => {
   if (!enforce) return null
   const uniqueImages = [...new Set(urlsOnly(imageUrls).filter(isSafeImageUrl))]
-  if (uniqueImages.length < 9) return 'A destination requires at least 9 images: 4 hero images plus attraction/gallery imagery'
-  if (uniqueImages.slice(0, 4).length < 4) return 'A destination requires 4 hero images'
-  const items = Array.isArray(attractions) ? attractions : []
-  if (items.length < 4) return 'A destination requires at least 4 attractions'
-  const complete = items.filter((item) =>
-    String(item?.name || '').trim() && isSafeImageUrl(String(item?.imageUrl || item?.image_url || '').trim())
-  ).length
-  if (complete < 4) return 'Every required attraction must have a name and image'
+  if (uniqueImages.length < 1) return 'A destination requires at least one valid image'
+  // Attraction imagery is optional. Any supplied attraction image is validated by
+  // the media sanitizer, but content is no longer blocked by arbitrary image counts.
   return null
 }
 
@@ -633,8 +628,14 @@ const REVIEW_AGG_SQL = `
 
 const serialize = (row) => {
   if (!row) return null
-  const images  = urlsOnly(row.image_urls)
-  const mainImg = images[0] || row.image_url || null
+  const images = [...new Set([
+    ...urlsOnly(row.image_urls),
+    row.hero_image,
+    row.cover_image_url,
+    row.thumbnail_url,
+    row.image_url,
+  ].filter((value) => isSafeImageUrl(value)))]
+  const mainImg = images[0] || null
 
   return {
     id:               row.id,
