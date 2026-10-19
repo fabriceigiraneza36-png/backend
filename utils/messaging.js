@@ -260,11 +260,18 @@ async function listConversations({
     params.push(status);
   }
 
-  /* Traveler inbox is scoped to the single direct conversation assigned
-     to their account. Admins pass no userFilter and keep their full inbox. */
+  /* Traveler inbox includes direct conversations and shared group threads where
+     the account is a member. Admins pass no userFilter and keep their full inbox. */
   if (userFilter && userFilter.user_id != null) {
-    conditions.push(`c.user_id = $${p++}`);
+    conditions.push(`(
+      c.user_id = ${p}
+      OR EXISTS (
+        SELECT 1 FROM message_group_members gm
+         WHERE gm.group_id = c.group_id AND gm.user_id = ${p}
+      )
+    )`);
     params.push(userFilter.user_id);
+    p++;
   }
 
   /* Search filter */
