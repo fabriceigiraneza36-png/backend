@@ -6,7 +6,7 @@ const { Resend } = require("resend");
 
 const getEmailConfig = () => {
   const resendApiKey = process.env.RESEND_API_KEY || "";
-  const fromDomain   = process.env.RESEND_FROM_DOMAIN || "altuvera.com";
+  const fromDomain   = process.env.RESEND_FROM_DOMAIN || "altuverasafaris.com";
   const isConfigured = Boolean(
     resendApiKey &&
     resendApiKey.startsWith("re_") &&
@@ -223,7 +223,7 @@ const buildFooter = (lines, showUnsubscribe = false, unsubscribeUrl = "") => {
 
   footerContent += `
     <p style="margin:24px 0 0;font-size:11px;color:rgba(255,255,255,0.25);letter-spacing:0.3px;">
-      © ${currentYear} East Africa Explorer. All rights reserved.
+      © ${currentYear} Altuvera Safaris. All rights reserved.
     </p>`;
 
   return `
@@ -339,7 +339,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
   const exploreUrl     = `${siteUrl}/explore`;
 
   const content = `
-    ${buildBanner("🌿", "East Africa Explorer", "Premium Safari & Adventures")}
+    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures")}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -418,7 +418,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const supportEmail   = getEnvVar("ADMIN_EMAIL", "info@altuverasafaris.com");
 
   const content = `
-    ${buildBanner("🌿", "East Africa Explorer", "Premium Safari & Adventures")}
+    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures")}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -481,7 +481,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
 
     ${buildQuoteSection(
       "Until we meet again on the savanna...",
-      "The East Africa Explorer Team"
+      "The Altuvera Safaris Team"
     )}
 
     ${buildFooter([
@@ -525,7 +525,7 @@ async function sendEmail(mailOptions, logMessage) {
 
   const fromAddress =
     mailOptions.from ||
-    `Altuvera <noreply@${config.fromDomain}>`;
+    `Altuvera Safaris <info@altuverasafaris.com>`;
 
   // ── Retry loop (3 attempts) ──────────────────────────────
   const MAX_ATTEMPTS = 3;
@@ -597,7 +597,7 @@ async function sendEmail(mailOptions, logMessage) {
 
 async function sendVerificationCode(email, code, fullName) {
   const config       = getEmailConfig();
-  const supportEmail = getEnvVar("ADMIN_EMAIL", "support@altuvera.com");
+  const supportEmail = getEnvVar("ADMIN_EMAIL", "info@altuverasafaris.com");
 
   if (!config.isConfigured && config.devFallback) {
     console.warn(
@@ -627,11 +627,11 @@ async function sendWelcomeEmail(email) {
 
   return sendEmail(
     {
-      from:    `East Africa Explorer <hello@${getEmailConfig().fromDomain}>`,
+      from:    `Altuvera Safaris <hello@${getEmailConfig().fromDomain}>`,
       to:      validatedEmail,
-      subject: "🌿 Welcome to East Africa Explorer! Your Adventure Begins",
+      subject: "🌿 Welcome to Altuvera Safaris",
       html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
-      text:    `Welcome to East Africa Explorer! Visit us at ${getEnvVar("SITE_URL", "http://localhost:3000")}/explore`,
+      text:    `Welcome to Altuvera Safaris! Visit us at ${getEnvVar("SITE_URL", "http://localhost:3000")}/explore`,
     },
     `✅ Welcome email sent to ${validatedEmail}`
   );
@@ -642,11 +642,11 @@ async function sendUnsubscribeConfirmation(email) {
 
   return sendEmail(
     {
-      from:    `East Africa Explorer <hello@${getEmailConfig().fromDomain}>`,
+      from:    `Altuvera Safaris <hello@${getEmailConfig().fromDomain}>`,
       to:      validatedEmail,
-      subject: "👋 You've Been Unsubscribed • East Africa Explorer",
+      subject: "👋 Newsletter Unsubscribe Confirmed | Altuvera Safaris",
       html:    buildUnsubscribeConfirmationEmailHtml(validatedEmail),
-      text:    "You have been successfully unsubscribed from East Africa Explorer emails.",
+      text:    "You have been successfully unsubscribed from Altuvera Safaris emails.",
     },
     `✅ Unsubscribe confirmation sent to ${validatedEmail}`
   );
