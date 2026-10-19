@@ -945,9 +945,10 @@ router.post("/groups/:id/messages", adminProtect, async (req, res) => {
     if (io) {
       io.to(`conv:${group.conversation_id}`).emit("msg:message", shaped);
       io.to(`conversation-${group.conversation_id}`).emit("msg:message", shaped);
-      io.to(`group-${groupId}`).emit("msg:group-message", {
-        conversationId: group.conversation_id, groupId, groupName: group.name, message: shaped,
-      });
+      const payload = { conversationId: group.conversation_id, groupId, groupName: group.name, message: shaped };
+      io.to(`group-${groupId}`).emit("msg:group-message", payload);
+      const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [groupId]);
+      for (const member of members) io.to(`user-${member.user_id}`).emit("msg:group-message", payload);
     }
     return res.json({ success: true, data: shaped });
   } catch (err) {
@@ -1115,6 +1116,15 @@ router.post("/conversations", protect, async (req, res) => {
     }
 
     const destination = String(destinationName || metadata?.destinationName || metadata?.destination_name || "").trim();
+    if (destination) {
+      const destinationCheck = await query(
+        `SELECT id, name FROM destinations WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) LIMIT 1`,
+        [destination],
+      );
+      if (!destinationCheck.rows[0]) {
+        return res.status(400).json({ success: false, message: "Choose a valid destination from the suggestions, or clear the destination field." });
+      }
+    }
     const conversationMetadata = {
       ...(metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {}),
       ...(destination ? { destinationName: destination } : {}),
@@ -1380,8 +1390,16 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       if (io) {
         // Socket.IO uses conv:/session: rooms; keep HTTP fallback sends just as live.
         io.to(`conv:${id}`).emit("msg:message", serialized);
+        io.to(`conversation-${id}`).emit("msg:message", serialized);
         if (conv.session_id) io.to(`session:${conv.session_id}`).emit("msg:message", serialized);
-        if (conv.user_id) io.to(`user-${conv.user_id}`).emit("msg:message", serialized);
+        if (conv.user_id) {
+          io.to(`user-${conv.user_id}`).emit("msg:message", serialized);
+        } else if (conv.group_id) {
+          const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [conv.group_id]);
+          const payload = { conversationId: Number(id), groupId: conv.group_id, message: serialized };
+          io.to(`group-${conv.group_id}`).emit("msg:group-message", payload);
+          for (const member of members) io.to(`user-${member.user_id}`).emit("msg:group-message", payload);
+        }
 
         if (!isAdminReq) {
           const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
