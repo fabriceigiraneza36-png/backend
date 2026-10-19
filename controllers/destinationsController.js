@@ -46,7 +46,7 @@ const validateDestinationMediaRequirements = ({ imageUrls = [], attractions = []
 
 let sendDestinationAlertEmail = null
 try {
-  ({ sendDestinationAlertEmail } = require('../services/emailService'))
+  ({ sendDestinationAlertEmail } = require('../services/emailservice'))
 } catch (err) {
   try {
     ({ sendDestinationAlertEmail } = require('../utils/emailService'))
