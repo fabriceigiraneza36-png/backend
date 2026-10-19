@@ -460,12 +460,12 @@ async function sendDestinationAlertEmail(destination) {
           .filter(Boolean);
         const likedDestinations = Array.isArray(sub.liked_destinations) ? sub.liked_destinations : [];
         const interests = [...new Set([...savedInterests, ...likedDestinations].filter(Boolean))].slice(0, 3);
-        const firstName = String(sub.name || "").trim().split(/\\s+/)[0];
+        const firstName = String(sub.name || "").trim().split(/\s+/)[0];
         const greeting = firstName ? `Hi ${esc(firstName)},` : "Hello,";
         const interestContext = interests.length
           ? `<div class="info-box"><p><strong>Your saved travel interests</strong><br>You’ve shown interest in ${interests.map(esc).join(", ")}. We thought this new destination might also be worth exploring.</p></div>`
           : "";
-        const unsubscribeUrl = `${cfg.backendUrl.replace(/\\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
+        const unsubscribeUrl = `${cfg.backendUrl.replace(/\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
         const html = shell({
           title: `A new destination to explore: ${name}`,
           preheader: `Discover ${name} with Altuvera Safaris.`,
