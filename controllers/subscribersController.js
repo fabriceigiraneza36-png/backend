@@ -247,7 +247,39 @@ async function sendWelcomeEmail(subscriberId, email, name) {
   try {
     logger.info(`[Subscribers] Sending welcome email to ${email}...`);
 
-    const htmlBody = welcomeSubscriberEmail(email, name);
+    const [preferenceResult, likedResult] = await Promise.all([
+      query(
+        "SELECT preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [email],
+      ).catch(() => ({ rows: [] })),
+      query(
+        `SELECT d.name, MAX(dl.updated_at) AS last_liked
+           FROM destination_likes dl
+           JOIN destinations d ON d.id = dl.destination_id
+           JOIN users u ON u.id = dl.user_id
+          WHERE LOWER(u.email) = LOWER($1)
+          GROUP BY d.id, d.name
+          ORDER BY last_liked DESC
+          LIMIT 3`,
+        [email],
+      ).catch(() => ({ rows: [] })),
+    ]);
+    const preferences = preferenceResult.rows?.[0]?.preferences || {};
+    const savedInterestValues = [
+      preferences.likedAttractions,
+      preferences.favoriteAttractions,
+      preferences.attractionsLiked,
+      preferences.likedDestinations,
+      preferences.favorites,
+      preferences.wishlist,
+    ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []);
+    const savedInterests = savedInterestValues
+      .map((value) => typeof value === "string" ? value : value?.name || value?.title || value?.label || "")
+      .map((value) => String(value).trim())
+      .filter(Boolean);
+    const likedDestinations = (likedResult.rows || []).map((row) => row.name).filter(Boolean);
+    const interests = [...new Set([...savedInterests, ...likedDestinations])].slice(0, 3);
+    const htmlBody = welcomeSubscriberEmail(email, name, interests);
     const result   = await _sendEmail(
       email,
       '🌿 Welcome to Altuvera Safaris — Your Adventure Begins!',
