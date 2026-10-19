@@ -95,6 +95,12 @@ const resetTransporter = () => {
 };
 
 const verifySmtp = async () => {
+  // Do not report SMTP as broken when a configured API provider is the active sender.
+  if (process.env.SENDGRID_API_KEY || process.env.RESEND_API_KEY) {
+    logger.info("[Email] API email provider configured; SMTP verification skipped");
+    return true;
+  }
+
   try {
     assertSmtpConfig();
     const t = await getTransporter();
