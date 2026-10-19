@@ -127,6 +127,9 @@ const welcomeSubscriberEmail = (email, name = null, interests = []) => {
                  style="display:inline-block;padding:8px 24px;border-radius:20px;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.6);font-size:12px;text-decoration:none;font-weight:600;">
                 Unsubscribe
               </a>
+              <p style="margin:16px 0 0;font-size:12px;color:rgba(255,255,255,0.65);">
+                Questions? <a href="mailto:info@altuverasafaris.com" style="color:#86EFAC;text-decoration:underline;">info@altuverasafaris.com</a>
+              </p>
               <p style="margin:20px 0 0;font-size:11px;color:rgba(255,255,255,0.3);">
                 © ${currentYear} Altuvera Safaris. All rights reserved.
               </p>
