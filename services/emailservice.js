@@ -14,11 +14,11 @@ const cfg = {
   },
   from: {
     name:    "Altuvera Safaris",
-    address: process.env.SMTP_USER || "altuverasafari@gmail.com",
+    address: process.env.SMTP_FROM || "info@altuverasafaris.com",
   },
-  adminEmail:   process.env.ADMIN_EMAIL   || "altuverasafari@gmail.com",
-  supportEmail: process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
-  replyTo:      process.env.SUPPORT_EMAIL || "altuverasafari@gmail.com",
+  adminEmail:   process.env.ADMIN_EMAIL   || "info@altuverasafaris.com",
+  supportEmail: process.env.SUPPORT_EMAIL || "info@altuverasafaris.com",
+  replyTo:      process.env.SUPPORT_EMAIL || "info@altuverasafaris.com",
   appName:      process.env.APP_NAME      || "Altuvera Safaris",
   appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   frontendUrl:  process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
@@ -180,7 +180,7 @@ async function sendEmail({ to, subject, html, text, replyTo }) {
 
   if (cfg.resendApiKey) {
     const body = {
-      from:     `${cfg.from.name} <onboarding@resend.dev>`,
+      from:     `${cfg.from.name} <${cfg.from.address}>`,
       to:       Array.isArray(to) ? to : [to],
       subject,
       html:     html || `<pre>${plain}</pre>`,
