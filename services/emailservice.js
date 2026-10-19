@@ -465,7 +465,7 @@ async function sendDestinationAlertEmail(destination) {
         const interestContext = interests.length
           ? `<div class="info-box"><p><strong>Your saved travel interests</strong><br>You’ve shown interest in ${interests.map(esc).join(", ")}. We thought this new destination might also be worth exploring.</p></div>`
           : "";
-        const unsubscribeUrl = `${cfg.backendUrl.replace(/\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
+        const unsubscribeUrl = `${(process.env.BACKEND_URL || "https://backend-jd8f.onrender.com").replace(/\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
         const html = shell({
           title: `A new destination to explore: ${name}`,
           preheader: `Discover ${name} with Altuvera Safaris.`,
