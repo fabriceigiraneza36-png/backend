@@ -23,7 +23,7 @@ function initPush () {
     }
 
     webpush.setVapidDetails(
-      'mailto:admin@altuvera.com',
+      'mailto:info@altuverasafaris.com',
       vapidPublicKey,
       vapidPrivateKey,
     )
