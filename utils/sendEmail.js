@@ -415,7 +415,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
   const siteUrl        = getEnvVar("SITE_URL", "https://www.altuverasafaris.com");
   const resubscribeUrl = `${siteUrl}/explore`;
-  const supportEmail   = getEnvVar("ADMIN_EMAIL", "info@altuverasafaris.com");
+  const supportEmail   = "info@altuverasafaris.com";
 
   const content = `
     ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures")}
@@ -597,7 +597,7 @@ async function sendEmail(mailOptions, logMessage) {
 
 async function sendVerificationCode(email, code, fullName) {
   const config       = getEmailConfig();
-  const supportEmail = getEnvVar("ADMIN_EMAIL", "info@altuverasafaris.com");
+  const supportEmail = "info@altuverasafaris.com";
 
   if (!config.isConfigured && config.devFallback) {
     console.warn(
