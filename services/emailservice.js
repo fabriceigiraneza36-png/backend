@@ -418,41 +418,78 @@ async function sendDestinationAlertEmail(destination) {
     return { success: false, reason: "no_slug" };
   }
 
-  const destinationUrl = `${cfg.appUrl}/destinations/${slug}`;
+  const destinationUrl = `${cfg.appUrl}/destinations/${encodeURIComponent(slug)}`;
   const imageToUse = image_url || "https://images.unsplash.com/photo-1516026672322-bc52d61a55d5?w=1200&q=85";
-
-  const html = shell({
-    title:     `🌟 New Destination Alert: ${name} is now live!`,
-    preheader: `Explore our newest destination and book your next safari adventure.`,
-    body: `
-      <div style="border-radius:14px;overflow:hidden;margin-bottom:16px;">
-        <img src="${imageToUse}" alt="${esc(name)}" style="width:100%;height:220px;object-fit:cover;" />
-      </div>
-
-      <h1 style="font-size:22px;font-weight:900;color:#022c22;margin-bottom:8px;">
-        📍 ${esc(name)}${country_name ? `, ${esc(country_name)}` : ""}
-      </h1>
-      ${short_description ? `<p style="color:#475569;font-size:14px;margin-bottom:20px;">${esc(short_description)}</p>` : ""}
-
-      <div class="btn-row">
-        <a href="${destinationUrl}" class="btn btn-g">🌟 Explore ${esc(name)}</a>
-      </div>
-    `,
-  });
 
   try {
     const { rows } = await query(
-      `SELECT email, name FROM subscribers WHERE is_active = true AND email IS NOT NULL`
+      `SELECT s.email, s.name, u.preferences,
+              ARRAY(
+                SELECT d.name
+                  FROM destination_likes dl
+                  JOIN destinations d ON d.id = dl.destination_id
+                 WHERE dl.user_id = u.id
+                 ORDER BY dl.updated_at DESC
+                 LIMIT 3
+              ) AS liked_destinations
+         FROM subscribers s
+         LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+        WHERE s.is_active = true
+          AND s.email IS NOT NULL
+          AND s.email <> ''`
     );
 
     let sent = 0;
     let failed = 0;
+    let skipped = 0;
 
     for (const sub of rows) {
       try {
+        const preferences = sub.preferences && typeof sub.preferences === "object"
+          ? sub.preferences : {};
+        const savedInterestValues = [
+          preferences.likedAttractions,
+          preferences.favoriteAttractions,
+          preferences.attractionsLiked,
+          preferences.likedDestinations,
+          preferences.favorites,
+          preferences.wishlist,
+        ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []);
+        const savedInterests = savedInterestValues
+          .map((value) => typeof value === "string" ? value : value?.name || value?.title || value?.label || "")
+          .map((value) => String(value).trim())
+          .filter(Boolean);
+        const likedDestinations = Array.isArray(sub.liked_destinations) ? sub.liked_destinations : [];
+        const interests = [...new Set([...savedInterests, ...likedDestinations].filter(Boolean))].slice(0, 3);
+        const firstName = String(sub.name || "").trim().split(/\\s+/)[0];
+        const greeting = firstName ? `Hi ${esc(firstName)},` : "Hello,";
+        const interestContext = interests.length
+          ? `<div class="info-box"><p><strong>Your saved travel interests</strong><br>You’ve shown interest in ${interests.map(esc).join(", ")}. We thought this new destination might also be worth exploring.</p></div>`
+          : "";
+        const unsubscribeUrl = `${cfg.backendUrl.replace(/\\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
+        const html = shell({
+          title: `A new destination to explore: ${name}`,
+          preheader: `Discover ${name} with Altuvera Safaris.`,
+          footer: `You received this update because you subscribed to Altuvera Safaris emails. <a href="${esc(unsubscribeUrl)}" style="color:#047857;text-decoration:underline;">Unsubscribe</a> at any time.`,
+          body: `
+            <p style="margin:0 0 16px;color:#334155;font-size:15px;line-height:1.7;">${greeting}</p>
+            <div style="border-radius:14px;overflow:hidden;margin-bottom:16px;">
+              <img src="${esc(imageToUse)}" alt="${esc(name)}" style="width:100%;height:220px;object-fit:cover;" />
+            </div>
+            <h1 style="font-size:22px;font-weight:900;color:#022c22;margin-bottom:8px;">
+              ${esc(name)}${country_name ? `, ${esc(country_name)}` : ""}
+            </h1>
+            ${short_description ? `<p style="color:#475569;font-size:14px;margin-bottom:20px;">${esc(short_description)}</p>` : ""}
+            ${interestContext}
+            <div class="btn-row">
+              <a href="${esc(destinationUrl)}" class="btn btn-g">Explore Destination</a>
+            </div>
+          `,
+        });
+
         await sendEmail({
           to: sub.email,
-          subject: `🌟 New Destination Alert: ${name} is live! | Altuvera Safaris`,
+          subject: `New destination: ${name} | Altuvera Safaris`,
           html,
         });
         sent++;
@@ -462,12 +499,12 @@ async function sendDestinationAlertEmail(destination) {
       }
 
       if (rows.length > 10) {
-        await new Promise((r) => setTimeout(r, 80));
+        await new Promise((resolve) => setTimeout(resolve, 80));
       }
     }
 
-    logger.info(`[Email] Destination alert sent: ${sent} success, ${failed} failed`);
-    return { success: sent > 0, sent, failed, total: rows.length };
+    logger.info(`[Email] Destination alert sent: ${sent} success, ${failed} failed, ${skipped} skipped`);
+    return { success: sent > 0, sent, failed, skipped, total: rows.length };
   } catch (err) {
     logger.error("[Email] sendDestinationAlertEmail DB error:", err.message);
     return { success: false, error: err.message };
