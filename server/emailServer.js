@@ -18,17 +18,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Debug middleware - logs all requests
-app.use((req, res, next) => {
-  console.log('\n📥 ================================');
-  console.log(`📥 ${req.method} ${req.url}`);
-  console.log('📥 Headers:', JSON.stringify(req.headers, null, 2));
-  console.log('📥 Body:', JSON.stringify(req.body, null, 2));
-  console.log('📥 ================================\n');
-  next();
-});
-
-// SMTP Configuration
+// Avoid logging contact form bodies and personal data.\n\n// SMTP Configuration
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
@@ -40,8 +30,8 @@ const transporter = nodemailer.createTransport({
   tls: {
     rejectUnauthorized: false
   },
-  debug: true, // Enable debug
-  logger: true // Log to console
+  debug: false,
+  logger: false
 });
 
 // Verify SMTP on startup
