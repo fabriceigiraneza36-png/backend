@@ -5,12 +5,6 @@ const express = require("express");
 const { query } = require("../config/db");
 const logger  = require("../utils/logger");
 
-let sendEmail = null;
-try {
-  const eu = require("../utils/email");
-  sendEmail = typeof eu.sendEmail === "function" ? eu.sendEmail : null;
-} catch { /* email not configured */ }
-
 /* ─────────────────────────────────────────────────────────────
    AUTH MIDDLEWARE — resolve from whatever your project uses
 ───────────────────────────────────────────────────────────────*/
@@ -76,80 +70,7 @@ const toInt = (v, fb = 0) => {
 };
 const clamp = (v, mn, mx) => Math.min(Math.max(toInt(v, mn), mn), mx);
 
-/* ── Email helper ────────────────────────────────────────────────────────────── */
-const sendNotificationEmail = async (notif, recipientEmail, recipientName) => {
-  if (!sendEmail || !recipientEmail) return;
-
-  try {
-    const subject = notif.title || "New notification from Altuvera";
-    const html = `
-      <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; color: #0f172a;">
-        <h2 style="color: #059669; margin-bottom: 12px;">${notif.title}</h2>
-        <p style="font-size: 16px; line-height: 1.6; margin-bottom: 20px;">${notif.message}</p>
-        ${notif.action_url ? `<a href="${notif.action_url}" style="display: inline-block; padding: 10px 20px; background: #059669; color: #fff; text-decoration: none; border-radius: 8px; font-weight: 700;">${notif.action_label || 'View Details'}</a>` : ''}
-        <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 24px 0;" />
-        <p style="font-size: 12px; color: #94a3b8;">You received this email because you have email notifications enabled in your Altuvera account settings.</p>
-      </div>
-    `;
-
-    await sendEmail({
-      to: recipientEmail,
-      subject,
-      html,
-    });
-
-    // Mark email as sent
-    await Promise.resolve(query(
-      `UPDATE notifications SET email_sent = true, email_sent_at = NOW() WHERE id = $1`,
-      [notif.id],
-    )).catch(() => {});
-  } catch (err) {
-    logger.warn("[Notifications] sendNotificationEmail:", err.message);
-  }
-};
-
-const getUserEmailsForScope = async (targetScope, targetRole, excludeUserId) => {
-  const conditions = ["u.email IS NOT NULL", "u.email != ''"];
-  const params = [];
-
-  if (targetScope === "role" && targetRole) {
-    conditions.push(`u.role = $${params.length + 1}`);
-    params.push(targetRole);
-  }
-
-  // Exclude the creator if needed
-  if (excludeUserId) {
-    conditions.push(`u.id != $${params.length + 1}`);
-    params.push(excludeUserId);
-  }
-
-  const where = conditions.join(" AND ");
-
-  const result = await query(
-    `SELECT u.id, u.email, u.full_name, u.preferences
-       FROM users u
-      WHERE ${where}
-        AND u.preferences->>'emailNotifications' IS DISTINCT FROM 'false'`,
-    params,
-  );
-
-  return result.rows.filter((row) => {
-    try {
-      const prefs = row.preferences && typeof row.preferences === "object" ? row.preferences : {};
-      return prefs.emailNotifications !== false;
-    } catch {
-      return true;
-    }
-  });
-};
-
-/**
- * WHERE clause that returns rows a user is entitled to see:
- *   • their own individual notifications
- *   • broadcast-to-all
- *   • role broadcasts matching their role
- *   • not soft-deleted / not expired
- */
+/* ── Notification audience scope ───────────────────────────────────────────── */
 const userScopeSQL = (userId, userEmail, userRole) => ({
   sql: `
     deleted_at IS NULL
@@ -167,23 +88,6 @@ const userScopeSQL = (userId, userEmail, userRole) => ({
 /* ─────────────────────────────────────────────────────────────
    SOCKET EMIT HELPER
 ───────────────────────────────────────────────────────────────*/
-const emitNotification = (req, notif) => {
-  try {
-    const io = req.app?.get?.("io");
-    if (!io) return;
-    const { target_scope, target_role, user_id } = notif;
-    if (target_scope === "all") {
-      io.to("all-users").emit("notification:new", notif);
-      io.to("admins").emit("notification:new", notif);
-    } else if (target_scope === "role" && target_role) {
-      io.to(`role-${target_role}`).emit("notification:new", notif);
-    } else if (user_id) {
-      io.to(`user-${user_id}`).emit("notification:new", notif);
-    }
-  } catch (err) {
-    logger.warn("[Notifications] emitNotification:", err.message);
-  }
-};
 
 /* ─────────────────────────────────────────────────────────────
    INTERNAL CREATE UTILITY
@@ -667,51 +571,10 @@ router.post(
         targetSegment: target_segment || null,
         metadata,
         expiresAt:     safeExpiresAt,
+        skipUserEmail: send_email === false,
       });
 
-      emitNotification(req, notif);
-
-      // ── Send email notification respecting user preferences ──────────────
-      if (send_email && sendEmail) {
-        try {
-          if (target_scope === "individual") {
-            const recipientEmail = notif.user_email || user_email;
-            const recipientId = user_id;
-
-            if (recipientEmail) {
-              let shouldSend = true;
-              if (recipientId) {
-                const userPrefs = await Promise.resolve(query(
-                  `SELECT preferences FROM users WHERE id = $1`,
-                  [recipientId],
-                )).catch(() => ({ rows: [] }));
-                const prefs = userPrefs.rows[0]?.preferences || {};
-                shouldSend = prefs.emailNotifications !== false;
-              }
-
-              if (shouldSend) {
-                const userRow = recipientId
-                  ? await Promise.resolve(query(`SELECT full_name FROM users WHERE id = $1`, [recipientId])).catch(() => ({ rows: [] }))
-                  : { rows: [] };
-                const name = userRow.rows[0]?.full_name || "";
-                sendNotificationEmail(notif, recipientEmail, name).catch(() => {});
-              }
-            }
-          } else if (target_scope === "role" && target_role) {
-            const users = await getUserEmailsForScope("role", target_role, req.user.id);
-            for (const u of users) {
-              sendNotificationEmail(notif, u.email, u.full_name || "").catch(() => {});
-            }
-          } else if (target_scope === "all") {
-            const users = await getUserEmailsForScope("all", null, req.user.id);
-            for (const u of users) {
-              sendNotificationEmail(notif, u.email, u.full_name || "").catch(() => {});
-            }
-          }
-        } catch (emailErr) {
-          logger.warn("[Notifications] email dispatch failed:", emailErr.message);
-        }
-      }
+      // The central notification engine handles only preference-approved, actionable individual emails.
 
       return res.status(201).json({ success: true, data: notif });
     } catch (err) {
