@@ -53,19 +53,11 @@ function init() {
 async function send({ to, subject, html, text, from }) {
   init();
 
-  // Extract email address from potentially formatted string
-  const fromEmail = extractEmailAddress(
-    // Use provided from, or use SENDGRID_FROM_EMAIL, or construct from SENDGRID_DOMAIN, or fallback to defaults
-    from ||
-    process.env.SENDGRID_FROM_EMAIL ||
-    (process.env.SENDGRID_DOMAIN
-      ? `noreply@${process.env.SENDGRID_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
-      : null) ||
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    process.env.ADMIN_EMAIL ||
-    'info@altuverasafaris.com'
-  );
+  // Altuvera business mail must always use the verified official sender address.
+  const requestedFrom = extractEmailAddress(from || "");
+  const fromEmail = requestedFrom.toLowerCase().endsWith("@altuverasafaris.com")
+    ? requestedFrom
+    : "info@altuverasafaris.com";
 
   const msg = {
     to,
