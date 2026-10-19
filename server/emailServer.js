@@ -34,8 +34,8 @@ const transporter = nodemailer.createTransport({
   port: 587,
   secure: false,
   auth: {
-    user: 'info@altuverasafaris.com',
-    pass: 'ubfdlzbcikkxpgev' // No spaces in app password
+    user: process.env.SMTP_USER,
+    pass: process.env.SMTP_PASS
   },
   tls: {
     rejectUnauthorized: false
