@@ -1819,12 +1819,12 @@ function setupMessageSockets(io) {
   io.on("connection", (socket) => {
     const user = socket.handshake.auth?.user || socket.user || null;
 
-    /* ── Join personal room (user gets admin messages) ── */
-    socket.on("join:user", ({ userId }) => {
-      if (userId) {
-        socket.join(`user-${userId}`);
-        logger.debug(`[Socket] ${socket.id} joined user-${userId}`);
-      }
+    /* ── Join only the authenticated account room ── */
+    socket.on("join:user", ({ userId } = {}) => {
+      const authenticatedUserId = socket.data?.userId ?? user?.id ?? user?.userId;
+      if (!authenticatedUserId || String(userId) !== String(authenticatedUserId)) return;
+      socket.join(`user-${authenticatedUserId}`);
+      logger.debug(`[Socket] ${socket.id} joined user-${authenticatedUserId}`);
     });
 
     /* ── Join / leave conversation room ── */
