@@ -463,14 +463,19 @@ const destinationLink = (booking, label) => {
 };
 
 const attractionLink = (booking) => {
-  const name = booking.attraction_name;
-  if (!name) return "";
+  const raw = booking.attraction_name || booking.attractionName || booking.selected_attractions;
+  if (!raw) return "";
+  const names = [...new Set(String(raw).split(/[;\n,]+/).map((name) => name.trim()).filter(Boolean))];
+  if (!names.length) return "";
   const destSlug = booking.destination_slug;
-  const attractionSlug = String(name).toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
-  const href = destSlug && attractionSlug
-    ? `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug)}/attractions/${encodeURIComponent(attractionSlug)}`
-    : `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug || "")}`;
-  return rowHtml("Attraction", `<a href="${esc(href)}" style="color:${T.g700};font-weight:700;text-decoration:underline;">${esc(name)}</a>`);
+  const items = names.map((name) => {
+    const attractionSlug = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+    const href = destSlug && attractionSlug
+      ? `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug)}/attractions/${encodeURIComponent(attractionSlug)}`
+      : `${ENV.frontendUrl}/destinations/${encodeURIComponent(destSlug || "")}`;
+    return `<span style="display:inline-block;margin:3px 5px 3px 0;padding:6px 10px;border:1px solid ${T.g200};border-radius:999px;background:${T.g50};"><a href="${esc(href)}" style="color:${T.g700};font-weight:700;text-decoration:none;">${esc(name)}</a></span>`;
+  }).join("");
+  return rowHtml(names.length === 1 ? "Selected attraction" : "Selected attractions", items);
 };
 
 const infoTable = (title, rows) => {
