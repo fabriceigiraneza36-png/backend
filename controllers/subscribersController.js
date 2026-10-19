@@ -282,7 +282,7 @@ async function sendWelcomeEmail(subscriberId, email, name) {
     const htmlBody = welcomeSubscriberEmail(email, name, interests);
     const result   = await _sendEmail(
       email,
-      '🌿 Welcome to Altuvera Safaris — Your Adventure Begins!',
+      'Welcome to Altuvera Safaris',
       htmlBody,
     );
 
