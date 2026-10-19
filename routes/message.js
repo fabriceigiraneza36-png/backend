@@ -1259,13 +1259,17 @@ router.delete("/conversations/:id", adminProtect, async (req, res) => {
       `UPDATE conversations
           SET deleted_at = NOW(), updated_at = NOW()
         WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, user_id`,
+        RETURNING id, user_id, group_id`,
       [req.params.id],
     );
     if (!rows[0]) return res.status(404).json({ success: false, message: "Conversation not found" });
     const io = req.app.get("io");
     if (io && rows[0].user_id) {
       io.to(`user-${rows[0].user_id}`).emit("msg:conversation-deleted", { conversationId: rows[0].id });
+    }
+    if (io && rows[0].group_id) {
+      const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [rows[0].group_id]);
+      for (const member of members) io.to(`user-${member.user_id}`).emit("msg:conversation-deleted", { conversationId: rows[0].id, groupId: rows[0].group_id });
     }
     return res.json({ success: true, message: "Conversation deleted" });
   } catch (err) {
