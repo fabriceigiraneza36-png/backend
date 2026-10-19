@@ -24,7 +24,7 @@ const getTransporter = () => {
         try {
           const msg = {
             to: mailOptions.to,
-            from: mailOptions.from || process.env.SENDGRID_FROM_EMAIL || `Altuvera Safaris <info@altuverasafaris.com>`,
+            from: mailOptions.from || `Altuvera Safaris <info@altuverasafaris.com>`,
             subject: mailOptions.subject,
             html: mailOptions.html,
             text: mailOptions.text,
@@ -51,7 +51,7 @@ const getTransporter = () => {
       sendMail: async (mailOptions) => {
         try {
           const { data, error } = await resend.emails.send({
-            from: mailOptions.from || process.env.SMTP_FROM || `"Altuvera Safaris" <info@altuverasafaris.com>`,
+            from: mailOptions.from || `"Altuvera Safaris" <info@altuverasafaris.com>`,
             to: mailOptions.to,
             subject: mailOptions.subject,
             html: mailOptions.html,
