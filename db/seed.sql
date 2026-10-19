@@ -27,7 +27,7 @@ TRUNCATE TABLE admin_users RESTART IDENTITY CASCADE;
 INSERT INTO site_settings (key, value) VALUES
 ('whatsapp_number', '+250700000000'),
 ('whatsapp_message', 'Hello! I am interested in booking a trip. Please help me plan my adventure.'),
-('contact_email', 'info@altuvera.com'),
+('contact_email', 'info@altuverasafaris.com'),
 ('contact_phone', '+250700000000'),
 ('site_name', 'Altuvera Safaris'),
 ('site_tagline', 'Discover Africa''s Wonders'),
