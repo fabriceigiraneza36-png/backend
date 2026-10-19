@@ -1,14 +1,17 @@
 /**
  * Welcome subscriber email — Altuvera Safaris branded
  */
-const welcomeSubscriberEmail = (email, name = null) => {
+const welcomeSubscriberEmail = (email, name = null, interests = []) => {
+  const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
+  const interestNames = [...new Set((Array.isArray(interests) ? interests : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 3);
+  const safeFirstName = name ? escapeHtml(name.split(" ")[0]) : "";
   // Use BACKEND_URL for the unsubscribe API link
   const backendUrl     = process.env.BACKEND_URL    || 'http://localhost:3000';
   const frontendUrl    = process.env.FRONTEND_URL   || 'https://www.altuverasafaris.com';
   const unsubscribeUrl = `${backendUrl}/api/subscribers/unsubscribe/${encodeURIComponent(email)}`;
   const exploreUrl     = `${frontendUrl}/destinations`;
   const currentYear    = new Date().getFullYear();
-  const greeting       = name ? `Hi ${name.split(' ')[0]}!` : 'Welcome!';
+  const greeting       = safeFirstName ? `Hi ${safeFirstName}!` : 'Welcome!';
 
   return `<!DOCTYPE html>
 <html lang="en" xmlns="http://www.w3.org/1999/xhtml">
@@ -49,9 +52,9 @@ const welcomeSubscriberEmail = (email, name = null) => {
                 Thank you for subscribing to the Altuvera Safaris newsletter.
               </p>
               <p style="margin:0;font-size:16px;color:#5A7A5A;line-height:1.7;">
-                You've joined <strong style="color:#15803D;">thousands of adventurers</strong>
-                who receive exclusive travel inspiration, safari tips, and members-only offers every week.
+                We'll share occasional destination inspiration, practical safari-planning tips, and useful updates to help you plan your next African adventure.
               </p>
+              ${interestNames.length ? `<p style="margin:18px 0 0;font-size:14px;color:#166534;line-height:1.7;">Based on destinations you've liked, we can tailor future travel inspiration around <strong>${interestNames.map(escapeHtml).join(", ")}</strong>.</p>` : ""}
             </td>
           </tr>
 
@@ -114,11 +117,11 @@ const welcomeSubscriberEmail = (email, name = null) => {
             <td style="background:#14532D;padding:32px 40px;text-align:center;">
               <p style="margin:0 0 8px;font-size:13px;color:rgba(255,255,255,0.7);line-height:1.6;">
                 You're receiving this because
-                <strong style="color:#86EFAC;">${email}</strong>
+                <strong style="color:#86EFAC;">${escapeHtml(email)}</strong>
                 subscribed on our website.
               </p>
               <p style="margin:0 0 16px;font-size:12px;color:rgba(255,255,255,0.4);">
-                Expect 1–2 emails per week. We never spam.
+                We respect your inbox. Expect occasional travel inspiration, and unsubscribe at any time.
               </p>
               <a href="${unsubscribeUrl}"
                  style="display:inline-block;padding:8px 24px;border-radius:20px;border:1px solid rgba(255,255,255,0.2);color:rgba(255,255,255,0.6);font-size:12px;text-decoration:none;font-weight:600;">
