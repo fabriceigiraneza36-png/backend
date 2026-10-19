@@ -189,8 +189,8 @@ async function seedSiteSettings() {
     { key: "company_name", value: "Altuvera Safaris" },
     { key: "company_tagline", value: "True Adventures In High Places & Deep Culture" },
     { key: "whatsapp_number", value: "+250788123456" },
-    { key: "support_email", value: "support@altuvera.com" },
-    { key: "booking_email", value: "bookings@altuvera.com" },
+    { key: "support_email", value: "info@altuverasafaris.com" },
+    { key: "booking_email", value: "info@altuverasafaris.com" },
     { key: "facebook_url", value: "https://facebook.com/altuvera" },
     { key: "instagram_url", value: "https://instagram.com/altuvera" },
     { key: "twitter_url", value: "https://twitter.com/altuvera" }
