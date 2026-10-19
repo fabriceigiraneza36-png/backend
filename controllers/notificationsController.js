@@ -81,10 +81,14 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
   // security alerts, and genuinely urgent travel/booking changes.
   const category = String(notif.category || "").toLowerCase();
   const type = String(notif.type || "").toLowerCase();
+  const isSecurityNotification = category === "security" || type.includes("security");
   const shouldEmail =
-    category === "messages" ||
-    category === "security" ||
-    type.includes("security") ||
+    isSecurityNotification ||
+    (category === "messages" && (
+      notif.priority === "high" ||
+      type.includes("new_conversation") ||
+      type.includes("conversation_request")
+    )) ||
     (category === "travel_updates" && notif.priority === "high") ||
     (category === "booking" && notif.priority === "high");
   if (!shouldEmail) return;
@@ -97,7 +101,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
     const recipient = prefResult.rows?.[0] || {};
     const preferences = recipient.preferences && typeof recipient.preferences === "object"
       ? recipient.preferences : {};
-    if (preferences.emailNotifications === false) return;
+    if (preferences.emailNotifications === false && !isSecurityNotification) return;
 
     // Personalize only with interests the guest has actually saved or liked.
     const savedInterestValues = [
