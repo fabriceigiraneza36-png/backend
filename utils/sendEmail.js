@@ -627,7 +627,7 @@ async function sendWelcomeEmail(email) {
 
   return sendEmail(
     {
-      from:    `Altuvera Safaris <hello@${getEmailConfig().fromDomain}>`,
+      from:    `Altuvera Safaris <info@altuverasafaris.com>`,
       to:      validatedEmail,
       subject: "🌿 Welcome to Altuvera Safaris",
       html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
@@ -642,7 +642,7 @@ async function sendUnsubscribeConfirmation(email) {
 
   return sendEmail(
     {
-      from:    `Altuvera Safaris <hello@${getEmailConfig().fromDomain}>`,
+      from:    `Altuvera Safaris <info@altuverasafaris.com>`,
       to:      validatedEmail,
       subject: "👋 Newsletter Unsubscribe Confirmed | Altuvera Safaris",
       html:    buildUnsubscribeConfirmationEmailHtml(validatedEmail),
