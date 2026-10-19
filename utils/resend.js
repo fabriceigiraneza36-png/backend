@@ -60,7 +60,7 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
     process.env.SMTP_FROM ||
     process.env.SMTP_USER ||
     process.env.ADMIN_EMAIL ||
-    'noreply@altuvera.com'
+    'info@altuverasafaris.com'
   );
 
   const payload = {
