@@ -441,7 +441,6 @@ async function sendDestinationAlertEmail(destination) {
 
     let sent = 0;
     let failed = 0;
-    let skipped = 0;
 
     for (const sub of rows) {
       try {
@@ -503,8 +502,8 @@ async function sendDestinationAlertEmail(destination) {
       }
     }
 
-    logger.info(`[Email] Destination alert sent: ${sent} success, ${failed} failed, ${skipped} skipped`);
-    return { success: sent > 0, sent, failed, skipped, total: rows.length };
+    logger.info(`[Email] Destination alert sent: ${sent} success, ${failed} failed`);
+    return { success: sent > 0, sent, failed, total: rows.length };
   } catch (err) {
     logger.error("[Email] sendDestinationAlertEmail DB error:", err.message);
     return { success: false, error: err.message };
