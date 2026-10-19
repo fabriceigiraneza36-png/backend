@@ -6,7 +6,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = []) => {
   const interestNames = [...new Set((Array.isArray(interests) ? interests : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 3);
   const safeFirstName = name ? escapeHtml(name.split(" ")[0]) : "";
   // Use BACKEND_URL for the unsubscribe API link
-  const backendUrl     = process.env.BACKEND_URL    || 'http://localhost:3000';
+  const backendUrl     = process.env.BACKEND_URL    || 'https://backend-jd8f.onrender.com';
   const frontendUrl    = process.env.FRONTEND_URL   || 'https://www.altuverasafaris.com';
   const unsubscribeUrl = `${backendUrl}/api/subscribers/unsubscribe/${encodeURIComponent(email)}`;
   const exploreUrl     = `${frontendUrl}/destinations`;
