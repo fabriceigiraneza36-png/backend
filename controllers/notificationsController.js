@@ -91,11 +91,40 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
 
   try {
     const prefResult = await query(
-      "SELECT preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      "SELECT full_name, preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
       [recipientEmail],
     ).catch(() => ({ rows: [] }));
-    const preferences = prefResult.rows?.[0]?.preferences || {};
+    const recipient = prefResult.rows?.[0] || {};
+    const preferences = recipient.preferences && typeof recipient.preferences === "object"
+      ? recipient.preferences : {};
     if (preferences.emailNotifications === false) return;
+
+    // Personalize only with interests the guest has actually saved or liked.
+    const savedInterestValues = [
+      preferences.likedAttractions,
+      preferences.favoriteAttractions,
+      preferences.attractionsLiked,
+      preferences.likedDestinations,
+      preferences.favorites,
+      preferences.wishlist,
+    ].flatMap((value) => Array.isArray(value) ? value : value ? [value] : []);
+    const savedInterests = savedInterestValues
+      .map((value) => typeof value === "string" ? value : value?.name || value?.title || value?.label || "")
+      .map((value) => String(value).trim())
+      .filter(Boolean);
+    const likedResult = await query(
+      `SELECT d.name, MAX(dl.updated_at) AS last_liked
+         FROM destination_likes dl
+         JOIN destinations d ON d.id = dl.destination_id
+         JOIN users u ON u.id = dl.user_id
+        WHERE LOWER(u.email) = LOWER($1)
+        GROUP BY d.id, d.name
+        ORDER BY last_liked DESC
+        LIMIT 3`,
+      [recipientEmail],
+    ).catch(() => ({ rows: [] }));
+    const likedDestinations = (likedResult.rows || []).map((row) => row.name).filter(Boolean);
+    const interests = [...new Set([...savedInterests, ...likedDestinations])].slice(0, 3);
 
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
@@ -103,6 +132,11 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
     const title = escapeHtml(notif.title || "A message from Altuvera Safaris");
     const message = escapeHtml(notif.message || "").replace(/\n/g, "<br>");
     const actionUrl = String(notif.action_url || "");
+    const isTravelContext = category === "booking" || category === "travel_updates" ||
+      type.includes("booking") || type.includes("travel");
+    const personalization = isTravelContext && interests.length
+      ? `<aside style="margin:20px 0 0;padding:14px 16px;border-radius:10px;background:#f0fdf4;border:1px solid #bbf7d0;color:#166534;font-size:13px;line-height:1.6"><strong>Your travel interests</strong><br>You've shown interest in ${interests.map(escapeHtml).join(", ")}. We'll use these saved interests to make relevant travel guidance more useful.</aside>`
+      : "";
     const safeActionUrl = /^https:\/\//i.test(actionUrl)
       ? escapeHtml(actionUrl)
       : escapeHtml(`${(process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/$/, "")}/${actionUrl.replace(/^\//, "")}`);
@@ -117,7 +151,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
       html: `<!doctype html><html lang="en"><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a;padding:24px 12px">
         <main style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden">
           <header style="background:#064e3b;padding:22px 26px;color:#fff"><p style="margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#a7f3d0">Altuvera Safaris</p><h1 style="margin:10px 0 0;font-size:22px">${title}</h1></header>
-          <section style="padding:26px;line-height:1.7;font-size:15px"><p style="margin-top:0">${recipientName ? `Hello ${escapeHtml(recipientName)},` : "Hello,"}</p><p>${message}</p>${action}</section>
+          <section style="padding:26px;line-height:1.7;font-size:15px"><p style="margin-top:0">${recipient.full_name ? `Hello ${escapeHtml(recipient.full_name)},` : "Hello,"}</p><p>${message}</p>${personalization}${action}</section>
           <footer style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6">This is an important account or travel message from Altuvera Safaris. Manage email preferences in your account settings.<br><a href="mailto:info@altuverasafaris.com" style="color:#047857">info@altuverasafaris.com</a></footer>
         </main></body></html>`,
     });
@@ -461,7 +495,7 @@ const createNotificationInternal = async ({
 
   // 3) Email the user (only for individual user notifications)
   if (!skipUserEmail && targetScope === "individual" && userEmail) {
-    sendUserEmail(notif, userEmail, actor?.name || actor?.fullName).catch(() => {});
+    sendUserEmail(notif, userEmail, null).catch(() => {});
   }
 
   // 4) Admin activity aggregation
