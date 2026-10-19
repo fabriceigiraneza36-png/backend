@@ -50,18 +50,11 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
     throw new Error('RESEND_API_KEY not configured');
   }
 
-  // Extract email address from potentially formatted string
-  const fromEmail = extractEmailAddress(
-    // Use provided from, or construct from RESEND_FROM_DOMAIN, or fallback to defaults
-    from ||
-    (process.env.RESEND_FROM_DOMAIN
-      ? `noreply@${process.env.RESEND_FROM_DOMAIN.replace(/^https?:\/\//, '').replace(/\/$/, '')}`
-      : null) ||
-    process.env.SMTP_FROM ||
-    process.env.SMTP_USER ||
-    process.env.ADMIN_EMAIL ||
-    'info@altuverasafaris.com'
-  );
+  // Altuvera business mail must always use the verified official sender address.
+  const requestedFrom = extractEmailAddress(from || "");
+  const fromEmail = requestedFrom.toLowerCase().endsWith("@altuverasafaris.com")
+    ? requestedFrom
+    : "info@altuverasafaris.com";
 
   const payload = {
     from: fromEmail,
