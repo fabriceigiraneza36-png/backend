@@ -75,31 +75,61 @@ const getAdminRecipients = async () => {
 
 const sendUserEmail = async (notif, recipientEmail, recipientName) => {
   if (!sendEmail || !recipientEmail) return;
+
+  // Keep routine in-app activity in the notification center instead of emailing
+  // users for every small event. Email is reserved for actionable conversations,
+  // security alerts, and genuinely urgent travel/booking changes.
+  const category = String(notif.category || "").toLowerCase();
+  const type = String(notif.type || "").toLowerCase();
+  const shouldEmail =
+    category === "messages" ||
+    category === "security" ||
+    type.includes("security") ||
+    (category === "travel_updates" && notif.priority === "high") ||
+    (category === "booking" && notif.priority === "high");
+  if (!shouldEmail) return;
+
   try {
+    const prefResult = await query(
+      "SELECT preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      [recipientEmail],
+    ).catch(() => ({ rows: [] }));
+    const preferences = prefResult.rows?.[0]?.preferences || {};
+    if (preferences.emailNotifications === false) return;
+
+    const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+    }[char]));
+    const title = escapeHtml(notif.title || "A message from Altuvera Safaris");
+    const message = escapeHtml(notif.message || "").replace(/\n/g, "<br>");
+    const actionUrl = String(notif.action_url || "");
+    const safeActionUrl = /^https:\/\//i.test(actionUrl)
+      ? escapeHtml(actionUrl)
+      : escapeHtml(`${(process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/$/, "")}/${actionUrl.replace(/^\//, "")}`);
+    const action = notif.action_url
+      ? `<p style="margin:26px 0 8px"><a href="${safeActionUrl}" style="display:inline-block;padding:12px 20px;background:#047857;color:#fff;text-decoration:none;border-radius:8px;font-weight:700">${escapeHtml(notif.action_label || "View details")}</a></p>`
+      : "";
+
     await sendEmail({
-      to:      recipientEmail,
-      subject: notif.title || "New notification from Altuvera",
-      html: `
-        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:20px;color:#0f172a;">
-          <h2 style="color:#059669;margin-bottom:12px;">${notif.title || ""}</h2>
-          <p style="font-size:16px;line-height:1.6;margin-bottom:20px;">${notif.message || ""}</p>
-          ${notif.action_url
-            ? `<a href="${notif.action_url}" style="display:inline-block;padding:10px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:8px;font-weight:700;">${notif.action_label || "View Details"}</a>`
-            : ""}
-          <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
-          <p style="font-size:12px;color:#94a3b8;">You received this email because you have email notifications enabled in your Altuvera account settings.</p>
-        </div>`,
+      to: recipientEmail,
+      subject: notif.title || "A message from Altuvera Safaris",
+      replyTo: "info@altuverasafaris.com",
+      html: `<!doctype html><html lang="en"><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a;padding:24px 12px">
+        <main style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden">
+          <header style="background:#064e3b;padding:22px 26px;color:#fff"><p style="margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#a7f3d0">Altuvera Safaris</p><h1 style="margin:10px 0 0;font-size:22px">${title}</h1></header>
+          <section style="padding:26px;line-height:1.7;font-size:15px"><p style="margin-top:0">${recipientName ? `Hello ${escapeHtml(recipientName)},` : "Hello,"}</p><p>${message}</p>${action}</section>
+          <footer style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6">This is an important account or travel message from Altuvera Safaris. Manage email preferences in your account settings.<br><a href="mailto:info@altuverasafaris.com" style="color:#047857">info@altuverasafaris.com</a></footer>
+        </main></body></html>`,
     });
 
     await query(
-      `UPDATE notifications SET email_sent = true, email_sent_at = NOW() WHERE id = $1`,
+      "UPDATE notifications SET email_sent = true, email_sent_at = NOW() WHERE id = $1",
       [notif.id],
     ).catch(() => {});
   } catch (err) {
     logger.warn("[Notifications] sendUserEmail:", err.message);
   }
 };
-
 
 
 const sendAdminEmail = async (subject, html) => {
@@ -501,6 +531,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
     actionLabel: "Track request",
     priority: "normal",
     req,
+    skipUserEmail: true, // booking receipt is sent by the booking email service
   });
 
   const notif = await createNotificationInternal({
