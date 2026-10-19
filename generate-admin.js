@@ -1,34 +1,45 @@
 // generate-admin.js
-// Run: node generate-admin.js
-const bcrypt = require('bcryptjs');
+// Generate a one-time admin SQL statement using secrets supplied outside source control.
+// Run with ADMIN_EMAIL and ADMIN_SEED_PASSWORD environment variables set.
+const bcrypt = require("bcryptjs");
+
+const email = process.env.ADMIN_EMAIL || "info@altuverasafaris.com";
+const password = process.env.ADMIN_SEED_PASSWORD;
+if (!password) {
+  console.error("Missing ADMIN_SEED_PASSWORD. Set it securely in your environment; never commit it.");
+  process.exit(1);
+}
+if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+  console.error("ADMIN_EMAIL must be a valid email address.");
+  process.exit(1);
+}
 
 const adminData = {
-  email:    'altuverasafari@gmail.com',
-  username: 'altuvera_admin',
-  password: 'Admin@2024!',
-  fullName: 'Altuvera Admin',
-  role:     'superadmin',
+  email,
+  username: process.env.ADMIN_USERNAME || "altuvera_admin",
+  password,
+  fullName: process.env.ADMIN_FULL_NAME || "Altuvera Admin",
+  role: "superadmin",
 };
 
 const hash = bcrypt.hashSync(adminData.password, 12);
 
-console.log('\n✅ Admin credentials generated!\n');
-console.log('Email:    ', adminData.email);
-console.log('Username: ', adminData.username);
-console.log('Password: ', adminData.password);
-console.log('Hash:     ', hash);
+console.log("\nAdmin password hash generated. The plaintext password is not printed.\n");
+console.log("Email:    ", adminData.email);
+console.log("Username: ", adminData.username);
+console.log("Hash:     ", hash);
 
-console.log('\n── Run this SQL in Neon console ──────────────────────────────────────\n');
+console.log("\n── Run this SQL in Neon console ──────────────────────────────────────\n");
 console.log(`
 INSERT INTO admin_users (
-  email, username, password_hash, full_name, role, 
+  email, username, password_hash, full_name, role,
   is_active, token_version, created_at, updated_at
 )
 VALUES (
-  '${adminData.email}',
-  '${adminData.username}',
+  '${adminData.email.replace(/'/g, "''")}',
+  '${adminData.username.replace(/'/g, "''")}',
   '${hash}',
-  '${adminData.fullName}',
+  '${adminData.fullName.replace(/'/g, "''")}',
   '${adminData.role}',
   true,
   0,
