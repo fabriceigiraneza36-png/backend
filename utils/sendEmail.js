@@ -413,7 +413,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
 
 const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
-  const siteUrl        = getEnvVar("SITE_URL", "http://localhost:3000");
+  const siteUrl        = getEnvVar("SITE_URL", "https://www.altuverasafaris.com");
   const resubscribeUrl = `${siteUrl}/explore`;
   const supportEmail   = getEnvVar("ADMIN_EMAIL", "info@altuverasafaris.com");
 
@@ -631,7 +631,7 @@ async function sendWelcomeEmail(email) {
       to:      validatedEmail,
       subject: "Welcome to Altuvera Safaris",
       html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
-      text:    `Welcome to Altuvera Safaris! Visit us at ${getEnvVar("SITE_URL", "http://localhost:3000")}/explore`,
+      text:    `Welcome to Altuvera Safaris! Visit us at ${getEnvVar("SITE_URL", "https://www.altuverasafaris.com")}/explore`,
     },
     `✅ Welcome email sent to ${validatedEmail}`
   );
