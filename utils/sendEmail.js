@@ -334,7 +334,7 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
 
 const buildWelcomeSubscriberEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
-  const siteUrl        = getEnvVar("SITE_URL", "http://localhost:3000");
+  const siteUrl        = getEnvVar("SITE_URL", "https://www.altuverasafaris.com");
   const unsubscribeUrl = `${siteUrl}/api/subscribers/unsubscribe/${safeEncodeURI(validatedEmail)}`;
   const exploreUrl     = `${siteUrl}/explore`;
 
@@ -351,7 +351,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
           Thank you for subscribing to our newsletter.
         </p>
         <p style="margin:0;font-size:16px;color:${sharedStyles.textSecondary};line-height:1.75;">
-          You've joined <strong style="color:${sharedStyles.greenMid};">10+ adventurers</strong> who receive exclusive travel inspiration, insider tips, and members-only offers.
+          We'll share occasional destination inspiration, practical travel tips, and useful updates to help you plan an African adventure.
         </p>
       </td>
     </tr>
@@ -364,7 +364,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
           What You'll Receive
         </h3>
         ${buildInfoCard("📸", "Destination Stories", "Hand-picked destinations with stunning photography and insider knowledge")}
-        ${buildInfoCard("🎁", "Exclusive Offers", "Members-only discounts and early access to new safari experiences")}
+        ${buildInfoCard("🎁", "Exclusive Offers", "Relevant offers and updates when available")}
         ${buildInfoCard("🦁", "Wildlife Updates", "Migration tracking, conservation news, and wildlife photography tips")}
         ${buildInfoCard("🗺️", "Travel Planning Tips", "Expert advice on best seasons, packing guides, and itinerary ideas")}
       </td>
@@ -402,7 +402,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
     ${buildFooter(
       [
         `You're receiving this because <strong style="color:#86efac;">${escapeHtml(validatedEmail)}</strong> subscribed to our newsletter.`,
-        "We respect your inbox — expect 1–2 emails per week, maximum.",
+        "We respect your inbox. Expect occasional destination inspiration and practical travel guidance; unsubscribe at any time.",
       ],
       true,
       unsubscribeUrl
@@ -629,7 +629,7 @@ async function sendWelcomeEmail(email) {
     {
       from:    `Altuvera Safaris <info@altuverasafaris.com>`,
       to:      validatedEmail,
-      subject: "🌿 Welcome to Altuvera Safaris",
+      subject: "Welcome to Altuvera Safaris",
       html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
       text:    `Welcome to Altuvera Safaris! Visit us at ${getEnvVar("SITE_URL", "http://localhost:3000")}/explore`,
     },
@@ -644,7 +644,7 @@ async function sendUnsubscribeConfirmation(email) {
     {
       from:    `Altuvera Safaris <info@altuverasafaris.com>`,
       to:      validatedEmail,
-      subject: "👋 Newsletter Unsubscribe Confirmed | Altuvera Safaris",
+      subject: "Newsletter Unsubscribe Confirmed | Altuvera Safaris",
       html:    buildUnsubscribeConfirmationEmailHtml(validatedEmail),
       text:    "You have been successfully unsubscribed from Altuvera Safaris emails.",
     },
