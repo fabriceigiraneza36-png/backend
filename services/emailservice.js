@@ -14,7 +14,7 @@ const cfg = {
   },
   from: {
     name:    "Altuvera Safaris",
-    address: process.env.SMTP_FROM || "info@altuverasafaris.com",
+    address: "info@altuverasafaris.com",
   },
   adminEmail:   process.env.ADMIN_EMAIL   || "info@altuverasafaris.com",
   supportEmail: process.env.SUPPORT_EMAIL || "info@altuverasafaris.com",
