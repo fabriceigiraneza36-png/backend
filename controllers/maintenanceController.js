@@ -45,7 +45,7 @@ const CATEGORY_TABLES = {
   subscribers: ['subscribers'],
   notifications: ['push_subscriptions', 'notification_preferences', 'notifications'],
   system_logs: ['activity_log', 'email_log'],
-  media: ['hero_slides', 'virtual_tours'],
+  media: ['hero_slides'],
 }
 
 const ALL_CATEGORIES = Object.keys(CATEGORY_TABLES)

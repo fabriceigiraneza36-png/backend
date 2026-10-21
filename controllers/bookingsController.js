@@ -1518,7 +1518,7 @@ exports.getStats = async (req, res, next) => {
             COUNT(*) FILTER (WHERE status='on-hold')::INTEGER AS on_hold,
             COUNT(*) FILTER (WHERE email_verified=true)::INTEGER AS email_verified,
             COUNT(*) FILTER (WHERE email_verified=false)::INTEGER AS awaiting_verification,
-            COUNT(*) FILTER (WHERE )::INTEGER AS paid,
+            COUNT(*) FILTER (WHERE LOWER(COALESCE(payment_status, '')) = 'paid')::INTEGER AS paid,
             COALESCE(SUM(number_of_travelers),0)::INTEGER AS total_travelers,
             COUNT(*) FILTER (WHERE created_at>=NOW()-INTERVAL '24 hours')::INTEGER AS last_24h,
             COUNT(*) FILTER (WHERE created_at>=NOW()-INTERVAL '7 days')::INTEGER AS last_7_days,

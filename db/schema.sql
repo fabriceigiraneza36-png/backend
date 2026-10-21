@@ -209,7 +209,6 @@ CREATE TABLE destinations (
   hero_image              VARCHAR(500),
   thumbnail_url           VARCHAR(500),
   video_url               VARCHAR(500),
-  virtual_tour_url        VARCHAR(500),
   duration_days           INTEGER,
   duration_nights         INTEGER,
   duration_display        VARCHAR(100),
@@ -666,10 +665,6 @@ CREATE TRIGGER trg_pages_updated
   BEFORE UPDATE ON pages
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
-CREATE TRIGGER trg_virtual_tours_updated
-  BEFORE UPDATE ON virtual_tours
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
 -- 15. Subscribers
 DROP TABLE IF EXISTS subscribers CASCADE;
 CREATE TABLE subscribers (
@@ -716,7 +711,6 @@ CREATE INDEX idx_bookings_email        ON bookings(email);
 CREATE INDEX idx_gallery_category      ON gallery(category);
 CREATE INDEX idx_faqs_category         ON faqs(category);
 CREATE INDEX idx_contact_read          ON contact_messages(is_read);
-CREATE INDEX idx_virtual_tours_slug    ON virtual_tours(slug);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════════

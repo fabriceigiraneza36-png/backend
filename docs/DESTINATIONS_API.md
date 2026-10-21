@@ -1235,7 +1235,6 @@ Remove a tag from a destination.
 | `hero_image` | string | Full-width hero image |
 | `thumbnail_url` | string | Thumbnail for listings |
 | `video_url` | string | YouTube/Vimeo embed URL |
-| `virtual_tour_url` | string | 360° virtual tour URL |
 
 > **Note:** `image_url` can be uploaded via `multipart/form-data` with `image` field.
 
