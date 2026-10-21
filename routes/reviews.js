@@ -46,7 +46,7 @@ const ensureReviewsTable = async () => {
 
   // Backfill compatible legacy fields only when they exist in this database.
   await query(`
-    DO $
+    DO $review_migration$
     BEGIN
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'overall_rating') THEN
         EXECUTE 'UPDATE reviews SET rating = overall_rating WHERE rating IS NULL AND overall_rating BETWEEN 1 AND 5';
@@ -60,7 +60,7 @@ const ensureReviewsTable = async () => {
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'destination_id') THEN
         EXECUTE 'UPDATE reviews SET entity_id = destination_id, entity_type = ''destination'' WHERE entity_id IS NULL AND destination_id IS NOT NULL';
       END IF;
-    END $
+    END $review_migration$
   `);
 
   // Add indexes for faster aggregation — idempotent
