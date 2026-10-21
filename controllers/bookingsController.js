@@ -954,39 +954,72 @@ exports.create = async (req, res, next) => {
    VERIFY EMAIL
 ═════════════════════════════════════════════════════════════════════ */
 exports.verifyEmail = async (req, res) => {
-  const frontendUrl = process.env.FRONTEND_URL || "https://www.altuverasafaris.com";
+  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/+$/, "");
+  const wantsJson = String(req.query?.json || "") === "1" ||
+    String(req.get?.("accept") || "").includes("application/json");
   const token = String(req.params.token || "").trim();
 
-  if (!token) return res.redirect(`${frontendUrl}/booking/verify?status=invalid`);
+  const reply = (status, payload, queryStatus, ref = "") => {
+    if (wantsJson) return res.status(status).json(payload);
+    const params = new URLSearchParams({ status: queryStatus });
+    if (ref) params.set("ref", ref);
+    return res.redirect(`${frontendUrl}/booking/verify?${params.toString()}`);
+  };
+
+  if (!token) return reply(400, { success: false, message: "Confirmation token is missing." }, "invalid");
 
   try {
+    // Keep the one-time token after successful verification so repeat clicks
+    // from mail scanners or a traveller reopening the email can be handled
+    // gracefully as "already verified", rather than a confusing error.
     const { rows } = await query(
-      `SELECT id FROM bookings
-         WHERE verification_token = $1
-           AND email_verified = false
-           AND verification_token_exp IS NOT NULL
-           AND verification_token_exp > NOW()
-         LIMIT 1`,
+      `SELECT id, booking_number, email_verified, verification_token_exp
+         FROM bookings
+        WHERE verification_token = $1
+        LIMIT 1`,
       [token],
     );
 
-    if (!rows[0]) return res.redirect(`${frontendUrl}/booking/verify?status=expired_or_invalid`);
+    if (!rows[0]) {
+      return reply(410, { success: false, message: "This confirmation link is invalid or has expired." }, "expired");
+    }
 
-    await query(
+    const booking = rows[0];
+    if (booking.email_verified) {
+      return reply(200, {
+        success: true,
+        alreadyVerified: true,
+        message: "Your email has already been verified.",
+        data: { booking_id: booking.id, booking_number: booking.booking_number || "" },
+      }, "already_verified", booking.booking_number || "");
+    }
+
+    if (!booking.verification_token_exp || new Date(booking.verification_token_exp) <= new Date()) {
+      return reply(410, { success: false, message: "This confirmation link has expired. Please contact Altuvera for help." }, "expired");
+    }
+
+    const updated = await query(
       `UPDATE bookings
           SET email_verified = true,
               email_verified_at = NOW(),
-              verification_token = NULL,
               verification_token_exp = NULL,
               updated_at = NOW()
-        WHERE id = $1`,
-      [rows[0].id],
+        WHERE id = $1
+          AND email_verified = false
+        RETURNING id, booking_number`,
+      [booking.id],
     );
 
-    return res.redirect(`${frontendUrl}/booking/verify?status=confirmed&bookingId=${encodeURIComponent(rows[0].id)}`);
+    const verified = updated.rows[0] || booking;
+    return reply(200, {
+      success: true,
+      alreadyVerified: false,
+      message: "Your booking request email has been verified.",
+      data: { booking_id: verified.id, booking_number: verified.booking_number || "" },
+    }, "success", verified.booking_number || "");
   } catch (err) {
     logger.error("[Bookings] verifyEmail:", err.message);
-    return res.redirect(`${frontendUrl}/booking/verify?status=error`);
+    return reply(500, { success: false, message: "We could not verify this email right now. Please try again or contact Altuvera." }, "error");
   }
 };
 
