@@ -45,16 +45,6 @@ const validateDestinationMediaRequirements = ({ imageUrls = [], attractions = []
 
 
 
-let sendDestinationAlertEmail = null
-try {
-  ({ sendDestinationAlertEmail } = require('../services/emailservice'))
-} catch (err) {
-  try {
-    ({ sendDestinationAlertEmail } = require('../utils/emailService'))
-  } catch {
-    sendDestinationAlertEmail = async () => ({ success: false, error: 'Email service unavailable' })
-  }
-}
 
 const LOG = '[Destinations]'
 
