@@ -654,12 +654,13 @@ const stepList = (items) => `
 const buildVerificationLink = (token) => {
   if (!token) throw new Error("buildVerificationLink: token is required");
   const clean = encodeURIComponent(String(token).trim());
-  const url = `${ENV.backendUrl}/api/bookings/verify-email/${clean}`;
-
-  // Sanity check — never let a malformed URL escape
+  // Open the public confirmation page first so link scanners do not consume
+  // the token simply by requesting the backend endpoint. The page requests a
+  // JSON result only when the traveller opens it.
+  const url = `${ENV.frontendUrl}/booking/verify?token=${clean}`;
   try {
     const u = new URL(url);
-    if (!u.hostname) throw new Error("no host");
+    if (!u.hostname || !["https:", "http:"].includes(u.protocol)) throw new Error("invalid host or protocol");
     return url;
   } catch (err) {
     logger.error(`[BookingEmails] buildVerificationLink produced invalid URL: "${url}" — ${err.message}`);
