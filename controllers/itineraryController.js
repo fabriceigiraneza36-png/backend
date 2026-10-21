@@ -157,6 +157,11 @@ exports.publish = async (req,res,next) => {
     if (!itinerary.days.length) {
       return res.status(400).json({success:false,error:"Add at least one itinerary day before sending."});
     }
+    const deliveryMode = req.body?.deliveryMode === "email_image" ? "email_image" : "dashboard_pdf";
+    const itineraryImageUrl = String(req.body?.itineraryImageUrl || "").trim();
+    if (deliveryMode === "email_image" && !/^https:\/\//i.test(itineraryImageUrl)) {
+      return res.status(400).json({success:false,error:"A valid HTTPS itinerary image URL is required for image-only delivery."});
+    }
 
     const version = Number(booking.itinerary_version || 0) + 1;
     const { rows } = await query(
@@ -177,7 +182,7 @@ exports.publish = async (req,res,next) => {
     const full = (await bookingDetail(id)) || rows[0];
 
     await Promise.allSettled([
-      sendItineraryEmail ? sendItineraryEmail(full,itinerary) : Promise.resolve(),
+      sendItineraryEmail ? sendItineraryEmail(full,itinerary, deliveryMode === "email_image" ? { format: "image", imageUrl: itineraryImageUrl } : { format: "dashboard_pdf" }) : Promise.resolve(),
       sendAdminItineraryNotification ? sendAdminItineraryNotification(full,itinerary) : Promise.resolve(),
       createNotificationInternal({
         userId: full.user_id || null,
@@ -191,7 +196,7 @@ exports.publish = async (req,res,next) => {
         priority: "high",
         senderType: "admin",
         senderId: req.admin?.id || req.user?.id || null,
-        metadata: { bookingId: full.id, bookingNumber: full.booking_number, itineraryVersion: version },
+        metadata: { bookingId: full.id, bookingNumber: full.booking_number, itineraryVersion: version, deliveryMode, itineraryImageUrl: deliveryMode === "email_image" ? itineraryImageUrl : null },
       }),
     ]);
 
@@ -200,7 +205,7 @@ exports.publish = async (req,res,next) => {
       io?.to?.(`user:${full.user_id}`)?.emit?.("itinerary:published", { bookingId: full.id, bookingNumber: full.booking_number, itinerary });
     } catch {}
 
-    return res.json({success:true,data:full,message:"Itinerary sent to the traveller dashboard and email."});
+    return res.json({success:true,data:full,message: deliveryMode === "email_image" ? "Itinerary published to the dashboard and sent as an image-only email." : "Itinerary sent to the traveller dashboard and email."});
   } catch(e) { logger.error("[Itinerary] publish:",e.message); next(e); }
 };
 
