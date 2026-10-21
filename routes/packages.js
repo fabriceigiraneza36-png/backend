@@ -6,6 +6,7 @@ const { query: db } = require('../config/db')
 const { authenticate, optionalAuth, requireAdmin } = require('../middleware/auth')
 const logger   = require('../utils/logger')
 const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
+const { enqueueContextCampaign } = require('../utils/emailCampaignQueue')
 const { notifyPackageBookingCreated, createNotificationInternal } = require('../controllers/notificationsController')
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -450,12 +451,31 @@ router.delete('/:id', requireAdmin, async (req, res) => {
 router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) => {
   try {
     const isPublished = req.params.action === 'publish'
+    const previous = await db(
+      'SELECT id, is_published, title, slug, cover_image_url, destination_id FROM packages WHERE id = $1 LIMIT 1',
+      [req.params.id],
+    )
+    if (!previous.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
     const result = await db(
       'UPDATE packages SET is_published = $1, updated_at = NOW() WHERE id = $2 RETURNING *',
       [isPublished, req.params.id],
     )
-    if (!result.rows.length) return res.status(404).json({ success: false, error: 'Package not found' })
-    return res.json({ success: true, data: result.rows[0] })
+    const pkg = result.rows[0]
+    if (isPublished && !previous.rows[0].is_published) {
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      enqueueContextCampaign({
+        context: 'new_package',
+        io: req.app.get('io'),
+        data: {
+          packageName: pkg.title || previous.rows[0].title || 'New Altuvera package',
+          heroImageUrl: pkg.cover_image_url || previous.rows[0].cover_image_url || '',
+          contentUrl: frontendUrl + '/packages/' + encodeURIComponent(pkg.slug || pkg.id),
+          packageId: pkg.id,
+          destinationId: pkg.destination_id,
+        },
+      }).catch((emailErr) => logger.warn('[Packages] contextual email queue failed:', emailErr.message))
+    }
+    return res.json({ success: true, data: pkg })
   } catch (err) {
     logger.error('[Packages] publish error:', err.message)
     return res.status(500).json({ success: false, error: 'Failed to update package status' })
