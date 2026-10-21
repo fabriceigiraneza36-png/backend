@@ -219,6 +219,11 @@ const resolveRecipients = async (audience, nationality) => {
 const enrichCampaignContext = async (context, input = {}) => {
   const data = { ...(input || {}) };
   const frontendUrl = FRONTEND_URL;
+  // The editor sends its current CTA field in contextData for convenience.
+  // Template placeholders are not real destinations; let contextual lookup fill them.
+  for (const key of ["contentUrl", "bookingUrl"]) {
+    if (typeof data[key] === "string" && /\\{\\{\\s*[a-zA-Z]+\\s*\\}\\}/.test(data[key])) delete data[key];
+  }
   try {
     if (["top_rated_destination", "booking_encouragement", "new_destination"].includes(context) && !data.destinationName) {
       const { rows } = await query(
@@ -237,8 +242,11 @@ const enrichCampaignContext = async (context, input = {}) => {
         data.heroImageUrl = data.heroImageUrl || destination.hero_image || destination.image_url || destination.thumbnail_url || "";
         data.rating = destination.rating || data.rating || "";
         data.contentUrl = data.contentUrl || frontendUrl + "/destinations/" + encodeURIComponent(destination.slug || destination.id);
-        if (context === "booking_encouragement" && !data.bookingUrl) {
-          data.bookingUrl = frontendUrl + "/booking?destination=" + encodeURIComponent(destination.slug || destination.id);
+        if (context === "booking_encouragement") {
+          const genericBookingUrl = frontendUrl + "/booking";
+          if (!data.bookingUrl || String(data.bookingUrl).replace(/\\/+$/, "") === genericBookingUrl) {
+            data.bookingUrl = genericBookingUrl + "?destination=" + encodeURIComponent(destination.slug || destination.id);
+          }
         }
       }
     }
