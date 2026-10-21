@@ -81,7 +81,7 @@ exports.getMyReviews = async (req, res) => {
               d.thumbnail_url AS destination_image,
               d.slug          AS destination_slug
          FROM reviews r
-         LEFT JOIN destinations d ON d.id = r.destination_id
+         LEFT JOIN destinations d ON d.id = r.entity_id AND r.entity_type = 'destination'
         WHERE r.user_id = $1
         ORDER BY r.created_at DESC
         LIMIT $2 OFFSET $3`,
