@@ -245,7 +245,7 @@ const enrichCampaignContext = async (context, input = {}) => {
         data.contentUrl = data.contentUrl || frontendUrl + "/destinations/" + encodeURIComponent(destination.slug || destination.id);
         if (context === "booking_encouragement") {
           const genericBookingUrl = frontendUrl + "/booking";
-          if (!data.bookingUrl || String(data.bookingUrl).replace(/\\/+$/, "") === genericBookingUrl) {
+          if (!data.bookingUrl || String(data.bookingUrl).replace(/\/+$/, "") === genericBookingUrl) {
             data.bookingUrl = genericBookingUrl + "?destination=" + encodeURIComponent(destination.slug || destination.id);
           }
         }
