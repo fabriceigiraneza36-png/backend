@@ -75,14 +75,19 @@ router.post("/:id/confirm",protect,adminOnly,async(req,res)=>{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
   if(!b.email_verified)return res.status(409).json({success:false,message:"Traveller must first confirm the booking from their real email inbox."});
-  if(b.identity_portrait_status!=="uploaded"||!b.identity_portrait_url)return res.status(409).json({success:false,message:"Traveller portrait must be uploaded before confirmation."});
+  const portraitProvided = b.identity_portrait_status==="uploaded" && Boolean(b.identity_portrait_url);
   const code=b.confirmation_code||("ALT-"+Math.random().toString(36).slice(2,10).toUpperCase());
-  await query("UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+  if (portraitProvided) {
+    await query("UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+  } else {
+    // The portrait is optional; do not change its state when none was requested.
+    await query("UPDATE bookings SET status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+  }
   const full=await getBooking(id);
   try{const emails=require("../utils/bookingEmails");if(typeof emails.sendBookingConfirmation==="function")await emails.sendBookingConfirmation(full)}catch{}
   await notifyUser(full,"Your booking is confirmed 🎉","Your identity details have been confirmed and your journey to "+(full.destination_name||"your destination")+" is now confirmed.","/my-bookings","View confirmed booking");
   try { req.app?.get?.("io")?.to?.("user-"+full.user_id)?.emit?.("notification:new", { type:"booking_confirmed", category:"booking", title:"Your booking is confirmed 🎉", message:"Your journey to "+(full.destination_name||"your destination")+" is now confirmed.", action_url:"/my-bookings", action_label:"View confirmed booking", priority:"high" }); } catch {}
-  return res.json({success:true,data:full,message:"Traveller verified and booking confirmed."});
+  return res.json({success:true,data:full,message: portraitProvided ? "Traveller portrait verified and booking confirmed." : "Booking confirmed. No portrait was required."});
  }catch(e){logger.error("[Identity] confirm:",e.message);return res.status(500).json({success:false,message:"Failed to confirm booking"})}
 });
 
