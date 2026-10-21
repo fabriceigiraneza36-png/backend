@@ -212,6 +212,78 @@ const resolveRecipients = async (audience, nationality) => {
   return [...seen.values()];
 };
 
+/**
+ * Add current content context to manual campaigns where admin left fields blank.
+ * The email remains editable in Email Studio; this simply makes the defaults useful.
+ */
+const enrichCampaignContext = async (context, input = {}) => {
+  const data = { ...(input || {}) };
+  const frontendUrl = FRONTEND_URL;
+  try {
+    if (["top_rated_destination", "booking_encouragement", "new_destination"].includes(context) && !data.destinationName) {
+      const { rows } = await query(
+        `SELECT id, name, slug, image_url, hero_image, thumbnail_url, short_description,
+                rating, review_count
+           FROM destinations
+          WHERE status = 'published' AND COALESCE(is_active, true) = true
+          ORDER BY COALESCE(rating, 0) DESC, COALESCE(review_count, 0) DESC, published_at DESC NULLS LAST
+          LIMIT 1`
+      );
+      const destination = rows[0];
+      if (destination) {
+        data.destinationName = destination.name;
+        data.slug = destination.slug;
+        data.shortDescription = destination.short_description || data.shortDescription || "";
+        data.heroImageUrl = data.heroImageUrl || destination.hero_image || destination.image_url || destination.thumbnail_url || "";
+        data.rating = destination.rating || data.rating || "";
+        data.contentUrl = data.contentUrl || frontendUrl + "/destinations/" + encodeURIComponent(destination.slug || destination.id);
+        if (context === "booking_encouragement" && !data.bookingUrl) {
+          data.bookingUrl = frontendUrl + "/booking?destination=" + encodeURIComponent(destination.slug || destination.id);
+        }
+      }
+    }
+
+    if (["new_post"].includes(context) && !data.postTitle) {
+      const { rows } = await query(
+        `SELECT id, title, slug, image_url, excerpt
+           FROM posts
+          WHERE is_published = true
+          ORDER BY published_at DESC NULLS LAST, created_at DESC
+          LIMIT 1`
+      );
+      const post = rows[0];
+      if (post) {
+        data.postTitle = post.title;
+        data.slug = post.slug;
+        data.shortDescription = post.excerpt || data.shortDescription || "";
+        data.heroImageUrl = data.heroImageUrl || post.image_url || "";
+        data.contentUrl = data.contentUrl || frontendUrl + "/post/" + encodeURIComponent(post.slug || post.id);
+      }
+    }
+
+    if (["new_package"].includes(context) && !data.packageName) {
+      const { rows } = await query(
+        `SELECT id, title, slug, cover_image_url
+           FROM packages
+          WHERE is_published = true
+          ORDER BY created_at DESC
+          LIMIT 1`
+      );
+      const pkg = rows[0];
+      if (pkg) {
+        data.packageName = pkg.title;
+        data.slug = pkg.slug;
+        data.heroImageUrl = data.heroImageUrl || pkg.cover_image_url || "";
+        data.contentUrl = data.contentUrl || frontendUrl + "/packages/" + encodeURIComponent(pkg.slug || pkg.id);
+      }
+    }
+  } catch (err) {
+    // A campaign must still be sendable if an optional content lookup fails.
+    logger.warn("[EmailBroadcast] Context enrichment skipped for " + context + ":", err.message);
+  }
+  return data;
+};
+
 /* ── Reusable campaign templates and send history ─────────────────────────── */
 exports.getTemplates = async (_req, res, next) => {
   try {
@@ -311,8 +383,9 @@ exports.send = async (req, res, next) => {
     const subject = String(template.subject || req.body?.subject || "").trim();
     const body = String(template.body || req.body?.body || "").trim();
     const rawHtml = req.body?.html;
-    const contextData = req.body?.contextData && typeof req.body.contextData === "object" ? req.body.contextData : {};
+    let contextData = req.body?.contextData && typeof req.body.contextData === "object" ? req.body.contextData : {};
     const context = String(template.context || req.body?.context || "general").trim();
+    contextData = await enrichCampaignContext(context, contextData);
 
     if (!AUDIENCES.has(audience)) return res.status(400).json({ success: false, error: "Invalid audience" });
     if (!subject) return res.status(422).json({ success: false, error: "Subject is required." });
