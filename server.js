@@ -690,6 +690,16 @@ const io = new Server(httpServer, {
 socketBus.setIO(io)
 app.set('io', io)
 
+// Automatic contextual email campaign worker. Event-triggered campaigns are
+// queued in PostgreSQL: a live admin gets a 10-second retouch window; otherwise
+// the worker sends them promptly and records the outcome for the admin panel.
+const emailCampaignWorker = require('./controllers/emailBroadcastController')
+setInterval(() => {
+  emailCampaignWorker.processDueCampaigns(io).catch((err) => {
+    logger.error('[EmailCampaignQueue] scheduled worker error:', err.message)
+  })
+}, 2_000)
+
 // -------------------------------------------------------------------------------
 // HEALTH & META ENDPOINTS
 // -------------------------------------------------------------------------------
