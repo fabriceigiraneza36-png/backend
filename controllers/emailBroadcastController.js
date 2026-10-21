@@ -145,7 +145,9 @@ const buildRecipientQuery = (audience, nationality) => {
           SELECT DISTINCT ON (LOWER(email)) LOWER(email) AS email, full_name AS name
             FROM bookings
            WHERE email IS NOT NULL
-             AND email <> ''`,
+             AND email <> ''
+             AND COALESCE(newsletter_opt_in, false) = true
+           ORDER BY LOWER(email), created_at DESC`,
         params: [],
       };
 
@@ -155,9 +157,11 @@ const buildRecipientQuery = (audience, nationality) => {
           SELECT LOWER(email) AS email, name FROM (
             SELECT email, full_name AS name, nationality FROM bookings
              WHERE email IS NOT NULL AND email <> ''
+               AND COALESCE(newsletter_opt_in, false) = true
             UNION ALL
             SELECT email, full_name AS name, nationality FROM users
              WHERE email IS NOT NULL AND email <> ''
+               AND COALESCE(subscribed, false) = true
           ) t
            WHERE t.nationality IS NOT NULL
              AND LOWER(TRIM(t.nationality)) = LOWER(TRIM($1))`,
@@ -172,12 +176,14 @@ const buildRecipientQuery = (audience, nationality) => {
             SELECT email, full_name AS name FROM users
              WHERE email IS NOT NULL AND email <> ''
                AND COALESCE(is_active, true) = true
+               AND COALESCE(subscribed, false) = true
             UNION ALL
             SELECT email, name FROM subscribers
              WHERE is_active = true AND email IS NOT NULL AND email <> ''
             UNION ALL
             SELECT email, full_name AS name FROM bookings
              WHERE email IS NOT NULL AND email <> ''
+               AND COALESCE(newsletter_opt_in, false) = true
           ) t`,
         params: [],
       };
