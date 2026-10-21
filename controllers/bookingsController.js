@@ -954,7 +954,7 @@ exports.create = async (req, res, next) => {
    VERIFY EMAIL
 ═════════════════════════════════════════════════════════════════════ */
 exports.verifyEmail = async (req, res) => {
-  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/+$/, "");
+  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "");
   const wantsJson = String(req.query?.json || "") === "1" ||
     String(req.get?.("accept") || "").includes("application/json");
   const token = String(req.params.token || "").trim();
