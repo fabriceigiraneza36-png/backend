@@ -32,6 +32,37 @@ const ensureReviewsTable = async () => {
     )
   `);
 
+  // Keep the runtime review model compatible with databases created by older
+  // versions of the site. Additive changes preserve existing review records.
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS entity_type VARCHAR(50) NOT NULL DEFAULT 'general'`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS entity_id INTEGER`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS rating NUMERIC(3,1)`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS title VARCHAR(200)`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS body TEXT`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS is_approved BOOLEAN NOT NULL DEFAULT true`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+  await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
+
+  // Backfill compatible legacy fields only when they exist in this database.
+  await query(`
+    DO $
+    BEGIN
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'overall_rating') THEN
+        EXECUTE 'UPDATE reviews SET rating = overall_rating WHERE rating IS NULL AND overall_rating BETWEEN 1 AND 5';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'review') THEN
+        EXECUTE 'UPDATE reviews SET body = review WHERE body IS NULL';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'status') THEN
+        EXECUTE 'UPDATE reviews SET is_approved = (status = ''approved'')';
+      END IF;
+      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'destination_id') THEN
+        EXECUTE 'UPDATE reviews SET entity_id = destination_id, entity_type = ''destination'' WHERE entity_id IS NULL AND destination_id IS NOT NULL';
+      END IF;
+    END $
+  `);
+
   // Add indexes for faster aggregation — idempotent
   await query(`
     CREATE INDEX IF NOT EXISTS idx_reviews_is_approved
@@ -115,285 +146,125 @@ router.delete('/my/:id', protect, reviewsController.deleteMyReview);
 
 router.get("/stats", async (_req, res) => {
   try {
-    const toInt   = (v) => parseInt(v,   10) || 0;
-    const toFloat = (v) => parseFloat(v)     || 0;
-
-    const [
-      totalRes,
-      approvedStatsRes,
-      todayRes,
-      monthRes,
-      weekRes,
-      distributionRes,
-      categoryStatsRes,
-      tripTypeRes,
-      recentRes,
-    ] = await Promise.all([
-
-      // ── Total reviews (all statuses) ──────────────────────────
+    const [totalsRes, ratingsRes, distributionRes, activityRes, recentRes] = await Promise.all([
       query(`
         SELECT
-          COUNT(*)                                          AS total,
-          COUNT(*) FILTER (WHERE status = 'approved')       AS approved,
-          COUNT(*) FILTER (WHERE status = 'pending')        AS pending,
-          COUNT(*) FILTER (WHERE status = 'rejected')       AS rejected,
-          COUNT(*) FILTER (WHERE status = 'spam')           AS spam,
-          COUNT(*) FILTER (WHERE verified_booking = true)   AS verified,
-          COUNT(*) FILTER (WHERE is_featured = true)        AS featured
+          COUNT(*)::INTEGER AS total,
+          COUNT(*) FILTER (WHERE is_approved = true)::INTEGER AS approved,
+          COUNT(*) FILTER (WHERE is_approved = false)::INTEGER AS pending
         FROM reviews
       `),
-
-      // ── Approved rating averages (all rating dimensions) ──────
       query(`
         SELECT
-          COUNT(*)                                        AS approved_total,
-          ROUND(AVG(overall_rating)::numeric,     2)      AS avg_overall,
-          ROUND(AVG(cleanliness_rating)::numeric, 2)      AS avg_cleanliness,
-          ROUND(AVG(value_rating)::numeric,       2)      AS avg_value,
-          ROUND(AVG(service_rating)::numeric,     2)      AS avg_service,
-          ROUND(AVG(location_rating)::numeric,    2)      AS avg_location,
-          MIN(overall_rating)                             AS min_rating,
-          MAX(overall_rating)                             AS max_rating
+          COUNT(*)::INTEGER AS total,
+          ROUND(AVG(rating)::numeric, 2) AS average,
+          MIN(rating) AS minimum,
+          MAX(rating) AS maximum
         FROM reviews
-        WHERE status = 'approved'
-          AND overall_rating IS NOT NULL
+        WHERE is_approved = true AND rating BETWEEN 1 AND 5
       `),
-
-      // ── Reviews submitted today ───────────────────────────────
       query(`
-        SELECT
-          COUNT(*)                                              AS total_today,
-          COUNT(*) FILTER (WHERE status = 'approved')           AS approved_today,
-          COUNT(*) FILTER (WHERE status = 'pending')            AS pending_today
+        SELECT FLOOR(rating)::INTEGER AS star, COUNT(*)::INTEGER AS count
         FROM reviews
-        WHERE created_at >= CURRENT_DATE
-      `),
-
-      // ── Reviews this calendar month ───────────────────────────
-      query(`
-        SELECT
-          COUNT(*)                                              AS total_month,
-          COUNT(*) FILTER (WHERE status = 'approved')           AS approved_month
-        FROM reviews
-        WHERE created_at >= DATE_TRUNC('month', NOW())
-      `),
-
-      // ── Reviews this week ─────────────────────────────────────
-      query(`
-        SELECT COUNT(*) AS total_week
-        FROM reviews
-        WHERE created_at >= DATE_TRUNC('week', NOW())
-      `),
-
-      // ── Rating distribution (approved, overall_rating 1–5) ───
-      query(`
-        SELECT
-          FLOOR(overall_rating)::int  AS star,
-          COUNT(*)                    AS count
-        FROM reviews
-        WHERE status = 'approved'
-          AND overall_rating BETWEEN 1 AND 5
-        GROUP BY FLOOR(overall_rating)
+        WHERE is_approved = true AND rating BETWEEN 1 AND 5
+        GROUP BY FLOOR(rating)
         ORDER BY star DESC
       `),
-
-      // ── Sub-rating category averages breakdown ────────────────
       query(`
         SELECT
-          ROUND(AVG(cleanliness_rating)::numeric, 2) AS cleanliness,
-          ROUND(AVG(value_rating)::numeric,       2) AS value,
-          ROUND(AVG(service_rating)::numeric,     2) AS service,
-          ROUND(AVG(location_rating)::numeric,    2) AS location,
-          COUNT(*) FILTER (WHERE cleanliness_rating IS NOT NULL) AS cleanliness_count,
-          COUNT(*) FILTER (WHERE value_rating       IS NOT NULL) AS value_count,
-          COUNT(*) FILTER (WHERE service_rating     IS NOT NULL) AS service_count,
-          COUNT(*) FILTER (WHERE location_rating    IS NOT NULL) AS location_count
+          COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::INTEGER AS today,
+          COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('week', NOW()))::INTEGER AS this_week,
+          COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', NOW()))::INTEGER AS this_month
         FROM reviews
-        WHERE status = 'approved'
       `),
-
-      // ── Trip type breakdown ───────────────────────────────────
       query(`
         SELECT
-          COALESCE(trip_type, 'unspecified')  AS trip_type,
-          COUNT(*)                            AS count,
-          ROUND(AVG(overall_rating)::numeric, 2) AS avg_rating
-        FROM reviews
-        WHERE status = 'approved'
-        GROUP BY trip_type
-        ORDER BY count DESC
-        LIMIT 10
-      `),
-
-      // ── 5 most recent approved reviews (no JOIN needed) ───────
-      query(`
-        SELECT
-          id,
-          reviewer_name,
-          reviewer_avatar,
-          reviewer_location,
-          title,
-          review        AS body,
-          overall_rating,
-          trip_type,
-          travel_date,
-          verified_booking,
-          is_featured,
-          destination_id,
-          booking_id,
-          created_at
-        FROM reviews
-        WHERE status = 'approved'
-        ORDER BY created_at DESC
+          r.id, r.title, r.body, r.rating, r.entity_type, r.entity_id, r.created_at,
+          COALESCE(NULLIF(u.full_name, ''), 'Anonymous') AS reviewer_name,
+          u.avatar_url AS reviewer_avatar,
+          d.name AS destination_name
+        FROM reviews r
+        LEFT JOIN users u ON u.id = r.user_id
+        LEFT JOIN destinations d ON d.id = r.entity_id AND r.entity_type = 'destination'
+        WHERE r.is_approved = true
+        ORDER BY r.created_at DESC
         LIMIT 5
       `),
     ]);
 
-    // ── Parse totals ───────────────────────────────────────────────────────
-    const totalRow   = totalRes.rows[0]         || {};
-    const statsRow   = approvedStatsRes.rows[0] || {};
-    const todayRow   = todayRes.rows[0]         || {};
-    const monthRow   = monthRes.rows[0]         || {};
-    const weekRow    = weekRes.rows[0]           || {};
-    const catRow     = categoryStatsRes.rows[0] || {};
-
-    const totalReviews     = toInt(totalRow.total);
-    const approvedTotal    = toInt(totalRow.approved);
-    const pendingTotal     = toInt(totalRow.pending);
-    const rejectedTotal    = toInt(totalRow.rejected);
-    const spamTotal        = toInt(totalRow.spam);
-    const verifiedTotal    = toInt(totalRow.verified);
-    const featuredTotal    = toInt(totalRow.featured);
-
-    const averageRating    = toFloat(statsRow.avg_overall);
-    const minRating        = toFloat(statsRow.min_rating);
-    const maxRating        = toFloat(statsRow.max_rating);
-
-    const reviewsToday         = toInt(todayRow.total_today);
-    const approvedToday        = toInt(todayRow.approved_today);
-    const pendingToday         = toInt(todayRow.pending_today);
-    const reviewsThisMonth     = toInt(monthRow.total_month);
-    const approvedThisMonth    = toInt(monthRow.approved_month);
-    const reviewsThisWeek      = toInt(weekRow.total_week);
-
-    // ── Rating distribution — always return all 5 stars ───────────────────
-    const starMap = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
+    const totals = totalsRes.rows[0] || {};
+    const ratings = ratingsRes.rows[0] || {};
+    const activity = activityRes.rows[0] || {};
+    const approvedTotal = Number(totals.approved) || 0;
+    const stars = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 };
     for (const row of distributionRes.rows) {
-      const s = toInt(row.star);
-      if (s >= 1 && s <= 5) starMap[s] = toInt(row.count);
+      const star = Number(row.star);
+      if (star >= 1 && star <= 5) stars[star] = Number(row.count) || 0;
     }
 
-    const ratingDistribution = [5, 4, 3, 2, 1].map((star) => ({
-      star,
-      label:      `${star} Star${star !== 1 ? "s" : ""}`,
-      count:      starMap[star],
-      percentage: approvedTotal > 0
-        ? Math.round((starMap[star] / approvedTotal) * 100)
-        : 0,
-    }));
-
-    // ── Sub-rating category averages ──────────────────────────────────────
-    const categoryAverages = {
-      cleanliness: {
-        average: toFloat(catRow.cleanliness),
-        count:   toInt(catRow.cleanliness_count),
-      },
-      value: {
-        average: toFloat(catRow.value),
-        count:   toInt(catRow.value_count),
-      },
-      service: {
-        average: toFloat(catRow.service),
-        count:   toInt(catRow.service_count),
-      },
-      location: {
-        average: toFloat(catRow.location),
-        count:   toInt(catRow.location_count),
-      },
-    };
-
-    // ── Build response ─────────────────────────────────────────────────────
     return res.status(200).json({
       success: true,
       data: {
-
-        // Counts
-        totalReviews,
+        totalReviews: Number(totals.total) || 0,
         approvedTotal,
-        pendingTotal,
-        rejectedTotal,
-        spamTotal,
-        verifiedTotal,
-        featuredTotal,
-
-        // Ratings
-        averageRating,
-        minRating,
-        maxRating,
-
-        // Time periods
+        pendingTotal: Number(totals.pending) || 0,
+        rejectedTotal: 0,
+        spamTotal: 0,
+        verifiedTotal: 0,
+        featuredTotal: 0,
+        averageRating: Number(ratings.average) || 0,
+        minRating: Number(ratings.minimum) || 0,
+        maxRating: Number(ratings.maximum) || 0,
         activity: {
-          today: {
-            total:    reviewsToday,
-            approved: approvedToday,
-            pending:  pendingToday,
-          },
-          thisWeek: {
-            total: reviewsThisWeek,
-          },
-          thisMonth: {
-            total:    reviewsThisMonth,
-            approved: approvedThisMonth,
-          },
+          today: { total: Number(activity.today) || 0, approved: Number(activity.today) || 0, pending: 0 },
+          thisWeek: { total: Number(activity.this_week) || 0 },
+          thisMonth: { total: Number(activity.this_month) || 0, approved: Number(activity.this_month) || 0 },
         },
-
-        // Distribution
-        ratingDistribution,
-
-        // Category breakdown
-        categoryAverages,
-
-        // Trip types
-        tripTypeBreakdown: tripTypeRes.rows.map((r) => ({
-          tripType:  r.trip_type,
-          count:     toInt(r.count),
-          avgRating: toFloat(r.avg_rating),
+        ratingDistribution: [5, 4, 3, 2, 1].map(star => ({
+          star,
+          label: `${star} Star${star === 1 ? "" : "s"}`,
+          count: stars[star],
+          percentage: approvedTotal ? Math.round(stars[star] * 100 / approvedTotal) : 0,
         })),
-
-        // Recent reviews preview
-        recentReviews: recentRes.rows.map((r) => ({
-          id:              r.id,
-          reviewerName:    r.reviewer_name    || "Anonymous",
-          reviewerAvatar:  r.reviewer_avatar  || null,
-          reviewerLocation: r.reviewer_location || null,
-          title:           r.title            || null,
-          body:            r.body             || null,
-          rating:          toFloat(r.overall_rating),
-          tripType:        r.trip_type        || null,
-          travelDate:      r.travel_date      || null,
-          verifiedBooking: r.verified_booking || false,
-          isFeatured:      r.is_featured      || false,
-          destinationId:   r.destination_id   || null,
-          bookingId:       r.booking_id       || null,
-          createdAt:       r.created_at,
+        categoryAverages: {
+          cleanliness: { average: 0, count: 0 },
+          value: { average: 0, count: 0 },
+          service: { average: 0, count: 0 },
+          location: { average: 0, count: 0 },
+        },
+        tripTypeBreakdown: [],
+        recentReviews: recentRes.rows.map(row => ({
+          id: row.id,
+          reviewerName: row.reviewer_name || "Anonymous",
+          reviewerAvatar: row.reviewer_avatar || null,
+          reviewerLocation: null,
+          title: row.title || null,
+          body: row.body || null,
+          rating: Number(row.rating) || 0,
+          tripType: null,
+          travelDate: null,
+          verifiedBooking: false,
+          isFeatured: false,
+          destinationId: row.entity_type === "destination" ? row.entity_id : null,
+          bookingId: null,
+          destinationName: row.destination_name || null,
+          entityType: row.entity_type,
+          createdAt: row.created_at,
         })),
       },
     });
-
   } catch (error) {
-    console.error("[Reviews] ❌ /stats error:", error);
+    console.error("[Reviews] /stats error:", error.message);
     return res.status(500).json({
-      success:  false,
-      message:  "Failed to fetch review stats",
-      error:    error.message,
-      code:     error.code,
-      detail:   error.detail,
+      success: false,
+      message: "Failed to fetch review stats",
+      error: error.message,
+      code: error.code,
     });
   }
 });
 
 
-// ═══════════════════════════════════════════════════════════════
 // GET /api/reviews — Paginated list (public)
 // ═══════════════════════════════════════════════════════════════
 
