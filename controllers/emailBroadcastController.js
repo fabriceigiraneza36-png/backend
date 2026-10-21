@@ -20,6 +20,7 @@
 
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
+const campaignTemplates = require("../utils/emailCampaignTemplates");
 
 /* ── Safe require: email sender ─────────────────────────────────────────────── */
 let _sendEmail = null;
@@ -210,6 +211,36 @@ const resolveRecipients = async (audience, nationality) => {
   return [...seen.values()];
 };
 
+/* ── Reusable campaign templates and send history ─────────────────────────── */
+exports.getTemplates = async (_req, res, next) => {
+  try {
+    return res.json({ success: true, data: await campaignTemplates.listTemplates() });
+  } catch (err) {
+    logger.error("[EmailBroadcast] getTemplates:", err.message);
+    next(err);
+  }
+};
+
+exports.saveTemplate = async (req, res, next) => {
+  try {
+    const data = await campaignTemplates.saveTemplate(req.body, req.user?.id);
+    return res.json({ success: true, data, message: "Email template saved for reuse." });
+  } catch (err) {
+    logger.error("[EmailBroadcast] saveTemplate:", err.message);
+    if (err.status) return res.status(err.status).json({ success: false, error: err.message });
+    next(err);
+  }
+};
+
+exports.getHistory = async (_req, res, next) => {
+  try {
+    return res.json({ success: true, data: await campaignTemplates.getHistory() });
+  } catch (err) {
+    logger.error("[EmailBroadcast] getHistory:", err.message);
+    next(err);
+  }
+};
+
 /* ═══════════════════════════════════════════════════════════════════════════════
    GET /api/email-broadcast/nationalities
 ═══════════════════════════════════════════════════════════════════════════════ */
@@ -265,75 +296,77 @@ exports.preview = async (req, res, next) => {
 ═══════════════════════════════════════════════════════════════════════════════ */
 exports.send = async (req, res, next) => {
   try {
+    await campaignTemplates.ensureSchema();
     const audience = String(req.body?.audience || "all").toLowerCase();
     const nationality = req.body?.nationality;
-    const subject = String(req.body?.subject || "").trim();
-    const body = String(req.body?.body || "").trim();
+    const templateKey = String(req.body?.templateKey || req.body?.template?.key || "").trim();
+    const providedTemplate = req.body?.template && typeof req.body.template === "object" ? req.body.template : {};
+    let storedTemplate = {};
+    if (templateKey) {
+      const allTemplates = await campaignTemplates.listTemplates();
+      storedTemplate = allTemplates.find((item) => item.key === templateKey) || {};
+    }
+    const template = { ...storedTemplate, ...providedTemplate };
+    const subject = String(template.subject || req.body?.subject || "").trim();
+    const body = String(template.body || req.body?.body || "").trim();
     const rawHtml = req.body?.html;
+    const contextData = req.body?.contextData && typeof req.body.contextData === "object" ? req.body.contextData : {};
+    const context = String(template.context || req.body?.context || "general").trim();
 
-    if (!AUDIENCES.has(audience)) {
-      return res.status(400).json({ success: false, error: "Invalid audience" });
-    }
-    if (!subject) {
-      return res.status(422).json({ success: false, error: "Subject is required." });
-    }
-    if (subject.length > MAX_SUBJECT) {
-      return res.status(422).json({ success: false, error: "Subject is too long." });
-    }
-    if (!body && !(rawHtml && String(rawHtml).trim())) {
-      return res.status(422).json({ success: false, error: "Message body is required." });
-    }
-    if (audience === "nationality" && !String(nationality || "").trim()) {
-      return res.status(422).json({ success: false, error: "Nationality is required." });
-    }
+    if (!AUDIENCES.has(audience)) return res.status(400).json({ success: false, error: "Invalid audience" });
+    if (!subject) return res.status(422).json({ success: false, error: "Subject is required." });
+    if (subject.length > MAX_SUBJECT) return res.status(422).json({ success: false, error: "Subject is too long." });
+    if (!body && !(rawHtml && String(rawHtml).trim())) return res.status(422).json({ success: false, error: "Message body is required." });
+    if (audience === "nationality" && !String(nationality || "").trim()) return res.status(422).json({ success: false, error: "Nationality is required." });
 
     const recipients = await resolveRecipients(audience, nationality);
-
     if (!recipients.length) {
-      return res.json({
-        success: true,
-        message: "No recipients matched this audience.",
-        sent: 0,
-        failed: 0,
-        total: 0,
-        audience,
-      });
+      return res.json({ success: true, message: "No opted-in recipients matched this audience.", sent: 0, failed: 0, total: 0, audience, context });
     }
-
-    const html = buildHtml({ subject, body, rawHtml });
 
     let sent = 0;
     let failed = 0;
     const errors = [];
-
-    for (const r of recipients) {
-      const result = await sendOne(r.email, subject, html);
-      if (result.success) {
-        sent += 1;
-      } else {
+    for (const recipient of recipients) {
+      const recipientSubject = personalise(subject, recipient, contextData).slice(0, MAX_SUBJECT);
+      const html = rawHtml && String(rawHtml).trim()
+        ? String(rawHtml)
+        : campaignTemplates.renderHtml({
+            subject: recipientSubject,
+            body,
+            template: {
+              ...template,
+              subject,
+              body,
+              hero_image_url: template.hero_image_url || template.heroImageUrl || "",
+              accent_color: template.accent_color || template.accentColor || "#059669",
+              background_color: template.background_color || template.backgroundColor || "#f0fdf4",
+              cta_label: template.cta_label || template.ctaLabel || "Explore more",
+              cta_url: template.cta_url || template.ctaUrl || contextData.contentUrl || FRONTEND_URL + "/destinations"
+            },
+            recipient,
+            context: contextData
+          });
+      const result = await sendOne(recipient.email, recipientSubject, html);
+      if (result.success) sent += 1;
+      else {
         failed += 1;
-        if (errors.length < 5) errors.push({ email: r.email, error: result.error });
+        if (errors.length < 5) errors.push({ email: recipient.email, error: result.error });
       }
-      // Gentle throttle for large batches to respect SMTP rate limits
-      if (recipients.length > 10) {
-        await new Promise((resolve) => setTimeout(resolve, 120));
-      }
+      if (recipients.length > 10) await new Promise((resolve) => setTimeout(resolve, 120));
     }
 
-    logger.info(
-      `[EmailBroadcast] audience=${audience}${
-        audience === "nationality" ? `(${nationality})` : ""
-      } → ${sent} sent, ${failed} failed of ${recipients.length}`,
-    );
+    await campaignTemplates.logCampaign({
+      templateKey, context, subject, audience, total: recipients.length, sent, failed,
+      details: { nationality: audience === "nationality" ? nationality : null, errors }
+    });
 
+    logger.info("[EmailBroadcast] context=" + context + " audience=" + audience + (audience === "nationality" ? "(" + nationality + ")" : "") + " -> " + sent + " sent, " + failed + " failed of " + recipients.length);
     return res.json({
       success: true,
-      message: `Broadcast sent to ${sent} recipient(s).`,
-      sent,
-      failed,
-      total: recipients.length,
-      audience,
-      errors: failed ? errors : undefined,
+      message: "Email sent to " + sent + " recipient(s).",
+      sent, failed, total: recipients.length, audience, context, templateKey: templateKey || null,
+      errors: failed ? errors : undefined
     });
   } catch (err) {
     logger.error("[EmailBroadcast] send:", err.message);
