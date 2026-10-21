@@ -51,11 +51,12 @@ if (!_send) {
 
 /* Final fallback: console logger */
 if (!_send) {
-  logger.warn("[BookingEmails] ⚠️  No sender found — using console fallback");
-  _send = async ({ to, subject }) => {
-    logger.info(`[BookingEmails:console] TO: ${to} | SUBJECT: ${subject}`);
-    return { success: true, provider: "console" };
-  };
+  logger.error("[BookingEmails] No email provider is configured; booking emails cannot be delivered.");
+  _send = async () => ({
+    success: false,
+    provider: "unconfigured",
+    error: "Email delivery is not configured on the server.",
+  });
 }
 
 /* ─── URL sanitiser ──────────────────────────────────────────────────────── */
