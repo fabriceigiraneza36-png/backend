@@ -21,6 +21,7 @@
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const campaignTemplates = require("../utils/emailCampaignTemplates");
+const campaignQueue = require("../utils/emailCampaignQueue");
 
 /* ── Safe require: email sender ─────────────────────────────────────────────── */
 let _sendEmail = null;
@@ -371,5 +372,241 @@ exports.send = async (req, res, next) => {
   } catch (err) {
     logger.error("[EmailBroadcast] send:", err.message);
     next(err);
+  }
+};
+
+
+/* ── Automatic contextual campaigns: queue, retouch window, and worker ─────── */
+let processingDueCampaigns = false;
+
+const normaliseCampaignOverrides = (input = {}) => {
+  const value = input && typeof input === "object" ? input : {};
+  const out = {};
+  const stringFields = {
+    subject: 200, preheader: 240, headline: 180, body: 10000,
+    hero_image_url: 1200, cta_label: 80, cta_url: 1200,
+  };
+  for (const [key, max] of Object.entries(stringFields)) {
+    if (value[key] !== undefined) out[key] = String(value[key] || "").trim().slice(0, max);
+  }
+  if (value.accent_color !== undefined) {
+    out.accent_color = /^#[0-9a-f]{6}$/i.test(String(value.accent_color)) ? String(value.accent_color) : "#059669";
+  }
+  if (value.background_color !== undefined) {
+    out.background_color = /^#[0-9a-f]{6}$/i.test(String(value.background_color)) ? String(value.background_color) : "#f0fdf4";
+  }
+  if (value.layout !== undefined) {
+    out.layout = ["adventure", "editorial", "minimal"].includes(value.layout) ? value.layout : "editorial";
+  }
+  return out;
+};
+
+const parseJsonObject = (value) => {
+  if (!value) return {};
+  if (typeof value === "object" && !Array.isArray(value)) return value;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch { return {}; }
+};
+
+async function deliverQueuedCampaign(row, io) {
+  const contextData = parseJsonObject(row.data);
+  const overrides = parseJsonObject(row.template_overrides);
+  const templates = await campaignTemplates.listTemplates();
+  const saved = templates.find((item) => item.key === row.template_key);
+  if (!saved) throw new Error("Email template not found: " + row.template_key);
+
+  const template = {
+    ...saved,
+    ...overrides,
+    subject: overrides.subject || saved.subject,
+    body: overrides.body || saved.body,
+    headline: overrides.headline || saved.headline,
+    preheader: overrides.preheader || saved.preheader,
+    hero_image_url: overrides.hero_image_url || contextData.heroImageUrl || saved.hero_image_url || "",
+    accent_color: overrides.accent_color || saved.accent_color || "#059669",
+    background_color: overrides.background_color || saved.background_color || "#f0fdf4",
+    layout: overrides.layout || saved.layout || "editorial",
+    cta_label: overrides.cta_label || saved.cta_label || "Explore more",
+    cta_url: overrides.cta_url || contextData.contentUrl || saved.cta_url || FRONTEND_URL + "/destinations",
+  };
+  const recipients = await resolveRecipients("all");
+  let sent = 0;
+  let failed = 0;
+  const errors = [];
+
+  for (const recipient of recipients) {
+    const recipientSubject = campaignTemplates.personalise(template.subject, recipient, contextData).slice(0, MAX_SUBJECT);
+    const html = campaignTemplates.renderHtml({
+      subject: recipientSubject,
+      body: template.body,
+      template,
+      recipient,
+      context: contextData,
+    });
+    const result = await sendOne(recipient.email, recipientSubject, html);
+    if (result.success) sent += 1;
+    else {
+      failed += 1;
+      if (errors.length < 5) errors.push({ email: recipient.email, error: result.error });
+    }
+    if (recipients.length > 10) await new Promise((resolve) => setTimeout(resolve, 120));
+  }
+
+  const campaignResult = {
+    id: Number(row.id),
+    context: row.context,
+    templateKey: row.template_key,
+    subject: template.subject,
+    total: recipients.length,
+    sent,
+    failed,
+    createdAt: row.created_at,
+  };
+  await campaignTemplates.logCampaign({
+    templateKey: row.template_key,
+    context: row.context,
+    subject: template.subject,
+    audience: "all",
+    total: recipients.length,
+    sent,
+    failed,
+    details: {
+      queueId: Number(row.id),
+      autoTriggered: true,
+      eventData: contextData,
+      errors,
+    },
+  });
+
+  const status = failed > 0 && sent === 0 ? "failed" : "sent";
+  await query(
+    `UPDATE email_campaign_queue
+        SET status=$2, sent_at=NOW(), recipient_count=$3, sent_count=$4, failed_count=$5, last_error=$6
+      WHERE id=$1`,
+    [row.id, status, recipients.length, sent, failed, errors.length ? errors.map((item) => item.error).join("; ").slice(0, 2000) : null],
+  );
+
+  try {
+    io?.to("admin-room").emit("email-campaign:sent", campaignResult);
+  } catch (emitErr) {
+    logger.warn("[EmailCampaignQueue] completion event failed:", emitErr.message);
+  }
+  logger.info("[EmailCampaignQueue] finished id=" + row.id + " sent=" + sent + " failed=" + failed + " recipients=" + recipients.length);
+  return campaignResult;
+}
+
+exports.getPendingQueue = async (_req, res, next) => {
+  try {
+    const data = await campaignQueue.getPendingAdminCampaigns();
+    return res.json({ success: true, data });
+  } catch (err) {
+    logger.error("[EmailBroadcast] getPendingQueue:", err.message);
+    next(err);
+  }
+};
+
+exports.updateQueuedTemplate = async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ success: false, error: "Invalid campaign id." });
+    const overrides = normaliseCampaignOverrides(req.body?.template || req.body || {});
+    const { rows } = await query(
+      `UPDATE email_campaign_queue
+          SET template_overrides = COALESCE(template_overrides, '{}'::jsonb) || $2::jsonb
+        WHERE id=$1 AND status='queued' AND scheduled_at > NOW()
+        RETURNING id, context, template_key, template_overrides, scheduled_at`,
+      [id, JSON.stringify(overrides)],
+    );
+    if (!rows[0]) return res.status(409).json({ success: false, error: "The 10-second retouch window has ended or this campaign has already started sending." });
+    return res.json({ success: true, data: rows[0], message: "Retouch saved. The countdown will continue." });
+  } catch (err) {
+    logger.error("[EmailBroadcast] updateQueuedTemplate:", err.message);
+    next(err);
+  }
+};
+
+exports.sendQueuedNow = async (req, res, next) => {
+  let claimed = null;
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isSafeInteger(id) || id <= 0) return res.status(400).json({ success: false, error: "Invalid campaign id." });
+    const overrides = normaliseCampaignOverrides(req.body?.template || {});
+    const { rows } = await query(
+      `UPDATE email_campaign_queue
+          SET status='sending',
+              sending_at=NOW(),
+              scheduled_at=NOW(),
+              template_overrides=COALESCE(template_overrides, '{}'::jsonb) || $2::jsonb
+        WHERE id=$1 AND status='queued'
+        RETURNING *`,
+      [id, JSON.stringify(overrides)],
+    );
+    claimed = rows[0];
+    if (!claimed) return res.status(409).json({ success: false, error: "This campaign is already sending or has already been handled." });
+    const result = await deliverQueuedCampaign(claimed, req.app.get("io"));
+    return res.json({ success: true, data: result, message: "Email campaign sent." });
+  } catch (err) {
+    if (claimed) {
+      await query(
+        "UPDATE email_campaign_queue SET status='failed', sent_at=NOW(), last_error=$2 WHERE id=$1",
+        [claimed.id, String(err.message || err).slice(0, 2000)],
+      ).catch(() => {});
+    }
+    logger.error("[EmailBroadcast] sendQueuedNow:", err.message);
+    if (claimed) return res.status(500).json({ success: false, error: "The queued campaign could not be sent.", detail: err.message });
+    next(err);
+  }
+};
+
+exports.processDueCampaigns = async (io) => {
+  if (processingDueCampaigns) return;
+  processingDueCampaigns = true;
+  try {
+    await campaignQueue.ensureQueueSchema();
+    for (let i = 0; i < 3; i += 1) {
+      const { rows } = await query(
+        `UPDATE email_campaign_queue
+            SET status='sending', sending_at=NOW()
+          WHERE id = (
+            SELECT id FROM email_campaign_queue
+             WHERE status='queued' AND scheduled_at <= NOW()
+             ORDER BY scheduled_at ASC, id ASC
+             FOR UPDATE SKIP LOCKED
+             LIMIT 1
+          )
+          RETURNING *`,
+      );
+      const row = rows[0];
+      if (!row) break;
+      try {
+        await deliverQueuedCampaign(row, io);
+      } catch (err) {
+        await query(
+          "UPDATE email_campaign_queue SET status='failed', sent_at=NOW(), last_error=$2 WHERE id=$1",
+          [row.id, String(err.message || err).slice(0, 2000)],
+        ).catch(() => {});
+        await campaignTemplates.logCampaign({
+          templateKey: row.template_key,
+          context: row.context,
+          subject: row.template_key,
+          audience: "all",
+          total: 0, sent: 0, failed: 1,
+          details: { queueId: Number(row.id), autoTriggered: true, eventData: parseJsonObject(row.data), error: err.message },
+        }).catch(() => {});
+        logger.error("[EmailCampaignQueue] failed id=" + row.id + ": " + err.message);
+        try {
+          io?.to("admin-room").emit("email-campaign:sent", {
+            id: Number(row.id), context: row.context, templateKey: row.template_key,
+            subject: row.template_key, total: 0, sent: 0, failed: 1, error: err.message,
+          });
+        } catch {}
+      }
+    }
+  } catch (err) {
+    logger.error("[EmailCampaignQueue] worker error:", err.message);
+  } finally {
+    processingDueCampaigns = false;
   }
 };
