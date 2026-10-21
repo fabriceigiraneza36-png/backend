@@ -20,7 +20,7 @@ const enqueuePostAnnouncement = (post, req) => {
       postTitle: post.title || "New Altuvera travel story",
       shortDescription: post.excerpt || "",
       heroImageUrl: post.image_url || "",
-      contentUrl: frontendUrl + "/tips/" + encodeURIComponent(post.slug || ""),
+      contentUrl: frontendUrl + "/post/" + encodeURIComponent(post.slug || ""),
       slug: post.slug,
       postId: post.id,
     },
