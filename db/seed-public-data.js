@@ -63,14 +63,6 @@ const tipsData = [
   { slug: "best-time-visit-east-africa", summary: "Planning your trip? Here's when to visit different destinations.", body: "June-October is prime safari season (dry season). December-February is great for calving season. Gorilla trekking is year-round but best June-August and December-February. Mountain climbing has specific windows. Consider migration patterns for Serengeti.", category: "planning", trip_phase: "preparation", priority_level: 4, read_time_minutes: 6, checklist: ["Check weather patterns", "Consider crowds", "Book gorilla permits early", "Check migration timing"], tags: ["planning", "seasons", "timing"], icon: "📅", is_featured: false, is_active: true }
 ];
 
-const virtualToursData = [
-  { title: "Serengeti Wildlife Plains", slug: "serengeti-wildlife-plains", description: "Experience the vast golden savannah of the Serengeti from your screen. Watch wildebeest herds, lion prides, and elephant families in their natural habitat.", destination_id: null, video_url: "https://www.youtube.com/embed/example1", thumbnail_url: "https://images.unsplash.com/photo-1516426122078-c23e76319801?w=800", duration: "5:30", view_count: 15420, is_featured: true, is_active: true, sort_order: 1 },
-  { title: "Mountain Gorilla Habitat", slug: "mountain-gorilla-habitat", description: "Step into the misty forests of Rwanda's Volcanoes National Park and observe the majestic mountain gorillas in their natural environment.", destination_id: null, video_url: "https://www.youtube.com/embed/example2", thumbnail_url: "https://images.unsplash.com/photo-1544367567-0f2fcb009e0b?w=800", duration: "7:15", view_count: 12350, is_featured: true, is_active: true, sort_order: 2 },
-  { title: "Masai Mara Skybed Camp", slug: "masai-mara-skybed", description: "Sleep under the African stars in our exclusive skybed experience. Watch wildlife pass by from your elevated viewing platform.", destination_id: null, video_url: "https://www.youtube.com/embed/example3", thumbnail_url: "https://images.unsplash.com/photo-1547471080-7cc2caa01a7e?w=800", duration: "4:45", view_count: 9870, is_featured: true, is_active: true, sort_order: 3 },
-  { title: "Rwanda Genocide Memorial", slug: "rwanda-genocide-memorial", description: "A respectful virtual tour of the Kigali Genocide Memorial, offering insights into Rwanda's history and remarkable journey of reconciliation.", destination_id: null, video_url: "https://www.youtube.com/embed/example4", thumbnail_url: "https://images.unsplash.com/photo-1596309329797-fa6d8d8b0f3f?w=800", duration: "12:00", view_count: 8540, is_featured: false, is_active: true, sort_order: 4 },
-  { title: "Victoria Falls Rainbow Experience", slug: "victoria-falls-rainbow", description: "Feel the thunder of one of the world's greatest waterfalls. Experience the spray, the rainbows, and the raw power of nature.", destination_id: null, video_url: "https://www.youtube.com/embed/example5", thumbnail_url: "https://images.unsplash.com/photo-1568430462989-44163eb1752f?w=800", duration: "6:20", view_count: 11200, is_featured: false, is_active: true, sort_order: 5 }
-];
-
 const contactData = [
   {
     full_name: "John Doe",
@@ -223,7 +215,6 @@ async function main() {
     await seedFAQs();
     await seedServices();
     await seedTips();
-    await seedVirtualTours();
     await seedContacts();
     await seedSiteSettings();
     
