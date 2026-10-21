@@ -1013,6 +1013,23 @@ exports.verifyEmail = async (req, res) => {
     );
 
     const verified = updated.rows[0] || booking;
+    if (notifyAdminsImmediately) {
+      try {
+        const detail = await getBookingDetail(verified.id);
+        await notifyAdminsImmediately({
+          type: "booking_email_verified",
+          category: "booking",
+          title: "Booking email verified — prepare itinerary",
+          message: `The traveller confirmed the email for booking ${detail?.booking_number || verified.booking_number || verified.id}. Review the request and prepare a personalized itinerary PDF for the dashboard, or choose image-only itinerary delivery.`,
+          actionUrl: `/bookings/${verified.id}`,
+          actionLabel: "Review booking",
+          priority: "high",
+          metadata: { bookingId: verified.id, bookingNumber: detail?.booking_number || verified.booking_number, destinationName: detail?.destination_name, travellerName: detail?.full_name, email: detail?.email, emailVerifiedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
+        });
+      } catch (notificationError) {
+        logger.warn("[Bookings] verified-email admin notification failed:", notificationError.message);
+      }
+    }
     return reply(200, {
       success: true,
       alreadyVerified: false,
