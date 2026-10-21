@@ -45,25 +45,27 @@ const ensureReviewsTable = async () => {
   await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
 
   // Backfill compatible legacy fields only when they exist in this database.
-  await query(`
-    DO $review_migration$
-    BEGIN
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'overall_rating') THEN
-        EXECUTE 'UPDATE reviews SET rating = overall_rating WHERE rating IS NULL AND overall_rating BETWEEN 1 AND 5';
-      END IF;
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'review') THEN
-        EXECUTE 'UPDATE reviews SET body = review WHERE body IS NULL';
-      ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'content') THEN
-        EXECUTE 'UPDATE reviews SET body = content WHERE body IS NULL';
-      END IF;
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'status') THEN
-        EXECUTE 'UPDATE reviews SET is_approved = (status = ''approved'')';
-      END IF;
-      IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'destination_id') THEN
-        EXECUTE 'UPDATE reviews SET entity_id = destination_id, entity_type = ''destination'' WHERE entity_id IS NULL AND destination_id IS NOT NULL';
-      END IF;
-    END $review_migration$
+  // Backfill compatible legacy fields only when they exist in this database.
+  const legacyColumnResult = await query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema() AND table_name = 'reviews'
   `);
+  const legacyColumns = new Set(legacyColumnResult.rows.map(row => row.column_name));
+  if (legacyColumns.has('overall_rating')) {
+    await query('UPDATE reviews SET rating = overall_rating WHERE rating IS NULL AND overall_rating BETWEEN 1 AND 5');
+  }
+  if (legacyColumns.has('review')) {
+    await query('UPDATE reviews SET body = review WHERE body IS NULL');
+  } else if (legacyColumns.has('content')) {
+    await query('UPDATE reviews SET body = content WHERE body IS NULL');
+  }
+  if (legacyColumns.has('status')) {
+    await query("UPDATE reviews SET is_approved = (status = 'approved')");
+  }
+  if (legacyColumns.has('destination_id')) {
+    await query("UPDATE reviews SET entity_id = destination_id, entity_type = 'destination' WHERE entity_id IS NULL AND destination_id IS NOT NULL");
+  }
 
   // Add indexes for faster aggregation — idempotent
   await query(`
