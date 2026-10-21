@@ -13,49 +13,49 @@ exports.getStats = async (req, res, next) => {
   try {
     const stats = await query(`
       SELECT
-        COUNT(*) AS total_reviews,
-        COUNT(*) FILTER (WHERE status = 'approved') AS approved_reviews,
-        COUNT(*) FILTER (WHERE status = 'pending') AS pending_reviews,
-        AVG(overall_rating) AS avg_rating,
-        MIN(overall_rating) AS min_rating,
-        MAX(overall_rating) AS max_rating,
-        COUNT(DISTINCT destination_id) AS destinations_with_reviews
-      FROM destination_reviews
+        COUNT(*)::INTEGER AS total_reviews,
+        COUNT(*) FILTER (WHERE is_approved = true)::INTEGER AS approved_reviews,
+        COUNT(*) FILTER (WHERE is_approved = false)::INTEGER AS pending_reviews,
+        AVG(rating) FILTER (WHERE is_approved = true AND rating BETWEEN 1 AND 5) AS avg_rating,
+        MIN(rating) FILTER (WHERE is_approved = true AND rating BETWEEN 1 AND 5) AS min_rating,
+        MAX(rating) FILTER (WHERE is_approved = true AND rating BETWEEN 1 AND 5) AS max_rating,
+        COUNT(DISTINCT entity_id) FILTER (WHERE entity_type = 'destination' AND is_approved = true)::INTEGER AS destinations_with_reviews
+      FROM reviews
     `);
 
     const ratingDistribution = await query(`
-      SELECT overall_rating, COUNT(*) AS count
-      FROM destination_reviews
-      WHERE status = 'approved'
-      GROUP BY overall_rating
-      ORDER BY overall_rating DESC
+      SELECT FLOOR(rating)::INTEGER AS rating, COUNT(*)::INTEGER AS count
+      FROM reviews
+      WHERE is_approved = true AND rating BETWEEN 1 AND 5
+      GROUP BY FLOOR(rating)
+      ORDER BY rating DESC
     `);
 
     const recentReviews = await query(`
-      SELECT COUNT(*) AS count
-      FROM destination_reviews
-      WHERE created_at >= NOW() - INTERVAL '30 days'
-      AND status = 'approved'
+      SELECT COUNT(*)::INTEGER AS count
+      FROM reviews
+      WHERE created_at >= NOW() - INTERVAL '30 days' AND is_approved = true
     `);
 
+    const row = stats.rows[0] || {};
     res.json({
       success: true,
       data: {
         overview: {
-          totalReviews: parseInt(stats.rows[0].total_reviews) || 0,
-          approvedReviews: parseInt(stats.rows[0].approved_reviews) || 0,
-          pendingReviews: parseInt(stats.rows[0].pending_reviews) || 0,
-          avgRating: parseFloat(stats.rows[0].avg_rating) || 0,
-          minRating: parseFloat(stats.rows[0].min_rating) || 0,
-          maxRating: parseFloat(stats.rows[0].max_rating) || 0,
-          destinationsWithReviews: parseInt(stats.rows[0].destinations_with_reviews) || 0,
-          recentReviews: parseInt(recentReviews.rows[0].count) || 0,
+          totalReviews: Number(row.total_reviews) || 0,
+          approvedReviews: Number(row.approved_reviews) || 0,
+          pendingReviews: Number(row.pending_reviews) || 0,
+          avgRating: Number(row.avg_rating) || 0,
+          minRating: Number(row.min_rating) || 0,
+          maxRating: Number(row.max_rating) || 0,
+          destinationsWithReviews: Number(row.destinations_with_reviews) || 0,
+          recentReviews: Number(recentReviews.rows[0]?.count) || 0,
         },
         ratingDistribution: ratingDistribution.rows.map(r => ({
-          rating: parseFloat(r.overall_rating),
-          count: parseInt(r.count)
-        }))
-      }
+          rating: Number(r.rating) || 0,
+          count: Number(r.count) || 0,
+        })),
+      },
     });
   } catch (err) {
     next(err);
