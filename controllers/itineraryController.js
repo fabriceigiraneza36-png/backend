@@ -151,9 +151,7 @@ exports.publish = async (req,res,next) => {
     if (!["under_review","itinerary_preparing","revision_requested","itinerary_sent","awaiting_confirmation"].includes(booking.status)) {
       return res.status(409).json({success:false,error:"This booking is not ready for itinerary preparation."});
     }
-    if (booking.identity_portrait_status && booking.identity_portrait_status !== "verified") {
-      return res.status(409).json({success:false,error:"Traveller identity portrait must be verified before the itinerary can be sent."});
-    }
+    // Identity portraits are optional and must not block itinerary preparation.
 
     const itinerary = normalizeItinerary(req.body?.itinerary || req.body || {});
     if (!itinerary.days.length) {
