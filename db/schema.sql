@@ -209,7 +209,6 @@ CREATE TABLE destinations (
   hero_image              VARCHAR(500),
   thumbnail_url           VARCHAR(500),
   video_url               VARCHAR(500),
-  virtual_tour_url        VARCHAR(500),
   duration_days           INTEGER,
   duration_nights         INTEGER,
   duration_display        VARCHAR(100),
@@ -664,10 +663,6 @@ CREATE TABLE pages (
 
 CREATE TRIGGER trg_pages_updated
   BEFORE UPDATE ON pages
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
-
-CREATE TRIGGER trg_virtual_tours_updated
-  BEFORE UPDATE ON virtual_tours
   FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 
 -- 15. Subscribers
