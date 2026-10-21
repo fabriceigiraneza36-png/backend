@@ -20,6 +20,11 @@ try {
     Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+// Automatic contextual email queue: pending preview, retouch, or immediate send
+router.get("/queue/pending", protect, adminOnly, asyncHandler(ctrl.getPendingQueue));
+router.put("/queue/:id/template", protect, adminOnly, asyncHandler(ctrl.updateQueuedTemplate));
+router.post("/queue/:id/send-now", protect, adminOnly, asyncHandler(ctrl.sendQueuedNow));
+
 // Saved email campaign templates and recent send history
 router.get("/templates", protect, adminOnly, asyncHandler(ctrl.getTemplates));
 router.post("/templates", protect, adminOnly, asyncHandler(ctrl.saveTemplate));
