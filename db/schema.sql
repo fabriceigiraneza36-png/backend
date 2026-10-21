@@ -711,7 +711,6 @@ CREATE INDEX idx_bookings_email        ON bookings(email);
 CREATE INDEX idx_gallery_category      ON gallery(category);
 CREATE INDEX idx_faqs_category         ON faqs(category);
 CREATE INDEX idx_contact_read          ON contact_messages(is_read);
-CREATE INDEX idx_virtual_tours_slug    ON virtual_tours(slug);
 
 
 -- ═══════════════════════════════════════════════════════════════════════════════
