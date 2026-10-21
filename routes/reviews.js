@@ -53,6 +53,8 @@ const ensureReviewsTable = async () => {
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'review') THEN
         EXECUTE 'UPDATE reviews SET body = review WHERE body IS NULL';
+      ELSIF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'content') THEN
+        EXECUTE 'UPDATE reviews SET body = content WHERE body IS NULL';
       END IF;
       IF EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'reviews' AND column_name = 'status') THEN
         EXECUTE 'UPDATE reviews SET is_approved = (status = ''approved'')';
