@@ -173,8 +173,11 @@ router.get("/stats", async (_req, res) => {
       query(`
         SELECT
           COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE)::INTEGER AS today,
+          COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE AND is_approved = true)::INTEGER AS approved_today,
+          COUNT(*) FILTER (WHERE created_at >= CURRENT_DATE AND is_approved = false)::INTEGER AS pending_today,
           COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('week', NOW()))::INTEGER AS this_week,
-          COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', NOW()))::INTEGER AS this_month
+          COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', NOW()))::INTEGER AS this_month,
+          COUNT(*) FILTER (WHERE created_at >= DATE_TRUNC('month', NOW()) AND is_approved = true)::INTEGER AS approved_month
         FROM reviews
       `),
       query(`
@@ -216,9 +219,9 @@ router.get("/stats", async (_req, res) => {
         minRating: Number(ratings.minimum) || 0,
         maxRating: Number(ratings.maximum) || 0,
         activity: {
-          today: { total: Number(activity.today) || 0, approved: Number(activity.today) || 0, pending: 0 },
+          today: { total: Number(activity.today) || 0, approved: Number(activity.approved_today) || 0, pending: Number(activity.pending_today) || 0 },
           thisWeek: { total: Number(activity.this_week) || 0 },
-          thisMonth: { total: Number(activity.this_month) || 0, approved: Number(activity.this_month) || 0 },
+          thisMonth: { total: Number(activity.this_month) || 0, approved: Number(activity.approved_month) || 0 },
         },
         ratingDistribution: [5, 4, 3, 2, 1].map(star => ({
           star,
