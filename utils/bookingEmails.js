@@ -1194,10 +1194,34 @@ const sendCancellationRequestAck = async (booking, requestType = "cancellation")
 /* ─────────────────────────────────────────────────────────────────────────
    9. PERSONALIZED ITINERARY
 ───────────────────────────────────────────────────────────────────────── */
-const sendItineraryEmail = async (booking, itinerary = {}) => {
+const sendItineraryEmail = async (booking, itinerary = {}, delivery = {}) => {
   if (!booking?.email) return { success: false };
-  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
   const destination = tripName(booking);
+
+  // Image-only delivery is explicitly chosen by the admin in Itinerary Builder.
+  // Accept HTTPS URLs only; otherwise fail safely instead of sending a broken image.
+  if (delivery?.format === "image") {
+    const imageUrl = String(delivery.imageUrl || "").trim();
+    if (!/^https:\/\//i.test(imageUrl)) {
+      return { success: false, error: "A valid HTTPS itinerary image URL is required." };
+    }
+    const html = shell({
+      preheader: `Your image itinerary for ${destination} is ready.`,
+      heroBadge: statusPill("confirmed"),
+      heroTitle: "Your itinerary image",
+      heroSubtitle: `Prepared for your journey to ${destination}.`,
+      heroImage: booking.destination_image_url || booking.country_image_url || ENV.heroImage,
+      body: `<div style="text-align:center;padding:8px 0 18px"><img src="${esc(imageUrl)}" alt="Your personalized Altuvera itinerary" style="display:block;width:100%;max-width:680px;height:auto;margin:0 auto;border-radius:14px" /></div>`,
+    });
+    return safeSend(
+      booking.email,
+      `Your Itinerary Image — ${safe(booking.booking_number)} | ${ENV.appName}`,
+      html,
+      "sendItineraryEmailImage",
+    );
+  }
+
+  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
   const dayRows = days.map((day, index) => {
     const activities = Array.isArray(day.activities) ? day.activities : [];
     return `
