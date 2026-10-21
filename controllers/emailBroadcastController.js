@@ -328,7 +328,7 @@ exports.send = async (req, res, next) => {
     let failed = 0;
     const errors = [];
     for (const recipient of recipients) {
-      const recipientSubject = personalise(subject, recipient, contextData).slice(0, MAX_SUBJECT);
+      const recipientSubject = campaignTemplates.personalise(subject, recipient, contextData).slice(0, MAX_SUBJECT);
       const html = rawHtml && String(rawHtml).trim()
         ? String(rawHtml)
         : campaignTemplates.renderHtml({
