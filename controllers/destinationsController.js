@@ -7,6 +7,7 @@ const { getUploadedFileUrl } = require('../utils/uploadHelpers')
 const { normalizeImages, urlsOnly, isSafeImageUrl } = require('../utils/media')
 const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require('../utils/cloudinaryCleanup')
 const { startPurge, getPurgeJob } = require('../utils/purgeJobs')
+const { enqueueContextCampaign } = require('../utils/emailCampaignQueue')
 
 const MAX_DESTINATION_IMAGES = Number.POSITIVE_INFINITY // Unlimited gallery images; the UI/API still deduplicates URLs
 
@@ -2232,18 +2233,32 @@ exports.create = async (req, res, next) => {
 
     await syncCountryDestCount(country.id)
      
-    // Send destination alert email to subscribers
-    try {
-      await sendDestinationAlertEmail(rows[0])
-    } catch (emailErr) {
-      console.warn(`${LOG} Destination alert email failed:`, emailErr.message)
-    }
-     
     const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [rows[0].id], 'create:full')
+    const createdDestination = serialize(full[0])
+
+    // Only announce public destinations. Drafts must never trigger marketing.
+    // The queue respects opt-in audiences and gives a live admin 10 seconds to retouch.
+    if (createdDestination?.status === 'published' && createdDestination?.is_active !== false) {
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      enqueueContextCampaign({
+        context: 'new_destination',
+        io: req.app.get('io'),
+        data: {
+          destinationName: createdDestination.name,
+          countryName: createdDestination.country_name || createdDestination.country?.name || '',
+          shortDescription: createdDestination.short_description || createdDestination.description || '',
+          heroImageUrl: createdDestination.hero_image || createdDestination.image_url || createdDestination.thumbnail_url || '',
+          contentUrl: frontendUrl + '/destinations/' + encodeURIComponent(createdDestination.slug || ''),
+          slug: createdDestination.slug,
+          destinationId: createdDestination.id,
+        },
+      }).catch((emailErr) => logger.warn(`${LOG} contextual email queue failed:`, emailErr.message))
+    }
+
     return res.status(201).json({
       success: true,
       message: 'Destination created',
-      data:    serialize(full[0]),
+      data:    createdDestination,
     })
   } catch (err) {
     console.error(`${LOG} create FAILED:`, {
@@ -2430,10 +2445,30 @@ exports.update = async (req, res, next) => {
     }
 
     const full = await safeQuery(`${BASE_SELECT} WHERE d.id = $1`, [id], 'update:full')
+    const updatedDestination = serialize(full[0])
+
+    // Notify only when an existing draft/inactive destination becomes public.
+    if ((publishingNow || activatingNow) && updatedDestination?.status === 'published' && updatedDestination?.is_active !== false) {
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      enqueueContextCampaign({
+        context: 'new_destination',
+        io: req.app.get('io'),
+        data: {
+          destinationName: updatedDestination.name,
+          countryName: updatedDestination.country_name || updatedDestination.country?.name || '',
+          shortDescription: updatedDestination.short_description || updatedDestination.description || '',
+          heroImageUrl: updatedDestination.hero_image || updatedDestination.image_url || updatedDestination.thumbnail_url || '',
+          contentUrl: frontendUrl + '/destinations/' + encodeURIComponent(updatedDestination.slug || ''),
+          slug: updatedDestination.slug,
+          destinationId: updatedDestination.id,
+        },
+      }).catch((emailErr) => logger.warn(`${LOG} contextual email queue failed:`, emailErr.message))
+    }
+
     return res.json({
       success: true,
       message: 'Destination updated',
-      data:    serialize(full[0]),
+      data:    updatedDestination,
     })
   } catch (err) {
     console.error(`${LOG} update FAILED:`, {
