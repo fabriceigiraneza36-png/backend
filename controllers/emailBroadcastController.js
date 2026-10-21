@@ -480,6 +480,9 @@ const normaliseCampaignOverrides = (input = {}) => {
   if (value.layout !== undefined) {
     out.layout = ["adventure", "editorial", "minimal"].includes(value.layout) ? value.layout : "editorial";
   }
+  if (value.animation !== undefined) {
+    out.animation = ["none", "fade", "rise"].includes(value.animation) ? value.animation : "none";
+  }
   return out;
 };
 
