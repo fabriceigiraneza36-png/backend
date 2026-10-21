@@ -716,6 +716,28 @@ exports.processDueCampaigns = async (io) => {
             subject: row.template_key, total: 0, sent: 0, failed: 1, error: err.message,
           });
         } catch {}
+        try {
+          await notifyAdminsImmediately({
+            type: "email_campaign_failed",
+            category: "email",
+            title: "Automatic email campaign failed",
+            message: `The "${String(row.context || "general").replace(/[_-]+/g, " ")}" campaign could not be completed at ${new Date().toLocaleString("en-US")}. Please open Email Studio to review the error and retry.`,
+            actionUrl: "/broadcast",
+            actionLabel: "Review campaign",
+            priority: "high",
+            metadata: {
+              campaignId: Number(row.id),
+              context: row.context,
+              templateKey: row.template_key,
+              campaignError: String(err.message || err).slice(0, 1000),
+              completedAt: new Date().toISOString(),
+              eventData: parseJsonObject(row.data),
+              automatic: true,
+            },
+          });
+        } catch (notificationErr) {
+          logger.warn("[EmailCampaignQueue] persistent failure notification failed:", notificationErr.message);
+        }
       }
     }
   } catch (err) {
