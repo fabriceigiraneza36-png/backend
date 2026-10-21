@@ -1,5 +1,6 @@
 // routes/packages.js
 const express  = require('express')
+const crypto = require('crypto')
 const router   = express.Router()
 const { query: db } = require('../config/db')
 const { authenticate, optionalAuth, requireAdmin } = require('../middleware/auth')
@@ -12,6 +13,7 @@ const { notifyPackageBookingCreated, createNotificationInternal } = require('../
 ═══════════════════════════════════════════════════════════════════════════ */
 let sendBookingReceivedEmail = null
 let sendAdminBookingNotification = null
+let sendBookingConfirmation = null
 
 const EMAIL_PATHS = [
   '../utils/bookingEmails',
@@ -26,6 +28,7 @@ for (const p of EMAIL_PATHS) {
     const mod = require(p)
     sendBookingReceivedEmail     = sendBookingReceivedEmail     || mod.sendBookingReceivedEmail     || null
     sendAdminBookingNotification = sendAdminBookingNotification || mod.sendAdminBookingNotification || null
+    sendBookingConfirmation = sendBookingConfirmation || mod.sendBookingConfirmation || null
     if (sendBookingReceivedEmail || sendAdminBookingNotification) {
       logger.info(`[Packages] ✅ Email service loaded from: ${p}`)
       break
@@ -598,6 +601,7 @@ router.post('/:id/book', authenticate, async (req, res) => {
       special_requests, specialRequests,
       nationality, country_of_residence, preferred_contact_method,
       accommodation_preference, trip_style, budget_range,
+      newsletter_opt_in, newsletterOptIn: newsletterOptInCamel,
     } = req.body
 
     // Ensure the legacy bookings table has every column used by the package-request flow.
@@ -619,6 +623,11 @@ router.post('/:id/book', authenticate, async (req, res) => {
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_type TEXT DEFAULT 'custom'`,
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'website'`,
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS user_id INTEGER`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS email_verified BOOLEAN DEFAULT false`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS email_verified_at TIMESTAMPTZ`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS verification_token VARCHAR(128)`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS verification_token_exp TIMESTAMPTZ`,
+      `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS newsletter_opt_in BOOLEAN DEFAULT false`,
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT NOW()`,
       `ALTER TABLE bookings ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`,
     ];
@@ -649,6 +658,7 @@ router.post('/:id/book', authenticate, async (req, res) => {
     const finalEmail   = String(req.user?.email || guest_email || email || '').trim().toLowerCase()
     const finalPhone   = String(guest_phone || phone || '').trim() || null
     const finalTravel  = travel_date || startDate || null
+    const wantsEmailUpdates = newsletter_opt_in === true || newsletter_opt_in === 'true' || newsletterOptInCamel === true || newsletterOptInCamel === 'true'
     const finalEnd     = end_date  || endDate  || null
     const requestProfile = [
       special_requests || specialRequests,
@@ -713,18 +723,24 @@ router.post('/:id/book', authenticate, async (req, res) => {
       bookingNumber = genBookingRef(p.id)
     }
 
+    // Give package requests the same verification flow as standard bookings.
+    const verificationToken = crypto.randomBytes(32).toString('hex')
+    const tokenExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000)
+
     // Insert booking
     const result = await db(
       `INSERT INTO bookings (
          booking_number, destination_id, package_id, full_name, email, phone,
          travel_date, return_date, number_of_travelers,
          number_of_adults, number_of_children,
-         special_requests, status, booking_type, source, user_id
+         special_requests, status, booking_type, source, user_id,
+         email_verified, email_verified_at, verification_token, verification_token_exp, newsletter_opt_in
        )
        VALUES ($1, $2, $3, $4, $5, $6,
                $7, $8, $9,
                $10, $11,
-               $12, 'pending', 'package', 'website', $13)
+               $12, 'pending', 'package', 'website', $13,
+               false, NULL, $14, $15, $16)
        RETURNING *`,
       [
         bookingNumber,
@@ -740,11 +756,19 @@ router.post('/:id/book', authenticate, async (req, res) => {
         childrenNum,
         finalReqs,
         req.user?.id || null,
+        verificationToken,
+        tokenExpiry,
+        wantsEmailUpdates,
       ],
     )
 
     const booking = result.rows[0]
     logger.info(`[Packages] ✅ Booking created: ${bookingNumber}`)
+
+    if (wantsEmailUpdates && req.user?.id) {
+      db('UPDATE users SET subscribed = true, updated_at = NOW() WHERE id = $1', [req.user.id])
+        .catch((consentErr) => logger.warn('[Packages] Consent preference sync skipped:', consentErr.message))
+    }
 
     // Increment package booking count (graceful if column missing)
     db(
@@ -834,6 +858,9 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
 
     const previous = await db('SELECT * FROM bookings WHERE id = $1 AND package_id = $2 LIMIT 1', [bId, id])
     if (!previous.rows.length) return res.status(404).json({ success: false, error: 'Package booking not found' })
+    if (status === 'confirmed' && !previous.rows[0].email_verified) {
+      return res.status(409).json({ success: false, error: 'Traveller must confirm this request from their email inbox before the package booking can be confirmed.' })
+    }
     const result = await db(
       `UPDATE bookings SET ${sets.join(', ')} WHERE id = ${pi++} AND package_id = ${pi++} RETURNING *`,
       [...params, bId, id],
@@ -848,6 +875,9 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
       const user = userResult.rows[0] || {}
       const email = user.email || booking.email || null
       const traveller = user.full_name || booking.full_name || 'traveller'
+      if (sendBookingConfirmation) {
+        asyncNoThrow(sendBookingConfirmation({ ...booking, package_name: pkgTitle, package_title: pkgTitle, booking_type: 'package' }), 'send package booking confirmation email')
+      }
       if (booking.user_id || email) asyncNoThrow(createNotificationInternal({
         userId: booking.user_id || user.id || null, userEmail: email, type: 'package_request_confirmed', category: 'package',
         title: 'Good news, ' + String(traveller).split(' ')[0] + ' — your trip is confirmed!',
