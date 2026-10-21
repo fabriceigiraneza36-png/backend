@@ -12,7 +12,7 @@ const { enqueueContextCampaign } = require("../utils/emailCampaignQueue");
 
 const enqueuePostAnnouncement = (post, req) => {
   if (!post?.is_published) return;
-  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/+$/, "");
+  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "");
   enqueueContextCampaign({
     context: "new_post",
     io: req.app.get("io"),
