@@ -22,6 +22,7 @@ const { query } = require("../config/db");
 const logger = require("../utils/logger");
 const campaignTemplates = require("../utils/emailCampaignTemplates");
 const campaignQueue = require("../utils/emailCampaignQueue");
+const { notifyAdminsImmediately } = require("./notificationsController");
 
 /* ── Safe require: email sender ─────────────────────────────────────────────── */
 let _sendEmail = null;
@@ -574,6 +575,35 @@ async function deliverQueuedCampaign(row, io) {
   } catch (emitErr) {
     logger.warn("[EmailCampaignQueue] completion event failed:", emitErr.message);
   }
+
+  // Persist a detailed admin-panel notification so the result remains visible
+  // even when the admin was offline while this contextual campaign was sent.
+  try {
+    await notifyAdminsImmediately({
+      type: "email_campaign_sent",
+      category: "email",
+      title: "Contextual email campaign completed",
+      message: `The "${String(row.context || "general").replace(/[_-]+/g, " ")}" campaign finished on ${new Date().toLocaleString("en-US")}. ${sent} email(s) sent, ${failed} failed, out of ${recipients.length} opted-in recipient(s).`,
+      actionUrl: "/broadcast",
+      actionLabel: "View email campaign history",
+      priority: failed > 0 ? "high" : "normal",
+      metadata: {
+        campaignId: Number(row.id),
+        context: row.context,
+        templateKey: row.template_key,
+        subject: template.subject,
+        recipientCount: recipients.length,
+        sentCount: sent,
+        failedCount: failed,
+        completedAt: new Date().toISOString(),
+        eventData: contextData,
+        automatic: true,
+      },
+    });
+  } catch (notificationErr) {
+    logger.warn("[EmailCampaignQueue] persistent admin notification failed:", notificationErr.message);
+  }
+
   logger.info("[EmailCampaignQueue] finished id=" + row.id + " sent=" + sent + " failed=" + failed + " recipients=" + recipients.length);
   return campaignResult;
 }
