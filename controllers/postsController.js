@@ -8,6 +8,24 @@ const { query } = require("../config/db");
 const { slugify, paginate, calculateReadTime } = require("../utils/helpers");
 const { getUploadedFileUrl } = require("../utils/uploadHelpers");
 const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
+const { enqueueContextCampaign } = require("../utils/emailCampaignQueue");
+
+const enqueuePostAnnouncement = (post, req) => {
+  if (!post?.is_published) return;
+  const frontendUrl = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/+$/, "");
+  enqueueContextCampaign({
+    context: "new_post",
+    io: req.app.get("io"),
+    data: {
+      postTitle: post.title || "New Altuvera travel story",
+      shortDescription: post.excerpt || "",
+      heroImageUrl: post.image_url || "",
+      contentUrl: frontendUrl + "/tips/" + encodeURIComponent(post.slug || ""),
+      slug: post.slug,
+      postId: post.id,
+    },
+  }).catch((err) => console.warn("[Posts] contextual email queue failed:", err.message));
+};
 
 // Clean up only after the database no longer references an asset.
 const deleteCloudinaryImage = async (url) => {
@@ -500,6 +518,7 @@ exports.addComment = async (req, res, next) => {
       ]
     );
 
+    if (shouldPublish) enqueuePostAnnouncement(result.rows[0], req);
     res.status(201).json({ status: "success", data: result.rows[0] });
   } catch (err) {
     next(err);
@@ -647,6 +666,7 @@ exports.update = async (req, res, next) => {
     if (req.file && existing.rows[0].image_url) {
       await deleteCloudinaryImage(existing.rows[0].image_url);
     }
+    if (result.rows[0]?.is_published && !existing.rows[0]?.is_published) enqueuePostAnnouncement(result.rows[0], req);
     res.json({ status: "success", data: result.rows[0] });
   } catch (err) {
     if (err.code === "23505") {
@@ -701,6 +721,7 @@ exports.togglePublish = async (req, res, next) => {
       [newPublished, publishedAt, req.params.id]
     );
 
+    if (newPublished) enqueuePostAnnouncement(result.rows[0], req);
     res.json({ status: "success", data: result.rows[0] });
   } catch (err) {
     next(err);
