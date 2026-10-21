@@ -1131,10 +1131,37 @@ router.post("/conversations", protect, async (req, res) => {
     };
     const conversationSubject = String(subject || "").trim() || (destination ? `Question about ${destination}` : null);
 
-    // An explicit subject means the user/admin intentionally requested a new thread.
-    // Keep separate threads possible; getOrCreate remains the fallback for legacy guest sessions.
+    // A signed-in traveler has one private support thread. New-topic requests
+    // reuse that thread and update its context instead of creating duplicates.
     let conv;
-    if (userId && conversationSubject) {
+    const existingPrivate = (!callerIsAdmin && userId)
+      ? await query(
+          `SELECT * FROM conversations
+            WHERE user_id = $1 AND group_id IS NULL AND deleted_at IS NULL
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1`,
+          [userId],
+        )
+      : { rows: [] };
+
+    if (!callerIsAdmin && existingPrivate.rows[0]) {
+      const existing = existingPrivate.rows[0];
+      const mergedMetadata = {
+        ...(existing.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata) ? existing.metadata : {}),
+        ...conversationMetadata,
+      };
+      const updatedExisting = await query(
+        `UPDATE conversations
+            SET subject = COALESCE($2, subject),
+                metadata = $3::jsonb,
+                status = CASE WHEN status = 'closed' THEN 'open' ELSE status END,
+                updated_at = NOW()
+          WHERE id = $1 AND deleted_at IS NULL
+          RETURNING *`,
+        [existing.id, conversationSubject, JSON.stringify(mergedMetadata)],
+      );
+      conv = updatedExisting.rows[0];
+    } else if (userId && conversationSubject) {
       const created = await query(
         `INSERT INTO conversations
           (session_id, user_id, guest_name, guest_email, channel, subject, status, priority,
