@@ -45,7 +45,6 @@ const ensureReviewsTable = async () => {
   await query(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()`);
 
   // Backfill compatible legacy fields only when they exist in this database.
-  // Backfill compatible legacy fields only when they exist in this database.
   const legacyColumnResult = await query(`
     SELECT column_name
     FROM information_schema.columns
