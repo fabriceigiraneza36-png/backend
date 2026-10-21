@@ -2238,7 +2238,7 @@ exports.create = async (req, res, next) => {
 
     // Only announce public destinations. Drafts must never trigger marketing.
     // The queue respects opt-in audiences and gives a live admin 10 seconds to retouch.
-    if (createdDestination?.status === 'published' && createdDestination?.is_active !== false) {
+    if (createdDestination?.status === 'published' && toBool(createdDestination?.is_active)) {
       const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
       enqueueContextCampaign({
         context: 'new_destination',
@@ -2252,7 +2252,7 @@ exports.create = async (req, res, next) => {
           slug: createdDestination.slug,
           destinationId: createdDestination.id,
         },
-      }).catch((emailErr) => logger.warn(`${LOG} contextual email queue failed:`, emailErr.message))
+      }).catch((emailErr) => console.warn(`${LOG} contextual email queue failed:`, emailErr.message))
     }
 
     return res.status(201).json({
@@ -2448,7 +2448,7 @@ exports.update = async (req, res, next) => {
     const updatedDestination = serialize(full[0])
 
     // Notify only when an existing draft/inactive destination becomes public.
-    if ((publishingNow || activatingNow) && updatedDestination?.status === 'published' && updatedDestination?.is_active !== false) {
+    if ((publishingNow || activatingNow) && updatedDestination?.status === 'published' && toBool(updatedDestination?.is_active)) {
       const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
       enqueueContextCampaign({
         context: 'new_destination',
@@ -2462,7 +2462,7 @@ exports.update = async (req, res, next) => {
           slug: updatedDestination.slug,
           destinationId: updatedDestination.id,
         },
-      }).catch((emailErr) => logger.warn(`${LOG} contextual email queue failed:`, emailErr.message))
+      }).catch((emailErr) => console.warn(`${LOG} contextual email queue failed:`, emailErr.message))
     }
 
     return res.json({
