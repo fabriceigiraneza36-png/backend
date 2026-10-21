@@ -20,6 +20,11 @@ try {
     Promise.resolve(fn(req, res, next)).catch(next);
 }
 
+// Saved email campaign templates and recent send history
+router.get("/templates", protect, adminOnly, asyncHandler(ctrl.getTemplates));
+router.post("/templates", protect, adminOnly, asyncHandler(ctrl.saveTemplate));
+router.get("/history", protect, adminOnly, asyncHandler(ctrl.getHistory));
+
 // Distinct nationalities (for the audience dropdown)
 router.get("/nationalities", protect, adminOnly, asyncHandler(ctrl.getNationalities));
 
