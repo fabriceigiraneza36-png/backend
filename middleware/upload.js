@@ -63,7 +63,6 @@ const sanitizeBaseName = (value = "asset") =>
 const getRouteFolder = (req) => {
   const path = `${req.baseUrl || ""}${req.path || ""}`.toLowerCase();
 
-  if (path.includes("virtual-tours")) return "virtual-tours";
   if (path.includes("destinations")) return "destinations";
   if (path.includes("gallery")) return "gallery";
   if (path.includes("posts")) return "posts";
