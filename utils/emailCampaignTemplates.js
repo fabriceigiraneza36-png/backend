@@ -142,4 +142,4 @@ async function getHistory() {
   return result.rows;
 }
 
-module.exports = { DEFAULT_TEMPLATES, ensureSchema, listTemplates, saveTemplate, renderHtml, logCampaign, getHistory };
+module.exports = { DEFAULT_TEMPLATES, ensureSchema, listTemplates, saveTemplate, personalise, renderHtml, logCampaign, getHistory };
