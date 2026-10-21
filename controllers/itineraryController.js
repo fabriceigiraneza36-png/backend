@@ -148,7 +148,7 @@ exports.publish = async (req,res,next) => {
     if (!booking.email_verified) {
       return res.status(409).json({success:false,error:"Traveller has not confirmed this booking request from their email yet."});
     }
-    if (!["under_review","itinerary_preparing","revision_requested","itinerary_sent","awaiting_confirmation"].includes(booking.status)) {
+    if (!["confirmed","under_review","itinerary_preparing","revision_requested","itinerary_sent","awaiting_confirmation"].includes(booking.status)) {
       return res.status(409).json({success:false,error:"This booking is not ready for itinerary preparation."});
     }
     // Identity portraits are optional and must not block itinerary preparation.
