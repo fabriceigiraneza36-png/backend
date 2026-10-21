@@ -462,7 +462,7 @@ router.post('/:id/:action(publish|unpublish)', requireAdmin, async (req, res) =>
     )
     const pkg = result.rows[0]
     if (isPublished && !previous.rows[0].is_published) {
-      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\/+$/, '')
       enqueueContextCampaign({
         context: 'new_package',
         io: req.app.get('io'),
