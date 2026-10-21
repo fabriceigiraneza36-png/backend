@@ -4,6 +4,8 @@
 const crypto = require("crypto");
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
+let notifyAdminsImmediately = null;
+try { ({ notifyAdminsImmediately } = require("./notificationsController")); } catch {}
 
 /* ═════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: HELPERS
@@ -1866,6 +1868,23 @@ exports.updateStatus = async (req, res, next) => {
     );
 
     const full = await getBookingDetail(id);
+
+    if (status === "confirmed" && notifyAdminsImmediately) {
+      try {
+        await notifyAdminsImmediately({
+          type: "booking_ready_for_itinerary",
+          category: "booking",
+          title: "Booking confirmed — prepare itinerary",
+          message: `Booking ${full?.booking_number || id} for ${full?.full_name || "a traveller"} to ${full?.destination_name || "their destination"} is confirmed. Prepare the personalized itinerary PDF and publish it to the traveller dashboard, or send an image-only itinerary.`,
+          actionUrl: `/bookings/${id}`,
+          actionLabel: "Prepare itinerary",
+          priority: "high",
+          metadata: { bookingId: id, bookingNumber: full?.booking_number, destinationName: full?.destination_name, travellerName: full?.full_name, email: full?.email, confirmedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
+        });
+      } catch (notificationError) {
+        logger.warn("[Bookings] itinerary preparation notification failed:", notificationError.message);
+      }
+    }
 
     if (notify_customer && full?.email) {
       if (status === "confirmed" && sendBookingConfirmation) {
