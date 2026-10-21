@@ -2229,7 +2229,7 @@ exports.create = async (req, res, next) => {
     // Only announce public destinations. Drafts must never trigger marketing.
     // The queue respects opt-in audiences and gives a live admin 10 seconds to retouch.
     if (createdDestination?.status === 'published' && toBool(createdDestination?.is_active)) {
-      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\/+$/, '')
       enqueueContextCampaign({
         context: 'new_destination',
         io: req.app.get('io'),
@@ -2439,7 +2439,7 @@ exports.update = async (req, res, next) => {
 
     // Notify only when an existing draft/inactive destination becomes public.
     if ((publishingNow || activatingNow) && updatedDestination?.status === 'published' && toBool(updatedDestination?.is_active)) {
-      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\\/+$/, '')
+      const frontendUrl = (process.env.FRONTEND_URL || 'https://www.altuverasafaris.com').replace(/\/+$/, '')
       enqueueContextCampaign({
         context: 'new_destination',
         io: req.app.get('io'),
