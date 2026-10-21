@@ -4,9 +4,6 @@
 const crypto = require("crypto");
 const { query } = require("../config/db");
 const logger = require("../utils/logger");
-let notifyAdminsImmediately = null;
-try { ({ notifyAdminsImmediately } = require("./notificationsController")); } catch {}
-
 /* ═════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: HELPERS
 ═════════════════════════════════════════════════════════════════════ */
