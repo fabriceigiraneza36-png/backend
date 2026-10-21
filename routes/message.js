@@ -1978,6 +1978,12 @@ function setupMessageSockets(io) {
 
     /* ── Admin joins admin room ── */
     socket.on("join:admin", () => {
+      // This room receives privileged broadcast/notification events. Only
+      // accept admin sockets authenticated by the server's JWT middleware.
+      if (!socket.data?.isAdmin) {
+        logger.warn(`[Socket] Rejected non-admin join:admin request from ${socket.id}`);
+        return;
+      }
       socket.join("admin-room");
       logger.debug(`[Socket] ${socket.id} joined admin-room`);
     });
