@@ -219,3 +219,13 @@ exports.reviewRecoveryRequest = async (req,res) => {
     return res.json({success:true,message:"Review decision recorded. This does not sign in the user or disable security factors.",data:{id:item.id,status:item.status}});
   } catch(e) { return fail(res,500,"Could not record the recovery review."); }
 };
+
+exports.revokeSessions = async (req,res) => {
+  try {
+    const r=await query("UPDATE users SET token_version=COALESCE(token_version,0)+1 WHERE id=$1 RETURNING id",[req.user.id]);
+    if(!r.rows[0]) return fail(res,404,"Account not found.");
+    await query("DELETE FROM login_factor_challenges WHERE user_id=$1",[req.user.id]).catch(()=>{});
+    await query("INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details) VALUES($1,$1,'sessions_revoked','{}'::jsonb)",[req.user.id]).catch(()=>{});
+    return res.json({success:true,message:"All active sessions have been revoked. Sign in again on this device and any other devices."});
+  } catch(e) { return fail(res,500,"Could not revoke active sessions."); }
+};
