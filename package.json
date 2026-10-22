@@ -20,7 +20,8 @@
     "setup-db": "node scripts/setup-database.js",
     "lint": "node scripts/lint-check.js",
     "health": "node scripts/health-check.js",
-    "rebuild": "node scripts/rebuild.js"
+    "rebuild": "node scripts/rebuild.js",
+    "test:security": "node scripts/test-account-security.js"
   },
   "nodemonConfig": {
     "watch": [
@@ -68,7 +69,8 @@
     "web-push": "^3.6.6",
     "winston": "^3.14.2",
     "yamljs": "^0.3.0",
-    "zod": "^3.24.2"
+    "zod": "^3.24.2",
+    "@simplewebauthn/server": "^13.2.2"
   },
   "devDependencies": {
     "cross-env": "^7.0.3",
@@ -80,6 +82,3 @@
     "npm": ">=9"
   }
 }
-
-
-

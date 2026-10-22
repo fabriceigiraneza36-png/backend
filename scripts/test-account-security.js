@@ -1,0 +1,22 @@
+"use strict";
+const assert=require("node:assert/strict");
+process.env.JWT_SECRET=process.env.JWT_SECRET||"local-account-security-unit-test-key";
+const security=require("../controllers/accountSecurityController")._test;
+const crypto=require("../utils/accountSecurityCrypto");
+
+const secret="JBSWY3DPEHPK3PXP";
+const currentStep=Math.floor(Date.now()/30000);
+const code=security.hotp(secret,currentStep);
+assert.match(code,/^\d{6}$/,"TOTP should be six numeric digits");
+assert.equal(security.verifyTotp(secret,code),true,"current TOTP should verify");
+assert.equal(security.verifyTotp(secret,security.hotp(secret,currentStep+10)),false,"a code from outside the accepted time window must fail");
+assert.equal(security.base32Encode(security.base32Decode(secret)),secret,"base32 encode/decode should round-trip");
+const codes=security.createRecoveryCodes();
+assert.equal(codes.length,10,"exactly ten recovery codes should be generated");
+assert.equal(new Set(codes).size,10,"recovery codes must be unique");
+assert.ok(codes.every(value=>/^\d{5}$/.test(value)),"recovery codes must be five numeric digits");
+assert.notEqual(security.hash(codes[0]),security.hash(codes[1]),"recovery codes must have distinct keyed hashes");
+const encrypted=crypto.encryptSecret(secret);
+assert.notEqual(encrypted,secret,"authenticator secret should be encrypted at rest");
+assert.equal(crypto.decryptSecret(encrypted),secret,"encrypted authenticator secret should decrypt");
+console.log("Account security unit checks passed.");

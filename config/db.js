@@ -790,6 +790,7 @@ const ensureUserSchema = async () => {
       { name: "role",               type: "VARCHAR(50) DEFAULT 'user'" },
       { name: "last_login",         type: "TIMESTAMPTZ" },
       { name: "login_counter",      type: "INTEGER DEFAULT 0" },
+      { name: "token_version",      type: "INTEGER DEFAULT 0" },
       { name: "verification_code",  type: "VARCHAR(10)" },
       { name: "code_expiry",        type: "TIMESTAMPTZ" },
       { name: "code_attempts",      type: "INTEGER DEFAULT 0" },
@@ -801,6 +802,31 @@ const ensureUserSchema = async () => {
       { name: "password_hash",      type: "VARCHAR(255)" },
       { name: "subscribed",         type: "BOOLEAN DEFAULT false" },
     ]);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS login_factor_challenges (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        challenge_hash CHAR(64) NOT NULL UNIQUE,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_security (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        totp_secret TEXT,
+        totp_enabled BOOLEAN NOT NULL DEFAULT false,
+        totp_pending_secret TEXT,
+        totp_pending_expires TIMESTAMPTZ,
+        recovery_code_hashes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recovery_codes_remaining INTEGER NOT NULL DEFAULT 0,
+        passkey_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
     await createIndexes([
       `CREATE INDEX IF NOT EXISTS idx_users_email              ON users(email)`,

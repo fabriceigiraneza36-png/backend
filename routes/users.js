@@ -1,6 +1,8 @@
 // routes/users.js
 const router = require("express").Router();
 const auth = require("../controllers/authController");
+const accountSecurity = require("../controllers/accountSecurityController");
+const accountPasskeys = require("../controllers/accountPasskeyController");
 const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
@@ -45,6 +47,7 @@ router.get("/stats", async (req, res) => {
 router.post("/register",    authLimiter,   auth.register);
 router.post("/login",       authLimiter,   auth.login);
 router.post("/verify-code", verifyLimiter, auth.verifyCode);
+router.post("/login/verify-factor", verifyLimiter, auth.completeLoginFactor);
 router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
@@ -83,6 +86,33 @@ router.get("/profile",   protect, auth.getMe);
 router.put("/profile",   protect, auth.updateProfile);
 router.post("/logout",   protect, auth.logout);
 router.delete("/me",     protect, auth.deleteAccount);
+
+// PROTECTED — account verification and recovery factors
+router.get("/security/factors", protect, accountSecurity.status);
+router.post("/security/revoke-sessions", verifyLimiter, protect, accountSecurity.revokeSessions);
+router.post("/security/totp/setup", verifyLimiter, protect, accountSecurity.beginTotp);
+router.post("/security/totp/confirm", verifyLimiter, protect, accountSecurity.confirmTotp);
+router.post("/security/totp/disable", verifyLimiter, protect, accountSecurity.disableTotp);
+router.post("/security/recovery-codes", verifyLimiter, protect, accountSecurity.rotateRecoveryCodes);
+router.post("/security/verify-factor", verifyLimiter, protect, accountSecurity.verifyFactor);
+
+// PROTECTED — WebAuthn passkey management
+router.get("/security/passkeys", protect, accountPasskeys.list);
+router.post("/security/passkeys/register/options", verifyLimiter, protect, accountPasskeys.registrationOptions);
+router.post("/security/passkeys/register/verify", verifyLimiter, protect, accountPasskeys.verifyRegistration);
+router.delete("/security/passkeys/:id", verifyLimiter, protect, accountPasskeys.remove);
+
+// PUBLIC — WebAuthn passkey as the second factor after email OTP
+router.post("/login/passkey/options", verifyLimiter, accountPasskeys.authenticationOptions);
+router.post("/login/passkey/verify", verifyLimiter, accountPasskeys.verifyAuthentication);
+
+// PUBLIC — safe account-recovery request; never logs a user in
+router.post("/account-recovery/request", authLimiter, accountSecurity.requestRecovery);
+router.post("/account-recovery/complete", authLimiter, accountSecurity.completeRecovery);
+
+// ADMIN — Manual account recovery review (must precede the /:id wildcard)
+router.get("/security/recovery-requests", adminProtect, accountSecurity.listRecoveryRequests);
+router.patch("/security/recovery-requests/:id", adminProtect, accountSecurity.reviewRecoveryRequest);
 
 // ═══════════════════════════════════════════════════════════════
 // ADMIN — Export (before /:id wildcard)

@@ -139,17 +139,31 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
   });
 };
 
-const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
-  res.status(statusCode).json({
-    success: true,
-    data: {
-      token:        generateToken(user, "user"),
-      refreshToken: generateRefreshToken(user, "user"),
-      user:         sanitizeUser(user),
-      isNewUser:    isNew,
-      loginCounter: parseInt(user.login_counter ?? 0, 10),
-    },
-  });
+const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
+  try {
+    // Social identity proves control of the provider account, but Altuvera
+    // requires a fresh email OTP for every sign-in as the account's baseline
+    // verification step. No session token is issued from this function.
+    const otp = generateOTP();
+    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    await sendOtpEmail({
+      to: user.email,
+      recipientName: user.full_name || "",
+      otp,
+      purpose: isNew ? "verify" : "login",
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
+    return res.status(statusCode).json({
+      success: true,
+      requiresEmailVerification: true,
+      message: "Check your email for a verification code to complete sign-in.",
+      data: { email: user.email, fullName: user.full_name || "", isNewUser: isNew },
+    });
+  } catch (err) {
+    logger.error("[Auth] Could not send required email verification:", err.message);
+    return res.status(503).json({success:false,message:"We could not send your sign-in code. Please try again shortly."});
+  }
+};
 
 /* ════════════════════════════════════════════════════════════════
    OTP
@@ -431,12 +445,12 @@ exports.login = async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 exports.verifyCode = async (req, res) => {
   try {
-    const code   = String(req.body.code   || "").replace(/\D/g, "").slice(0, 6);
+    const code   = String(req.body.code   || "").trim();
     const nEmail = ((req.body.email || "").trim().toLowerCase());
 
     if (!nEmail || !code)
       return res.status(400).json({ success: false, message: "Email and code are required." });
-    if (code.length !== 6)
+    if (!/^\d{6}$/.test(code))
       return res.status(400).json({ success: false, message: "Enter a valid 6-digit code." });
 
     const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
@@ -444,6 +458,7 @@ exports.verifyCode = async (req, res) => {
       return res.status(404).json({ success: false, message: "Account not found." });
 
     const user = result.rows[0];
+    if (user.is_active === false) return res.status(401).json({success:false,message:"Account deactivated. Contact support."});
 
     if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
       await query(
@@ -474,6 +489,28 @@ exports.verifyCode = async (req, res) => {
         message: remaining > 0
           ? `Incorrect code — ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
           : "Too many attempts. Request a new code.",
+      });
+    }
+
+    // If the account has an authenticator enrolled, email OTP is the first
+    // factor only. Do not issue a session until the second factor is verified.
+    const security = await query("SELECT totp_enabled,recovery_codes_remaining FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
+    // A missing passkey table must never suppress an already-enrolled TOTP factor.
+    const passkeyCount = await query("SELECT COUNT(*) AS count FROM user_passkeys WHERE user_id=$1", [user.id]).catch(() => ({rows:[{count:0}]}));
+    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(passkeyCount.rows[0]?.count || 0) > 0 ? ["passkey"] : [])];
+    if (factorMethods.length) {
+      // Consume the email OTP before issuing a one-time second-factor challenge.
+      // This prevents replaying the same email code to mint multiple challenges.
+      await query("UPDATE users SET verification_code=NULL,code_expiry=NULL,code_attempts=0 WHERE id=$1",[user.id]);
+      await query("DELETE FROM login_factor_challenges WHERE user_id=$1",[user.id]);
+      const challengeId = require("crypto").randomBytes(24).toString("hex");
+      await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
+        VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
+      return res.json({
+        success:true,
+        requiresSecondFactor:true,
+        message:"Email verified. Complete your additional account verification.",
+        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods,fullName:user.full_name||"",username:user.username||user.full_name||"",email:user.email}
       });
     }
 
@@ -514,6 +551,8 @@ exports.verifyCode = async (req, res) => {
         token:        generateToken(freshUser, "user"),
         refreshToken: generateRefreshToken(freshUser, "user"),
         user:         sanitizeUser(freshUser),
+        fullName:     freshUser.full_name || "",
+        username:     freshUser.username || freshUser.full_name || "",
         isNewUser:    isFirstVerification,
         loginCounter: parseInt(freshUser.login_counter, 10),
       },
@@ -521,6 +560,66 @@ exports.verifyCode = async (req, res) => {
   } catch (err) {
     handleError(res, err, "Verification failed");
   }
+};
+
+/* ════════════════════════════════════════════════════════════════
+   COMPLETE SECOND FACTOR — challenge token only, no existing session
+════════════════════════════════════════════════════════════════ */
+exports.completeLoginFactor = async (req, res) => {
+  const crypto = require("crypto");
+  const jwt = require("jsonwebtoken");
+  const { method, code, challengeToken } = req.body || {};
+  try {
+    if (!challengeToken || !code || !["totp","recovery_code"].includes(method))
+      return res.status(400).json({success:false,message:"Challenge, method and code are required."});
+    let challenge;
+    try { challenge = jwt.verify(challengeToken, process.env.JWT_SECRET); } catch {
+      return res.status(401).json({success:false,message:"Verification challenge expired. Sign in again."});
+    }
+    if (challenge.type !== "login_factor" || !challenge.id || !challenge.jti)
+      return res.status(401).json({success:false,message:"Invalid verification challenge."});
+    const challengeHash = crypto.createHash("sha256").update(challenge.jti).digest("hex");
+    const row = await query(`SELECT c.id,c.user_id,c.attempts,u.*,s.totp_enabled,s.totp_secret,s.recovery_code_hashes
+      FROM login_factor_challenges c JOIN users u ON u.id=c.user_id
+      LEFT JOIN user_security s ON s.user_id=u.id
+      WHERE c.challenge_hash=$1 AND c.user_id=$2 AND c.expires_at>NOW()`,[challengeHash,challenge.id]);
+    if (!row.rows[0]) return res.status(401).json({success:false,message:"Challenge expired or already used. Sign in again."});
+    const u = row.rows[0];
+    if (u.attempts >= 5) {
+      await query("DELETE FROM login_factor_challenges WHERE id=$1",[row.rows[0].id]);
+      return res.status(429).json({success:false,message:"Too many attempts. Sign in again to restart verification."});
+    }
+    let valid = false;
+    if (method === "totp" && u.totp_enabled && /^\d{6}$/.test(String(code))) {
+      const alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      const secret=require("../utils/accountSecurityCrypto").decryptSecret(String(u.totp_secret||""));
+      let bits=0,value=0,bytes=[];
+      for(const ch of secret){const n=alphabet.indexOf(ch);if(n<0)break;value=(value<<5)|n;bits+=5;if(bits>=8){bytes.push((value>>(bits-8))&255);bits-=8;}}
+      const supplied=Buffer.from(String(code));
+      const step=Math.floor(Date.now()/30000);
+      valid=[-1,0,1].some(d=>{const msg=Buffer.alloc(8);msg.writeBigUInt64BE(BigInt(step+d));const h=crypto.createHmac("sha1",Buffer.from(bytes)).update(msg).digest();const off=h[h.length-1]&15;const expected=Buffer.from(String((h.readUInt32BE(off)&0x7fffffff)%1000000).padStart(6,"0"));return supplied.length===expected.length&&crypto.timingSafeEqual(supplied,expected);});
+    }
+    if (method === "recovery_code" && /^\d{5}$/.test(String(code)) && Array.isArray(u.recovery_code_hashes)) {
+      const digest=crypto.createHmac("sha256",String(process.env.ACCOUNT_SECURITY_ENCRYPTION_KEY||process.env.JWT_SECRET||"")).update(String(code)).digest("hex");
+      const idx=u.recovery_code_hashes.indexOf(digest);
+      if(idx>=0){
+        const remaining=u.recovery_code_hashes.filter((_,i)=>i!==idx);
+        const consumed=await query(`UPDATE user_security SET recovery_code_hashes=$1::jsonb,recovery_codes_remaining=$2,updated_at=NOW()
+          WHERE user_id=$3 AND recovery_code_hashes=$4::jsonb RETURNING user_id`,[JSON.stringify(remaining),remaining.length,u.id,JSON.stringify(u.recovery_code_hashes)]);
+        valid=consumed.rows.length===1;
+      }
+    }
+    if(!valid){
+      await query("UPDATE login_factor_challenges SET attempts=attempts+1 WHERE id=$1",[row.rows[0].id]);
+      return res.status(401).json({success:false,message:"Verification failed. Check your code and try again."});
+    }
+    const consumedChallenge=await query("DELETE FROM login_factor_challenges WHERE id=$1 AND challenge_hash=$2 RETURNING id",[row.rows[0].id,challengeHash]);
+    if(!consumedChallenge.rows.length) return res.status(401).json({success:false,message:"Challenge already used. Sign in again."});
+    const updated=await query("UPDATE users SET is_verified=true,verification_code=NULL,code_expiry=NULL,code_attempts=0,last_login=NOW(),login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *",[u.id]);
+    if(!updated.rows[0]) return res.status(401).json({success:false,message:"Account is inactive."});
+    const fresh=updated.rows[0];
+    return res.json({success:true,message:"Signed in securely.",data:{token:generateToken(fresh,"user"),refreshToken:generateRefreshToken(fresh,"user"),user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10)}});
+  } catch(err) { handleError(res,err,"Additional verification failed"); }
 };
 
 /* ════════════════════════════════════════════════════════════════
@@ -679,98 +778,7 @@ exports.forgotUsernameSendCode = async (req, res) => {
 /* ════════════════════════════════════════════════════════════════
    FORGOT USERNAME — Step 2: Verify code → username + auto-login
 ════════════════════════════════════════════════════════════════ */
-exports.forgotUsernameVerify = async (req, res) => {
-  try {
-    const code   = String(req.body.code || "").replace(/\D/g, "").slice(0, 6);
-    const nEmail = ((req.body.email || "").trim().toLowerCase());
-
-    if (!nEmail || !code)
-      return res.status(400).json({ success: false, message: "Email and code are required." });
-    if (code.length !== 6)
-      return res.status(400).json({ success: false, message: "Enter a valid 6-digit code." });
-
-    const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
-    if (!result.rows.length)
-      return res.status(404).json({ success: false, message: "Account not found." });
-
-    const user = result.rows[0];
-
-    if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
-      await query(
-        "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
-        [user.id],
-      );
-      return res.status(429).json({
-        success: false,
-        message: "Too many attempts. Request a new code.",
-      });
-    }
-
-    const codeOk     = user.verification_code === code;
-    const notExpired = user.code_expiry && new Date(user.code_expiry) > new Date();
-
-    if (!codeOk || !notExpired) {
-      await query(
-        "UPDATE users SET code_attempts = COALESCE(code_attempts, 0) + 1 WHERE id = $1",
-        [user.id],
-      );
-      const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
-
-      if (codeOk && !notExpired)
-        return res.status(401).json({
-          success: false,
-          message: "Code expired. Request a new one.",
-        });
-
-      return res.status(401).json({
-        success: false,
-        message: remaining > 0
-          ? `Incorrect code — ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
-          : "Too many attempts. Request a new code.",
-      });
-    }
-
-    /* ── Code is valid ── */
-    const updated = await query(
-      `UPDATE users SET
-         is_verified       = true,
-         verification_code = NULL,
-         code_expiry       = NULL,
-         code_attempts     = 0,
-         last_login        = NOW(),
-         login_counter     = COALESCE(login_counter, 0) + 1
-       WHERE id = $1 RETURNING *`,
-      [user.id],
-    );
-
-    const freshUser = updated.rows[0];
-
-    logger.info("[Forgot Username] Verified & auto-login:", {
-      email:    freshUser.email,
-      fullName: freshUser.full_name,
-    });
-
-    return res.json({
-      success: true,
-      message: "Username recovered successfully! You are now signed in.",
-      data: {
-        /* Recovered identity */
-        fullName:     freshUser.full_name || "",
-        username:     freshUser.username  || freshUser.full_name || "",
-        email:        freshUser.email,
-        /* ✅ Full auth tokens — same shape as verifyCode response
-           so UserAuthContext.saveAuth() works without changes       */
-        token:        generateToken(freshUser, "user"),
-        refreshToken: generateRefreshToken(freshUser, "user"),
-        user:         sanitizeUser(freshUser),
-        isNewUser:    false,
-        loginCounter: parseInt(freshUser.login_counter, 10),
-      },
-    });
-  } catch (err) {
-    handleError(res, err, "Forgot username verification failed");
-  }
-};
+exports.forgotUsernameVerify = async (req, res) => exports.verifyCode(req, res);
 
 /* ════════════════════════════════════════════════════════════════
    GOOGLE AUTH
@@ -843,9 +851,8 @@ exports.googleAuth = async (req, res) => {
       bio:        req.body.bio    || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    logger.info("[Google Auth] Success:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    logger.info("[Google Auth] Provider verified; email OTP required:", { email: user.email, isNew });
+    return respondWithAuth(res, user, isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
   }
@@ -926,9 +933,9 @@ exports.completeGoogleSignUp = async (req, res) => {
       [JSON.stringify(profilePreferences), user.id],
     );
 
-    const freshUser = await incrementLoginCounter(profileUpdate.rows[0]?.id || user.id);
-    logger.info("[Google Signup] Complete:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    const verifiedProfile = profileUpdate.rows[0] || user;
+    logger.info("[Google Signup] Profile complete; email OTP required:", { email: verifiedProfile.email, isNew });
+    return respondWithAuth(res, verifiedProfile, isNew);
   } catch (err) {
     handleError(res, err, "Google signup failed");
   }
@@ -1002,9 +1009,8 @@ exports.githubAuth = async (req, res) => {
       bio:        bio || gh.bio || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    logger.info("[GitHub Auth] Success:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    logger.info("[GitHub Auth] Provider verified; email OTP required:", { email: user.email, isNew });
+    return respondWithAuth(res, user, isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
   }
@@ -1087,16 +1093,11 @@ exports.githubCallback = async (req, res) => {
       bio:        gh.bio || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    const tok       = generateToken(freshUser, "user");
-
+    // Never place an access token in the browser URL. The frontend will
+    // restart the standard email-OTP flow for this verified GitHub account.
     return res.redirect(
-      `${FRONTEND}/auth/github/callback?` +
-      new URLSearchParams({
-        code:     tok,
-        provider: "github",
-        isNew:    String(isNew),
-      }),
+      FRONTEND + "/auth/github/callback?" +
+      new URLSearchParams({ emailOtpRequired: "1", email: user.email, provider: "github" }),
     );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
@@ -1408,3 +1409,5 @@ exports.deleteAccount = async (req, res) => {
 
 /* ── Re-export email builders for admin routes ── */
 exports._emailBuilders = require("../utils/email");
+// Restricted internal helper used by the WebAuthn controller after verified passkey assertions.
+exports._securityTokenHelpers = { token: (user) => generateToken(user, "user"), refreshToken: (user) => generateRefreshToken(user, "user"), sanitizeUser };
