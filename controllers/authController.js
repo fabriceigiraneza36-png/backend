@@ -493,8 +493,10 @@ exports.verifyCode = async (req, res) => {
 
     // If the account has an authenticator enrolled, email OTP is the first
     // factor only. Do not issue a session until the second factor is verified.
-    const security = await query("SELECT s.totp_enabled,s.recovery_codes_remaining,COALESCE((SELECT COUNT(*) FROM user_passkeys p WHERE p.user_id=$1),0) AS passkey_count FROM user_security s WHERE s.user_id=$1", [user.id]).catch(async () => ({rows:(await query("SELECT false AS totp_enabled,0 AS recovery_codes_remaining,0 AS passkey_count")).rows}));
-    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(security.rows[0]?.passkey_count || 0) > 0 ? ["passkey"] : [])];
+    const security = await query("SELECT totp_enabled,recovery_codes_remaining FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
+    // A missing passkey table must never suppress an already-enrolled TOTP factor.
+    const passkeyCount = await query("SELECT COUNT(*) AS count FROM user_passkeys WHERE user_id=$1", [user.id]).catch(() => ({rows:[{count:0}]}));
+    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(passkeyCount.rows[0]?.count || 0) > 0 ? ["passkey"] : [])];
     if (factorMethods.length) {
       // Consume the email OTP before issuing a one-time second-factor challenge.
       // This prevents replaying the same email code to mint multiple challenges.
