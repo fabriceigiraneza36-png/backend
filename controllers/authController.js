@@ -445,12 +445,12 @@ exports.login = async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 exports.verifyCode = async (req, res) => {
   try {
-    const code   = String(req.body.code   || "").replace(/\D/g, "").slice(0, 6);
+    const code   = String(req.body.code   || "").trim();
     const nEmail = ((req.body.email || "").trim().toLowerCase());
 
     if (!nEmail || !code)
       return res.status(400).json({ success: false, message: "Email and code are required." });
-    if (code.length !== 6)
+    if (!/^\d{6}$/.test(code))
       return res.status(400).json({ success: false, message: "Enter a valid 6-digit code." });
 
     const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
