@@ -139,17 +139,31 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
   });
 };
 
-const respondWithAuth = (res, user, isNew = false, statusCode = 200) =>
-  res.status(statusCode).json({
-    success: true,
-    data: {
-      token:        generateToken(user, "user"),
-      refreshToken: generateRefreshToken(user, "user"),
-      user:         sanitizeUser(user),
-      isNewUser:    isNew,
-      loginCounter: parseInt(user.login_counter ?? 0, 10),
-    },
-  });
+const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
+  try {
+    // Social identity proves control of the provider account, but Altuvera
+    // requires a fresh email OTP for every sign-in as the account's baseline
+    // verification step. No session token is issued from this function.
+    const otp = generateOTP();
+    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    await sendOtpEmail({
+      to: user.email,
+      recipientName: user.full_name || "",
+      otp,
+      purpose: isNew ? "verify" : "login",
+      expiryMinutes: OTP_EXPIRY_MINUTES,
+    });
+    return res.status(statusCode).json({
+      success: true,
+      requiresEmailVerification: true,
+      message: "Check your email for a verification code to complete sign-in.",
+      data: { email: user.email, fullName: user.full_name || "", isNewUser: isNew },
+    });
+  } catch (err) {
+    logger.error("[Auth] Could not send required email verification:", err.message);
+    return res.status(503).json({success:false,message:"We could not send your sign-in code. Please try again shortly."});
+  }
+};
 
 /* ════════════════════════════════════════════════════════════════
    OTP
