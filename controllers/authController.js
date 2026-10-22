@@ -509,7 +509,7 @@ exports.verifyCode = async (req, res) => {
         success:true,
         requiresSecondFactor:true,
         message:"Email verified. Complete your additional account verification.",
-        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods}
+        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods,fullName:user.full_name||"",username:user.username||user.full_name||"",email:user.email}
       });
     }
 
@@ -550,6 +550,8 @@ exports.verifyCode = async (req, res) => {
         token:        generateToken(freshUser, "user"),
         refreshToken: generateRefreshToken(freshUser, "user"),
         user:         sanitizeUser(freshUser),
+        fullName:     freshUser.full_name || "",
+        username:     freshUser.username || freshUser.full_name || "",
         isNewUser:    isFirstVerification,
         loginCounter: parseInt(freshUser.login_counter, 10),
       },
@@ -775,98 +777,7 @@ exports.forgotUsernameSendCode = async (req, res) => {
 /* ════════════════════════════════════════════════════════════════
    FORGOT USERNAME — Step 2: Verify code → username + auto-login
 ════════════════════════════════════════════════════════════════ */
-exports.forgotUsernameVerify = async (req, res) => {
-  try {
-    const code   = String(req.body.code || "").replace(/\D/g, "").slice(0, 6);
-    const nEmail = ((req.body.email || "").trim().toLowerCase());
-
-    if (!nEmail || !code)
-      return res.status(400).json({ success: false, message: "Email and code are required." });
-    if (code.length !== 6)
-      return res.status(400).json({ success: false, message: "Enter a valid 6-digit code." });
-
-    const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
-    if (!result.rows.length)
-      return res.status(404).json({ success: false, message: "Account not found." });
-
-    const user = result.rows[0];
-
-    if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
-      await query(
-        "UPDATE users SET verification_code = NULL, code_expiry = NULL WHERE id = $1",
-        [user.id],
-      );
-      return res.status(429).json({
-        success: false,
-        message: "Too many attempts. Request a new code.",
-      });
-    }
-
-    const codeOk     = user.verification_code === code;
-    const notExpired = user.code_expiry && new Date(user.code_expiry) > new Date();
-
-    if (!codeOk || !notExpired) {
-      await query(
-        "UPDATE users SET code_attempts = COALESCE(code_attempts, 0) + 1 WHERE id = $1",
-        [user.id],
-      );
-      const remaining = OTP_MAX_ATTEMPTS - ((user.code_attempts ?? 0) + 1);
-
-      if (codeOk && !notExpired)
-        return res.status(401).json({
-          success: false,
-          message: "Code expired. Request a new one.",
-        });
-
-      return res.status(401).json({
-        success: false,
-        message: remaining > 0
-          ? `Incorrect code — ${remaining} attempt${remaining !== 1 ? "s" : ""} remaining.`
-          : "Too many attempts. Request a new code.",
-      });
-    }
-
-    /* ── Code is valid ── */
-    const updated = await query(
-      `UPDATE users SET
-         is_verified       = true,
-         verification_code = NULL,
-         code_expiry       = NULL,
-         code_attempts     = 0,
-         last_login        = NOW(),
-         login_counter     = COALESCE(login_counter, 0) + 1
-       WHERE id = $1 RETURNING *`,
-      [user.id],
-    );
-
-    const freshUser = updated.rows[0];
-
-    logger.info("[Forgot Username] Verified & auto-login:", {
-      email:    freshUser.email,
-      fullName: freshUser.full_name,
-    });
-
-    return res.json({
-      success: true,
-      message: "Username recovered successfully! You are now signed in.",
-      data: {
-        /* Recovered identity */
-        fullName:     freshUser.full_name || "",
-        username:     freshUser.username  || freshUser.full_name || "",
-        email:        freshUser.email,
-        /* ✅ Full auth tokens — same shape as verifyCode response
-           so UserAuthContext.saveAuth() works without changes       */
-        token:        generateToken(freshUser, "user"),
-        refreshToken: generateRefreshToken(freshUser, "user"),
-        user:         sanitizeUser(freshUser),
-        isNewUser:    false,
-        loginCounter: parseInt(freshUser.login_counter, 10),
-      },
-    });
-  } catch (err) {
-    handleError(res, err, "Forgot username verification failed");
-  }
-};
+exports.forgotUsernameVerify = async (req, res) => exports.verifyCode(req, res);
 
 /* ════════════════════════════════════════════════════════════════
    GOOGLE AUTH
