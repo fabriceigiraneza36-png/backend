@@ -157,3 +157,65 @@ exports.requestRecovery = async (req,res) => {
 };
 
 exports._test = {base32Encode,base32Decode,hotp,verifyTotp,hash,createRecoveryCodes};
+
+
+// Admin-only manual recovery queue. A review decision is audited and never
+// silently signs a user in or disables an enrolled factor.
+const ensureRecoveryReviewSchema = async () => {
+  await query(`CREATE TABLE IF NOT EXISTS account_recovery_requests (
+    id BIGSERIAL PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    token_hash CHAR(64) NOT NULL,
+    expires_at TIMESTAMPTZ NOT NULL,
+    status VARCHAR(20) NOT NULL DEFAULT 'pending',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    reviewed_at TIMESTAMPTZ,
+    reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    review_note TEXT
+  )`);
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS review_note TEXT");
+  await query(`CREATE TABLE IF NOT EXISTS account_security_audit (
+    id BIGSERIAL PRIMARY KEY,
+    actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    subject_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+    event_type VARCHAR(80) NOT NULL,
+    details JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+};
+
+exports.listRecoveryRequests = async (req,res) => {
+  try {
+    await ensureRecoveryReviewSchema();
+    const r = await query(`SELECT r.id,r.user_id,u.email,u.full_name,r.status,r.created_at,
+        r.expires_at,r.reviewed_at,r.reviewed_by,r.review_note
+      FROM account_recovery_requests r JOIN users u ON u.id=r.user_id
+      WHERE r.expires_at > NOW() OR r.status='pending'
+      ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC
+      LIMIT 100`);
+    return res.json({success:true,data:r.rows});
+  } catch(e) { return fail(res,500,"Recovery review queue is temporarily unavailable."); }
+};
+
+exports.reviewRecoveryRequest = async (req,res) => {
+  try {
+    const requestId = String(req.params.id || "");
+    const decision = String(req.body.status || "");
+    const note = String(req.body.note || "").trim().slice(0,1000);
+    if (!/^\\d+$/.test(requestId) || !["approved","rejected"].includes(decision))
+      return fail(res,400,"Choose an approved or rejected decision for a valid request.");
+    if (!note) return fail(res,400,"A review note is required for the audit trail.");
+    await ensureRecoveryReviewSchema();
+    const result = await query(`UPDATE account_recovery_requests
+      SET status=$1,reviewed_at=NOW(),reviewed_by=$2,review_note=$3
+      WHERE id=$4 AND status='pending' AND expires_at>NOW()
+      RETURNING id,user_id,status`,[decision,req.user.id,note,requestId]);
+    if (!result.rows[0]) return fail(res,409,"Request is unavailable, expired, or already reviewed.");
+    const item = result.rows[0];
+    await query(`INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details)
+      VALUES($1,$2,$3,$4::jsonb)`,[req.user.id,item.user_id,"account_recovery_review",JSON.stringify({requestId:item.id,decision,note})]);
+    return res.json({success:true,message:"Review decision recorded. This does not sign in the user or disable security factors.",data:{id:item.id,status:item.status}});
+  } catch(e) { return fail(res,500,"Could not record the recovery review."); }
+};
