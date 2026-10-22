@@ -458,6 +458,7 @@ exports.verifyCode = async (req, res) => {
       return res.status(404).json({ success: false, message: "Account not found." });
 
     const user = result.rows[0];
+    if (user.is_active === false) return res.status(401).json({success:false,message:"Account deactivated. Contact support."});
 
     if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
       await query(
