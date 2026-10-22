@@ -790,6 +790,7 @@ const ensureUserSchema = async () => {
       { name: "role",               type: "VARCHAR(50) DEFAULT 'user'" },
       { name: "last_login",         type: "TIMESTAMPTZ" },
       { name: "login_counter",      type: "INTEGER DEFAULT 0" },
+      { name: "token_version",      type: "INTEGER DEFAULT 0" },
       { name: "verification_code",  type: "VARCHAR(10)" },
       { name: "code_expiry",        type: "TIMESTAMPTZ" },
       { name: "code_attempts",      type: "INTEGER DEFAULT 0" },
