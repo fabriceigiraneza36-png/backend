@@ -243,7 +243,7 @@ const upsertSocialUser = async ({
        email, full_name, avatar_url, ${col},
        auth_provider, phone, bio,
        is_verified, is_active, last_login, role, login_counter
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,true,true,NOW(),'user',0)
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,false,true,NOW(),'user',0)
      ON CONFLICT (email) DO UPDATE SET
        ${col}        = EXCLUDED.${col},
        full_name     = COALESCE(NULLIF(EXCLUDED.full_name,''),  users.full_name),
@@ -265,10 +265,8 @@ const upsertSocialUser = async ({
   const user  = result.rows[0];
   const isNew = Boolean(user.is_new_row);
 
-  if (isNew) {
-    sendWelcomeEmail({ to: user.email, recipientName: user.full_name || "" })
-      .catch((err) => logger.warn("[Auth] Welcome email failed:", err.message));
-  }
+  // New social accounts remain unverified until their emailed OTP is accepted.
+  // The welcome email is sent by verifyCode only after successful verification.
 
   return { user, isNew };
 };
