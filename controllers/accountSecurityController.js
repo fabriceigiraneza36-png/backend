@@ -115,9 +115,20 @@ exports.verifyFactor = async (req,res) => {
       const candidate = hash(String(code));
       const idx = s.recovery_code_hashes.indexOf(candidate);
       if (idx >= 0) {
-        const remaining = s.recovery_code_hashes.filter((_,i)=>i!==idx);
-        await query("UPDATE user_security SET recovery_code_hashes=$1::jsonb,recovery_codes_remaining=$2,updated_at=NOW() WHERE user_id=$3",[JSON.stringify(remaining),remaining.length,req.user.id]);
-        return res.json({success:true,verified:true,remaining:remaining.length});
+        // Consume the code atomically in PostgreSQL so simultaneous requests
+        // cannot redeem the same one-time recovery code twice.
+        const consumed = await query(`UPDATE user_security
+          SET recovery_code_hashes = recovery_code_hashes - (
+            SELECT ordinality - 1
+              FROM jsonb_array_elements_text(recovery_code_hashes) WITH ORDINALITY
+             WHERE value = $1 LIMIT 1
+          ),
+          recovery_codes_remaining = GREATEST(0, recovery_codes_remaining - 1),
+          updated_at = NOW()
+          WHERE user_id = $2 AND recovery_code_hashes @> jsonb_build_array($1)
+          RETURNING recovery_codes_remaining`,[candidate,req.user.id]);
+        if (consumed.rowCount !== 1) return fail(res,401,"Verification failed.");
+        return res.json({success:true,verified:true,remaining:Number(consumed.rows[0].recovery_codes_remaining)});
       }
     }
     return fail(res,401,"Verification failed.");
