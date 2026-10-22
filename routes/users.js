@@ -108,6 +108,7 @@ router.post("/login/passkey/verify", verifyLimiter, accountPasskeys.verifyAuthen
 
 // PUBLIC — safe account-recovery request; never logs a user in
 router.post("/account-recovery/request", authLimiter, accountSecurity.requestRecovery);
+router.post("/account-recovery/complete", authLimiter, accountSecurity.completeRecovery);
 
 // ADMIN — Manual account recovery review (must precede the /:id wildcard)
 router.get("/security/recovery-requests", adminProtect, accountSecurity.listRecoveryRequests);
