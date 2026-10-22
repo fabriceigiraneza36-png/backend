@@ -197,7 +197,7 @@ exports.listRecoveryRequests = async (req,res) => {
   try {
     await ensureRecoveryReviewSchema();
     const r = await query(`SELECT r.id,r.user_id,u.email,u.full_name,r.status,r.created_at,
-        r.expires_at,r.reviewed_at,r.reviewed_by,r.review_note
+        r.expires_at,r.reviewed_at,r.reviewed_by,r.review_note,r.recovery_contact_email,r.verified_contact_email,r.completion_expires_at
       FROM account_recovery_requests r JOIN users u ON u.id=r.user_id
       WHERE r.expires_at > NOW() OR r.status='pending'
       ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC
@@ -208,23 +208,54 @@ exports.listRecoveryRequests = async (req,res) => {
 
 exports.reviewRecoveryRequest = async (req,res) => {
   try {
-    const requestId = String(req.params.id || "");
-    const decision = String(req.body.status || "");
-    const note = String(req.body.note || "").trim().slice(0,1000);
-    if (!/^\d+$/.test(requestId) || !["approved","rejected"].includes(decision))
-      return fail(res,400,"Choose an approved or rejected decision for a valid request.");
-    if (!note) return fail(res,400,"A review note is required for the audit trail.");
+    const requestId=String(req.params.id||"");
+    const decision=String(req.body.status||"");
+    const note=String(req.body.note||"").trim().slice(0,1000);
+    if(!/^\d+$/.test(requestId)||!["approved","rejected"].includes(decision)) return fail(res,400,"Choose an approved or rejected decision for a valid request.");
+    if(!note) return fail(res,400,"A review note is required for the audit trail.");
     await ensureRecoveryReviewSchema();
-    const result = await query(`UPDATE account_recovery_requests
-      SET status=$1,reviewed_at=NOW(),reviewed_by=$2,review_note=$3
-      WHERE id=$4 AND status='pending' AND expires_at>NOW()
-      RETURNING id,user_id,status`,[decision,req.user.id,note,requestId]);
-    if (!result.rows[0]) return fail(res,409,"Request is unavailable, expired, or already reviewed.");
-    const item = result.rows[0];
-    await query(`INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details)
-      VALUES($1,$2,$3,$4::jsonb)`,[req.user.id,item.user_id,"account_recovery_review",JSON.stringify({requestId:item.id,decision,note})]);
-    return res.json({success:true,message:"Review decision recorded. This does not sign in the user or disable security factors.",data:{id:item.id,status:item.status}});
+    const current=await query("SELECT id,user_id,recovery_contact_email FROM account_recovery_requests WHERE id=$1 AND status='pending' AND expires_at>NOW()",[requestId]);
+    if(!current.rows[0]) return fail(res,409,"Request is unavailable, expired, or already reviewed.");
+    const item=current.rows[0];
+    let contactEmail=null, token=null, expiresAt=null;
+    if(decision==="approved") {
+      contactEmail=String(req.body.verifiedContactEmail||item.recovery_contact_email||"").trim().toLowerCase();
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return fail(res,400,"A verified alternate email is required to approve recovery.");
+      token=crypto.randomBytes(32).toString("hex");
+      expiresAt=await query("SELECT NOW()+INTERVAL '30 minutes' AS expiry");
+      const saved=await query("UPDATE account_recovery_requests SET status='approved',reviewed_at=NOW(),reviewed_by=$1,review_note=$2,verified_contact_email=$3,completion_token_hash=$4,completion_expires_at=NOW()+INTERVAL '30 minutes' WHERE id=$5 AND status='pending' RETURNING id,user_id,status",[req.user.id,note,contactEmail,hash(token),requestId]);
+      if(!saved.rows[0]) return fail(res,409,"Request was already reviewed.");
+      const base=process.env.FRONTEND_URL||"https://www.altuverasafaris.com";
+      const link=new URL("/account/recovery/complete",base);
+      link.searchParams.set("request",requestId); link.searchParams.set("token",token);
+      try {
+        await sendEmail({to:contactEmail,subject:"Altuvera account recovery link",text:"Your Altuvera account recovery request was approved after manual review. This one-time link expires in 30 minutes and will replace the account email with this verified address, remove existing passkeys/authenticator factors, and revoke active sessions:\n\n"+link.toString()+"\n\nIf you did not request recovery, contact Altuvera support immediately."});
+      } catch(e) {
+        await query("UPDATE account_recovery_requests SET status='pending',reviewed_at=NULL,reviewed_by=NULL,review_note=NULL,verified_contact_email=NULL,completion_token_hash=NULL,completion_expires_at=NULL WHERE id=$1 AND completion_token_hash=$2",[requestId,hash(token)]).catch(()=>{});
+        return fail(res,503,"Recovery email could not be sent. The request remains pending.");
+      }
+    } else {
+      const saved=await query("UPDATE account_recovery_requests SET status='rejected',reviewed_at=NOW(),reviewed_by=$1,review_note=$2 WHERE id=$3 AND status='pending' RETURNING id,user_id,status",[req.user.id,note,requestId]);
+      if(!saved.rows[0]) return fail(res,409,"Request was already reviewed.");
+    }
+    await query("INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details) VALUES($1,$2,$3,$4::jsonb)",[req.user.id,item.user_id,"account_recovery_review",JSON.stringify({requestId:item.id,decision,note,verifiedContactEmail:contactEmail})]);
+    return res.json({success:true,message:decision==="approved"?"Recovery link sent to the manually verified alternate email.":"Recovery request rejected.",data:{id:Number(requestId),status:decision}});
   } catch(e) { return fail(res,500,"Could not record the recovery review."); }
+};
+
+exports.completeRecovery = async (req,res) => {
+  try {
+    const requestId=String(req.body.requestId||"");
+    const token=String(req.body.token||"");
+    const email=String(req.body.email||"").trim().toLowerCase();
+    if(!/^\d+$/.test(requestId)||! /^[a-f0-9]{64}$/i.test(token)||!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
+      return fail(res,400,"The recovery link or email is invalid.");
+    await ensureRecoveryReviewSchema();
+    await query("CREATE TABLE IF NOT EXISTS user_passkeys (id BIGSERIAL PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,credential_id TEXT NOT NULL UNIQUE,public_key BYTEA NOT NULL,counter BIGINT NOT NULL DEFAULT 0,transports JSONB NOT NULL DEFAULT '[]'::jsonb,device_name VARCHAR(120) NOT NULL DEFAULT 'Passkey',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_used_at TIMESTAMPTZ)");
+    const completed=await query("WITH claimed AS (UPDATE account_recovery_requests SET status='completed',completion_token_hash=NULL,completion_expires_at=NULL WHERE id=$1 AND status='approved' AND completion_token_hash=$2 AND completion_expires_at>NOW() AND verified_contact_email=$3 RETURNING user_id,verified_contact_email), changed_user AS (UPDATE users SET email=(SELECT verified_contact_email FROM claimed),is_verified=true,verification_code=NULL,code_expiry=NULL,code_attempts=0,token_version=COALESCE(token_version,0)+1 WHERE id=(SELECT user_id FROM claimed) RETURNING id,email), reset_security AS (UPDATE user_security SET totp_secret=NULL,totp_enabled=false,totp_pending_secret=NULL,totp_pending_expires=NULL,recovery_code_hashes='[]'::jsonb,recovery_codes_remaining=0,passkey_count=0,updated_at=NOW() WHERE user_id=(SELECT id FROM changed_user) RETURNING user_id), removed_passkeys AS (DELETE FROM user_passkeys WHERE user_id=(SELECT id FROM changed_user) RETURNING id), deleted_factor AS (DELETE FROM login_factor_challenges WHERE user_id=(SELECT id FROM changed_user) RETURNING id), deleted_webauthn AS (DELETE FROM webauthn_challenges WHERE user_id=(SELECT id FROM changed_user) RETURNING id), audit AS (INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details) SELECT NULL,id,'account_recovery_completed',jsonb_build_object('newEmail',email) FROM changed_user RETURNING id) SELECT id,email FROM changed_user",[requestId,hash(token),email]);
+    if(!completed.rows[0]) return fail(res,401,"This recovery link is invalid, expired, or already used.");
+    return res.json({success:true,message:"Account recovery completed. Your email has been updated, old security factors and sessions have been revoked. Sign in using the new email address and verify the code sent to it."});
+  } catch(e) { return fail(res,500,"Account recovery could not be completed. Contact Altuvera support."); }
 };
 
 exports.revokeSessions = async (req,res) => {
