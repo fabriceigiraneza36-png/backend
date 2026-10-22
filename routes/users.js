@@ -1,6 +1,7 @@
 // routes/users.js
 const router = require("express").Router();
 const auth = require("../controllers/authController");
+const accountSecurity = require("../controllers/accountSecurityController");
 const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
@@ -83,6 +84,17 @@ router.get("/profile",   protect, auth.getMe);
 router.put("/profile",   protect, auth.updateProfile);
 router.post("/logout",   protect, auth.logout);
 router.delete("/me",     protect, auth.deleteAccount);
+
+// PROTECTED — account verification and recovery factors
+router.get("/security/factors", protect, accountSecurity.status);
+router.post("/security/totp/setup", verifyLimiter, protect, accountSecurity.beginTotp);
+router.post("/security/totp/confirm", verifyLimiter, protect, accountSecurity.confirmTotp);
+router.post("/security/totp/disable", verifyLimiter, protect, accountSecurity.disableTotp);
+router.post("/security/recovery-codes", verifyLimiter, protect, accountSecurity.rotateRecoveryCodes);
+router.post("/security/verify-factor", verifyLimiter, protect, accountSecurity.verifyFactor);
+
+// PUBLIC — safe account-recovery request; never logs a user in
+router.post("/account-recovery/request", authLimiter, accountSecurity.requestRecovery);
 
 // ═══════════════════════════════════════════════════════════════
 // ADMIN — Export (before /:id wildcard)
