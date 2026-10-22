@@ -477,6 +477,21 @@ exports.verifyCode = async (req, res) => {
       });
     }
 
+    // If the account has an authenticator enrolled, email OTP is the first
+    // factor only. Do not issue a session until the second factor is verified.
+    const security = await query("SELECT totp_enabled FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
+    if (security.rows[0]?.totp_enabled) {
+      const challengeId = require("crypto").randomBytes(24).toString("hex");
+      await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
+        VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
+      return res.json({
+        success:true,
+        requiresSecondFactor:true,
+        message:"Email verified. Complete your additional account verification.",
+        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:["totp","recovery_code"]}
+      });
+    }
+
     const isFirstVerification = !user.is_verified;
 
     const updated = await query(
