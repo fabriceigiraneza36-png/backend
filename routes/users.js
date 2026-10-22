@@ -2,6 +2,7 @@
 const router = require("express").Router();
 const auth = require("../controllers/authController");
 const accountSecurity = require("../controllers/accountSecurityController");
+const accountPasskeys = require("../controllers/accountPasskeyController");
 const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
@@ -93,6 +94,16 @@ router.post("/security/totp/confirm", verifyLimiter, protect, accountSecurity.co
 router.post("/security/totp/disable", verifyLimiter, protect, accountSecurity.disableTotp);
 router.post("/security/recovery-codes", verifyLimiter, protect, accountSecurity.rotateRecoveryCodes);
 router.post("/security/verify-factor", verifyLimiter, protect, accountSecurity.verifyFactor);
+
+// PROTECTED — WebAuthn passkey management
+router.get("/security/passkeys", protect, accountPasskeys.list);
+router.post("/security/passkeys/register/options", verifyLimiter, protect, accountPasskeys.registrationOptions);
+router.post("/security/passkeys/register/verify", verifyLimiter, protect, accountPasskeys.verifyRegistration);
+router.delete("/security/passkeys/:id", verifyLimiter, protect, accountPasskeys.remove);
+
+// PUBLIC — WebAuthn passkey as the second factor after email OTP
+router.post("/login/passkey/options", verifyLimiter, accountPasskeys.authenticationOptions);
+router.post("/login/passkey/verify", verifyLimiter, accountPasskeys.verifyAuthentication);
 
 // PUBLIC — safe account-recovery request; never logs a user in
 router.post("/account-recovery/request", authLimiter, accountSecurity.requestRecovery);
