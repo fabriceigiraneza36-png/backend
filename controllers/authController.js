@@ -479,8 +479,9 @@ exports.verifyCode = async (req, res) => {
 
     // If the account has an authenticator enrolled, email OTP is the first
     // factor only. Do not issue a session until the second factor is verified.
-    const security = await query("SELECT totp_enabled FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
-    if (security.rows[0]?.totp_enabled) {
+    const security = await query("SELECT s.totp_enabled, COALESCE((SELECT COUNT(*) FROM user_passkeys p WHERE p.user_id=$1),0) AS passkey_count FROM user_security s WHERE s.user_id=$1", [user.id]).catch(async () => ({rows:(await query("SELECT false AS totp_enabled,0 AS passkey_count")).rows}));
+    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp","recovery_code"] : []), ...(Number(security.rows[0]?.passkey_count || 0) > 0 ? ["passkey"] : [])];
+    if (factorMethods.length) {
       const challengeId = require("crypto").randomBytes(24).toString("hex");
       await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
         VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
@@ -488,7 +489,7 @@ exports.verifyCode = async (req, res) => {
         success:true,
         requiresSecondFactor:true,
         message:"Email verified. Complete your additional account verification.",
-        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:["totp","recovery_code"]}
+        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods}
       });
     }
 
@@ -1483,3 +1484,5 @@ exports.deleteAccount = async (req, res) => {
 
 /* ── Re-export email builders for admin routes ── */
 exports._emailBuilders = require("../utils/email");
+// Restricted internal helper used by the WebAuthn controller after verified passkey assertions.
+exports._securityTokenHelpers = { token: (user) => generateToken(user, "user"), refreshToken: (user) => generateRefreshToken(user, "user"), sanitizeUser };
