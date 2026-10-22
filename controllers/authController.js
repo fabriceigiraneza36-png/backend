@@ -1181,16 +1181,11 @@ exports.githubCallback = async (req, res) => {
       bio:        gh.bio || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    const tok       = generateToken(freshUser, "user");
-
+    // Never place an access token in the browser URL. The frontend will
+    // restart the standard email-OTP flow for this verified GitHub account.
     return res.redirect(
-      `${FRONTEND}/auth/github/callback?` +
-      new URLSearchParams({
-        code:     tok,
-        provider: "github",
-        isNew:    String(isNew),
-      }),
+      FRONTEND + "/auth/github/callback?" +
+      new URLSearchParams({ emailOtpRequired: "1", email: user.email, provider: "github" }),
     );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
