@@ -479,8 +479,8 @@ exports.verifyCode = async (req, res) => {
 
     // If the account has an authenticator enrolled, email OTP is the first
     // factor only. Do not issue a session until the second factor is verified.
-    const security = await query("SELECT s.totp_enabled, COALESCE((SELECT COUNT(*) FROM user_passkeys p WHERE p.user_id=$1),0) AS passkey_count FROM user_security s WHERE s.user_id=$1", [user.id]).catch(async () => ({rows:(await query("SELECT false AS totp_enabled,0 AS passkey_count")).rows}));
-    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp","recovery_code"] : []), ...(Number(security.rows[0]?.passkey_count || 0) > 0 ? ["passkey"] : [])];
+    const security = await query("SELECT s.totp_enabled,s.recovery_codes_remaining,COALESCE((SELECT COUNT(*) FROM user_passkeys p WHERE p.user_id=$1),0) AS passkey_count FROM user_security s WHERE s.user_id=$1", [user.id]).catch(async () => ({rows:(await query("SELECT false AS totp_enabled,0 AS recovery_codes_remaining,0 AS passkey_count")).rows}));
+    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(security.rows[0]?.passkey_count || 0) > 0 ? ["passkey"] : [])];
     if (factorMethods.length) {
       const challengeId = require("crypto").randomBytes(24).toString("hex");
       await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
