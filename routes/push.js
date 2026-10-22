@@ -10,10 +10,10 @@ const ctrl   = require('../controllers/pushController')
 const { protect, adminOnly } = require('../middleware/auth')
 const asyncHandler = require('../middleware/asyncHandler')
 
-router.post('/subscribe',       protect, adminOnly, asyncHandler(ctrl.subscribe))
-router.post('/unsubscribe',     protect, adminOnly, asyncHandler(ctrl.unsubscribe))
+router.post('/subscribe',       protect, asyncHandler(ctrl.subscribe))
+router.post('/unsubscribe',     protect, asyncHandler(ctrl.unsubscribe))
 router.get('/vapid-public-key', asyncHandler(ctrl.getVapidPublicKey))
-router.get('/my-subscriptions', protect, adminOnly, asyncHandler(ctrl.mySubscriptions))
+router.get('/my-subscriptions', protect, asyncHandler(ctrl.mySubscriptions))
 router.post('/test',            protect, adminOnly, asyncHandler(ctrl.test))
 
 module.exports = router
