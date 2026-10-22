@@ -89,6 +89,7 @@ router.delete("/me",     protect, auth.deleteAccount);
 
 // PROTECTED — account verification and recovery factors
 router.get("/security/factors", protect, accountSecurity.status);
+router.post("/security/revoke-sessions", verifyLimiter, protect, accountSecurity.revokeSessions);
 router.post("/security/totp/setup", verifyLimiter, protect, accountSecurity.beginTotp);
 router.post("/security/totp/confirm", verifyLimiter, protect, accountSecurity.confirmTotp);
 router.post("/security/totp/disable", verifyLimiter, protect, accountSecurity.disableTotp);
