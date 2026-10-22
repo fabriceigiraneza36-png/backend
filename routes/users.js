@@ -46,6 +46,7 @@ router.get("/stats", async (req, res) => {
 router.post("/register",    authLimiter,   auth.register);
 router.post("/login",       authLimiter,   auth.login);
 router.post("/verify-code", verifyLimiter, auth.verifyCode);
+router.post("/login/verify-factor", verifyLimiter, auth.completeLoginFactor);
 router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
