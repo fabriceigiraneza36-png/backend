@@ -474,7 +474,7 @@ const createNotificationInternal = async ({
     targetScope === "individual" ||
     targetScope === "all" ||
     targetScope === "admin" ||
-    (targetScope === "role" && ["admin", "manager"].includes(targetRole))
+    (targetScope === "role" && targetRole)
   )) {
     ;(async () => {
       try {
@@ -490,15 +490,18 @@ const createNotificationInternal = async ({
           } else {
             return
           }
-        } else if (targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))) {
+        } else if (targetScope === "admin") {
           sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = ANY($1)"
           params.push(["admin", "manager"])
+        } else if (targetScope === "role" && targetRole) {
+          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = $1"
+          params.push(targetRole)
         }
         const { rows } = await query(sql, params)
         if (!rows.length) return
         const isAdminNotice = targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))
         const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/$/, "")
-        const requestedUrl = actionUrl || (isAdminNotice ? "/notifications" : "/dashboard/notifications")
+        const requestedUrl = actionUrl || (isAdminNotice ? "/notifications" : "/notifications")
         const url = /^https?:\/\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`
         await pushUtility.sendPushToSubscriptions(rows, {
           title: title || "Altuvera Safaris",
