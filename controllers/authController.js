@@ -539,6 +539,66 @@ exports.verifyCode = async (req, res) => {
 };
 
 /* ════════════════════════════════════════════════════════════════
+   COMPLETE SECOND FACTOR — challenge token only, no existing session
+════════════════════════════════════════════════════════════════ */
+exports.completeLoginFactor = async (req, res) => {
+  const crypto = require("crypto");
+  const jwt = require("jsonwebtoken");
+  const { method, code, challengeToken } = req.body || {};
+  try {
+    if (!challengeToken || !code || !["totp","recovery_code"].includes(method))
+      return res.status(400).json({success:false,message:"Challenge, method and code are required."});
+    let challenge;
+    try { challenge = jwt.verify(challengeToken, process.env.JWT_SECRET); } catch {
+      return res.status(401).json({success:false,message:"Verification challenge expired. Sign in again."});
+    }
+    if (challenge.type !== "login_factor" || !challenge.id || !challenge.jti)
+      return res.status(401).json({success:false,message:"Invalid verification challenge."});
+    const challengeHash = crypto.createHash("sha256").update(challenge.jti).digest("hex");
+    const row = await query(`SELECT c.id,c.user_id,c.attempts,u.*,s.totp_enabled,s.totp_secret,s.recovery_code_hashes
+      FROM login_factor_challenges c JOIN users u ON u.id=c.user_id
+      LEFT JOIN user_security s ON s.user_id=u.id
+      WHERE c.challenge_hash=$1 AND c.user_id=$2 AND c.expires_at>NOW()`,[challengeHash,challenge.id]);
+    if (!row.rows[0]) return res.status(401).json({success:false,message:"Challenge expired or already used. Sign in again."});
+    const u = row.rows[0];
+    if (u.attempts >= 5) {
+      await query("DELETE FROM login_factor_challenges WHERE id=$1",[u.id]);
+      return res.status(429).json({success:false,message:"Too many attempts. Sign in again to restart verification."});
+    }
+    let valid = false;
+    if (method === "totp" && u.totp_enabled && /^\\d{6}$/.test(String(code))) {
+      const alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
+      const secret=String(u.totp_secret||"");
+      let bits=0,value=0,bytes=[];
+      for(const ch of secret){const n=alphabet.indexOf(ch);if(n<0)break;value=(value<<5)|n;bits+=5;if(bits>=8){bytes.push((value>>(bits-8))&255);bits-=8;}}
+      const supplied=Buffer.from(String(code));
+      const step=Math.floor(Date.now()/30000);
+      valid=[-1,0,1].some(d=>{const msg=Buffer.alloc(8);msg.writeBigUInt64BE(BigInt(step+d));const h=crypto.createHmac("sha1",Buffer.from(bytes)).update(msg).digest();const off=h[h.length-1]&15;const expected=Buffer.from(String((h.readUInt32BE(off)&0x7fffffff)%1000000).padStart(6,"0"));return supplied.length===expected.length&&crypto.timingSafeEqual(supplied,expected);});
+    }
+    if (method === "recovery_code" && /^\\d{5}$/.test(String(code)) && Array.isArray(u.recovery_code_hashes)) {
+      const digest=crypto.createHash("sha256").update(String(code)).digest("hex");
+      const idx=u.recovery_code_hashes.indexOf(digest);
+      if(idx>=0){
+        const remaining=u.recovery_code_hashes.filter((_,i)=>i!==idx);
+        const consumed=await query(`UPDATE user_security SET recovery_code_hashes=$1::jsonb,recovery_codes_remaining=$2,updated_at=NOW()
+          WHERE user_id=$3 AND recovery_code_hashes=$4::jsonb RETURNING user_id`,[JSON.stringify(remaining),remaining.length,u.id,JSON.stringify(u.recovery_code_hashes)]);
+        valid=consumed.rows.length===1;
+      }
+    }
+    if(!valid){
+      await query("UPDATE login_factor_challenges SET attempts=attempts+1 WHERE id=$1",[row.rows[0].id]);
+      return res.status(401).json({success:false,message:"Verification failed. Check your code and try again."});
+    }
+    const consumedChallenge=await query("DELETE FROM login_factor_challenges WHERE id=$1 AND challenge_hash=$2 RETURNING id",[row.rows[0].id,challengeHash]);
+    if(!consumedChallenge.rows.length) return res.status(401).json({success:false,message:"Challenge already used. Sign in again."});
+    const updated=await query("UPDATE users SET last_login=NOW(),login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *",[u.id]);
+    if(!updated.rows[0]) return res.status(401).json({success:false,message:"Account is inactive."});
+    const fresh=updated.rows[0];
+    return res.json({success:true,message:"Signed in securely.",data:{token:generateToken(fresh,"user"),refreshToken:generateRefreshToken(fresh,"user"),user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10)}});
+  } catch(err) { handleError(res,err,"Additional verification failed"); }
+};
+
+/* ════════════════════════════════════════════════════════════════
    RESEND CODE
    ✅ Now returns fullName in the response so frontend can
       remind the user of their registered name
