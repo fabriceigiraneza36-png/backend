@@ -204,7 +204,7 @@ exports.reviewRecoveryRequest = async (req,res) => {
     const requestId = String(req.params.id || "");
     const decision = String(req.body.status || "");
     const note = String(req.body.note || "").trim().slice(0,1000);
-    if (!/^\\d+$/.test(requestId) || !["approved","rejected"].includes(decision))
+    if (!/^\d+$/.test(requestId) || !["approved","rejected"].includes(decision))
       return fail(res,400,"Choose an approved or rejected decision for a valid request.");
     if (!note) return fail(res,400,"A review note is required for the audit trail.");
     await ensureRecoveryReviewSchema();
