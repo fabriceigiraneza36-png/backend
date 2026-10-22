@@ -239,7 +239,8 @@ body{margin:0;padding:0;width:100%!important;background:#f0fdf4;
 .otp-box{background:#f0fdf4;border:2px solid #6ee7b7;border-radius:16px;
           padding:28px 40px;display:inline-block;}
 .otp-code{font-family:'Courier New',monospace;font-size:44px;font-weight:900;
-           letter-spacing:14px;color:#047857;display:block;text-align:center;}
+           letter-spacing:14px;color:#047857;display:block;text-align:center;
+           user-select:all;-webkit-user-select:all;}
 .cta-btn{display:inline-block;padding:14px 36px;
           background:linear-gradient(135deg,#059669,#047857);
           color:#ffffff!important;text-decoration:none;border-radius:40px;
@@ -354,6 +355,7 @@ const buildOtpText = ({ otp, recipientName = "", purpose = "verify", expiryMinut
     recipientName ? `Hello ${recipientName},` : "Hello,",
     "",
     `Your verification code: ${otp}`,
+    "Copy tip: Select the code, then choose Copy (or press and hold on mobile).",
     "",
     `Expires in ${expiryMinutes} minutes. Do not share this code.`,
     "",
