@@ -562,7 +562,7 @@ exports.completeLoginFactor = async (req, res) => {
     if (!row.rows[0]) return res.status(401).json({success:false,message:"Challenge expired or already used. Sign in again."});
     const u = row.rows[0];
     if (u.attempts >= 5) {
-      await query("DELETE FROM login_factor_challenges WHERE id=$1",[u.id]);
+      await query("DELETE FROM login_factor_challenges WHERE id=$1",[row.rows[0].id]);
       return res.status(429).json({success:false,message:"Too many attempts. Sign in again to restart verification."});
     }
     let valid = false;
