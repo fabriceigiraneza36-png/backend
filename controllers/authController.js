@@ -992,6 +992,32 @@ exports.githubAuth = async (req, res) => {
         message: "Could not retrieve email from GitHub.",
       });
 
+    const normalizedEmail = ghEmail.toLowerCase();
+    const existing = await query(
+      "SELECT id FROM users WHERE email = $1 OR github_id = $2 LIMIT 1",
+      [normalizedEmail, String(gh.id)],
+    );
+    if (!existing.rows.length) {
+      if (!JWT_SECRET) throw Object.assign(new Error("Authentication is not configured."), { status: 500 });
+      const profileToken = jwt.sign({
+        purpose: "github_signup_profile",
+        providerId: String(gh.id),
+        email: normalizedEmail,
+        name: gh.name || gh.login || normalizedEmail.split("@")[0],
+        avatar: gh.avatar_url || "",
+        bio: bio || gh.bio || "",
+      }, JWT_SECRET, { expiresIn: "15m", issuer: "altuvera" });
+      return res.status(200).json({
+        success: true,
+        data: {
+          requiresProfile: true,
+          isNewUser: true,
+          profileToken,
+          githubProfile: { email: normalizedEmail, name: gh.name || gh.login || normalizedEmail.split("@")[0], avatar: gh.avatar_url || "" },
+        },
+      });
+    }
+
     const { user, isNew } = await upsertSocialUser({
       provider:   "github",
       providerId: String(gh.id),
@@ -1007,6 +1033,59 @@ exports.githubAuth = async (req, res) => {
     return respondWithAuth(res, freshUser, isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
+  }
+};
+
+/* Finish a first-time GitHub signup using the short-lived profile token. */
+exports.completeGithubSignUp = async (req, res) => {
+  try {
+    const profileToken = String(req.body.profileToken || "");
+    if (!profileToken || !JWT_SECRET) {
+      return res.status(400).json({ success: false, message: "GitHub profile verification is required." });
+    }
+    let profile;
+    try {
+      profile = jwt.verify(profileToken, JWT_SECRET, { issuer: "altuvera" });
+    } catch {
+      return res.status(401).json({ success: false, message: "Your GitHub signup session expired. Please connect GitHub again." });
+    }
+    if (profile.purpose !== "github_signup_profile" || !profile.providerId || !profile.email) {
+      return res.status(401).json({ success: false, message: "Invalid GitHub signup session." });
+    }
+    const fullName = String(req.body.fullName || profile.name || "").trim().slice(0, 100);
+    if (fullName.length < 2) {
+      return res.status(400).json({ success: false, message: "Please provide your full name to finish signup." });
+    }
+    const existing = await query(
+      "SELECT id FROM users WHERE email = $1 OR github_id = $2 LIMIT 1",
+      [profile.email.toLowerCase(), String(profile.providerId)],
+    );
+    if (existing.rows.length) {
+      return res.status(409).json({ success: false, message: "An account with this email already exists. Please sign in instead." });
+    }
+    const { user } = await upsertSocialUser({
+      provider: "github",
+      providerId: String(profile.providerId),
+      email: profile.email.toLowerCase(),
+      name: fullName,
+      avatar: profile.avatar || null,
+      phone: String(req.body.phone || "").trim() || null,
+      bio: null,
+    });
+    const preferences = {
+      residenceCountry: String(req.body.residenceCountry || "").slice(0, 100),
+      preferredLanguage: String(req.body.preferredLanguage || "").slice(0, 80),
+      travelStyles: Array.isArray(req.body.travelStyles) ? req.body.travelStyles.map((v) => String(v).slice(0, 50)).slice(0, 20) : [],
+    };
+    const updated = await query(
+      "UPDATE users SET preferences = COALESCE(preferences, '{}'::jsonb) || $1::jsonb, updated_at = NOW() WHERE id = $2 RETURNING *",
+      [JSON.stringify(preferences), user.id],
+    );
+    const freshUser = await incrementLoginCounter(updated.rows[0]?.id || user.id);
+    logger.info("[GitHub Signup] Complete:", { email: freshUser.email });
+    return respondWithAuth(res, freshUser, true);
+  } catch (err) {
+    handleError(res, err, "GitHub signup failed");
   }
 };
 
