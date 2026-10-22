@@ -1131,10 +1131,37 @@ router.post("/conversations", protect, async (req, res) => {
     };
     const conversationSubject = String(subject || "").trim() || (destination ? `Question about ${destination}` : null);
 
-    // An explicit subject means the user/admin intentionally requested a new thread.
-    // Keep separate threads possible; getOrCreate remains the fallback for legacy guest sessions.
+    // A signed-in traveler has one private support thread. New-topic requests
+    // reuse that thread and update its context instead of creating duplicates.
     let conv;
-    if (userId && conversationSubject) {
+    const existingPrivate = (!callerIsAdmin && userId)
+      ? await query(
+          `SELECT * FROM conversations
+            WHERE user_id = $1 AND group_id IS NULL AND deleted_at IS NULL
+            ORDER BY updated_at DESC NULLS LAST, created_at DESC
+            LIMIT 1`,
+          [userId],
+        )
+      : { rows: [] };
+
+    if (!callerIsAdmin && existingPrivate.rows[0]) {
+      const existing = existingPrivate.rows[0];
+      const mergedMetadata = {
+        ...(existing.metadata && typeof existing.metadata === "object" && !Array.isArray(existing.metadata) ? existing.metadata : {}),
+        ...conversationMetadata,
+      };
+      const updatedExisting = await query(
+        `UPDATE conversations
+            SET subject = COALESCE($2, subject),
+                metadata = $3::jsonb,
+                status = CASE WHEN status = 'closed' THEN 'open' ELSE status END,
+                updated_at = NOW()
+          WHERE id = $1 AND deleted_at IS NULL
+          RETURNING *`,
+        [existing.id, conversationSubject, JSON.stringify(mergedMetadata)],
+      );
+      conv = updatedExisting.rows[0];
+    } else if (userId && conversationSubject) {
       const created = await query(
         `INSERT INTO conversations
           (session_id, user_id, guest_name, guest_email, channel, subject, status, priority,
@@ -1249,6 +1276,105 @@ router.post("/conversations", protect, async (req, res) => {
       message: err.message || "Failed to create conversation",
       error: process.env.NODE_ENV !== "production" ? err.message : undefined,
     });
+  }
+});
+
+/* ── PATCH /conversations/:id/context — change topic without creating a thread ── */
+router.patch("/conversations/:id/context", protect, async (req, res) => {
+  try {
+    const access = await canAccessConversation(req, req.params.id);
+    if (!access.allowed || !access.conv) {
+      return res.status(404).json({ success: false, message: "Conversation not found or unavailable." });
+    }
+    if (access.conv.group_id) {
+      return res.status(400).json({ success: false, message: "Group conversation context cannot be changed here." });
+    }
+
+    const destinationName = String(req.body?.destinationName || "").trim();
+    const messageBody = String(req.body?.body || "").trim();
+    if (!destinationName) {
+      return res.status(400).json({ success: false, message: "Choose a destination from the suggestions." });
+    }
+
+    const destinationResult = await query(
+      `SELECT id, name FROM destinations
+        WHERE LOWER(TRIM(name)) = LOWER(TRIM($1)) AND is_active = TRUE
+        LIMIT 1`,
+      [destinationName],
+    );
+    const destination = destinationResult.rows[0];
+    if (!destination) {
+      return res.status(400).json({ success: false, message: "Choose an active destination from the suggestions." });
+    }
+
+    const existing = await query(
+      `SELECT * FROM conversations WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+      [req.params.id],
+    );
+    const current = existing.rows[0];
+    if (!current) return res.status(404).json({ success: false, message: "Conversation not found." });
+    const previousMetadata = current.metadata && typeof current.metadata === "object" && !Array.isArray(current.metadata)
+      ? current.metadata : {};
+    const nextMetadata = {
+      ...previousMetadata,
+      destinationName: destination.name,
+      destinationId: destination.id,
+      contextUpdatedAt: new Date().toISOString(),
+    };
+    const updatedResult = await query(
+      `UPDATE conversations
+          SET subject = $2, metadata = $3::jsonb, updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+        RETURNING *`,
+      [current.id, `Question about ${destination.name}`, JSON.stringify(nextMetadata)],
+    );
+    const updated = updatedResult.rows[0];
+
+    let savedMessage = null;
+    if (messageBody) {
+      savedMessage = await insertMessage({
+        conversationId: current.id,
+        senderType: isAdminUser(req) ? "admin" : "user",
+        senderId: req.user.id,
+        senderName: req.user.full_name || req.user.name || (isAdminUser(req) ? "Altuvera Support" : "Traveler"),
+        senderEmail: req.user.email || null,
+        senderAvatar: req.user.avatar_url || null,
+        body: messageBody,
+        metadata: { source: "messages-portal", destinationName: destination.name, destinationId: destination.id, contextChange: true },
+      });
+    }
+
+    const shapedConversation = reshapeConversation(updated);
+    const io = req.app.get("io");
+    if (io) {
+      io.to(`conv:${current.id}`).emit("msg:conversation-updated", shapedConversation);
+      io.to(`conversation-${current.id}`).emit("msg:conversation-updated", shapedConversation);
+      io.to("admins").emit("msg:conversation-updated", shapedConversation);
+      if (current.user_id) io.to(`user-${current.user_id}`).emit("msg:conversation-updated", shapedConversation);
+      if (savedMessage) {
+        const shapedMessage = reshapeMessage(savedMessage);
+        io.to(`conv:${current.id}`).emit("msg:message", shapedMessage);
+        io.to(`conversation-${current.id}`).emit("msg:message", shapedMessage);
+        if (!isAdminUser(req)) {
+          io.to("admins").emit("msg:new-from-user", {
+            conversationId: current.id,
+            sessionId: current.session_id || null,
+            message: shapedMessage,
+            senderName: req.user.full_name || req.user.name || "Traveler",
+            senderEmail: req.user.email || "",
+            unreadCount: 1,
+          });
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: { ...shapedConversation, ...(savedMessage ? { message: reshapeMessage(savedMessage) } : {}) },
+    });
+  } catch (err) {
+    logger.error(`[Messages] PATCH /conversations/:id/context: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to update conversation context." });
   }
 });
 
