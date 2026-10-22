@@ -65,6 +65,7 @@ router.post("/google/signin", authLimiter, auth.googleAuth);
 router.post("/google/signup-init", authLimiter, auth.googleAuth);
 router.post("/google/signup-complete", authLimiter, auth.completeGoogleSignUp);
 router.post("/github", authLimiter, auth.githubAuth);
+router.post("/github/signup-complete", authLimiter, auth.completeGithubSignUp);
 router.get("/github/signin", authLimiter, auth.githubSignInInit);
 router.get("/github/signup", authLimiter, auth.githubSignUpInit);
 router.get("/github/callback", authLimiter, auth.githubCallback);
