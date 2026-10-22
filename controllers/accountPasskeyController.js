@@ -4,7 +4,7 @@ const {query}=require("../config/db");
 const {generateRegistrationOptions,verifyRegistrationResponse,generateAuthenticationOptions,verifyAuthenticationResponse}=require("@simplewebauthn/server");
 const fail=(res,status,message)=>res.status(status).json({success:false,message});
 const b64url=v=>Buffer.from(v).toString("base64url");
-const rp=()=>{const origin=new URL(process.env.WEBAUTHN_ORIGIN||process.env.FRONTEND_URL||"https://www.altuverasafaris.com");return {origin:origin.origin,rpID:process.env.WEBAUTHN_RP_ID||origin.hostname.replace(/^www\./i,""),rpName:process.env.WEBAUTHN_RP_NAME||"Altuvera Safaris"};};
+const rp=()=>{const origin=new URL(process.env.WEBAUTHN_ORIGIN||"https://www.altuverasafaris.com");return {origin:origin.origin,rpID:process.env.WEBAUTHN_RP_ID||origin.hostname.replace(/^www\./i,""),rpName:process.env.WEBAUTHN_RP_NAME||"Altuvera Safaris"};};
 async function schema(){
  await query("CREATE TABLE IF NOT EXISTS user_passkeys (id BIGSERIAL PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,credential_id TEXT NOT NULL UNIQUE,public_key BYTEA NOT NULL,counter BIGINT NOT NULL DEFAULT 0,transports JSONB NOT NULL DEFAULT '[]'::jsonb,device_name VARCHAR(120) NOT NULL DEFAULT 'Passkey',created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),last_used_at TIMESTAMPTZ)");
  await query("CREATE TABLE IF NOT EXISTS webauthn_challenges (id BIGSERIAL PRIMARY KEY,user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,purpose VARCHAR(24) NOT NULL CHECK(purpose IN ('registration','login')),challenge TEXT NOT NULL,login_challenge_hash CHAR(64),expires_at TIMESTAMPTZ NOT NULL,created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())");
