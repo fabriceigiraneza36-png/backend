@@ -4,6 +4,7 @@ const crypto = require("crypto");
 const { query } = require("../config/db");
 const { sendEmail } = require("../utils/email");
 const jwt = require("jsonwebtoken");
+const { encryptSecret, decryptSecret } = require("../utils/accountSecurityCrypto");
 
 const b32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const base32Encode = (buf) => {
@@ -61,7 +62,7 @@ exports.beginTotp = async (req,res) => {
     const secret = base32Encode(crypto.randomBytes(20));
     await query(`INSERT INTO user_security(user_id,totp_pending_secret,totp_pending_expires)
       VALUES($1,$2,NOW()+INTERVAL '10 minutes')
-      ON CONFLICT(user_id) DO UPDATE SET totp_pending_secret=EXCLUDED.totp_pending_secret,totp_pending_expires=EXCLUDED.totp_pending_expires`,[req.user.id,secret]);
+      ON CONFLICT(user_id) DO UPDATE SET totp_pending_secret=EXCLUDED.totp_pending_secret,totp_pending_expires=EXCLUDED.totp_pending_expires`,[req.user.id,encryptSecret(secret)]);
     const u = await query("SELECT email FROM users WHERE id=$1",[req.user.id]);
     const label = encodeURIComponent(u.rows[0]?.email || "Altuvera account");
     return res.json({success:true,data:{secret,otpauthUrl:`otpauth://totp/Altuvera:${label}?secret=${secret}&issuer=Altuvera&algorithm=SHA1&digits=6&period=30`,expiresInSeconds:600}});
@@ -75,7 +76,7 @@ exports.confirmTotp = async (req,res) => {
     const r = await query("SELECT totp_pending_secret,totp_pending_expires FROM user_security WHERE user_id=$1",[req.user.id]);
     const row = r.rows[0];
     if (!row?.totp_pending_secret || !row.totp_pending_expires || new Date(row.totp_pending_expires) < new Date()) return fail(res,400,"Authenticator setup expired. Start again.");
-    if (!verifyTotp(row.totp_pending_secret,code)) return fail(res,401,"That authenticator code is not valid.");
+    if (!verifyTotp(decryptSecret(row.totp_pending_secret),code)) return fail(res,401,"That authenticator code is not valid.");
     await query(`UPDATE user_security SET totp_secret=totp_pending_secret,totp_enabled=true,totp_pending_secret=NULL,totp_pending_expires=NULL,updated_at=NOW() WHERE user_id=$1`,[req.user.id]);
     return res.json({success:true,message:"Authenticator app enabled."});
   } catch(e) { return fail(res,500,"Could not verify authenticator code."); }
@@ -86,7 +87,7 @@ exports.disableTotp = async (req,res) => {
     const code = String(req.body.code || "");
     const r = await query("SELECT totp_secret,totp_enabled FROM user_security WHERE user_id=$1",[req.user.id]);
     const row = r.rows[0];
-    if (!row?.totp_enabled || !verifyTotp(row.totp_secret,code)) return fail(res,401,"A valid authenticator code is required.");
+    if (!row?.totp_enabled || !verifyTotp(decryptSecret(row.totp_secret),code)) return fail(res,401,"A valid authenticator code is required.");
     await query("UPDATE user_security SET totp_secret=NULL,totp_enabled=false,updated_at=NOW() WHERE user_id=$1",[req.user.id]);
     return res.json({success:true,message:"Authenticator app disabled."});
   } catch(e) { return fail(res,500,"Could not disable authenticator."); }
@@ -96,7 +97,7 @@ exports.rotateRecoveryCodes = async (req,res) => {
   try {
     const code = String(req.body.code || "");
     const r = await query("SELECT totp_secret,totp_enabled FROM user_security WHERE user_id=$1",[req.user.id]);
-    if (r.rows[0]?.totp_enabled && !verifyTotp(r.rows[0].totp_secret,code)) return fail(res,401,"Verify with your authenticator before rotating recovery codes.");
+    if (r.rows[0]?.totp_enabled && !verifyTotp(decryptSecret(r.rows[0].totp_secret),code)) return fail(res,401,"Verify with your authenticator before rotating recovery codes.");
     const codes = createRecoveryCodes();
     await query(`INSERT INTO user_security(user_id,recovery_code_hashes,recovery_codes_remaining)
       VALUES($1,$2::jsonb,$3) ON CONFLICT(user_id) DO UPDATE SET recovery_code_hashes=EXCLUDED.recovery_code_hashes,recovery_codes_remaining=EXCLUDED.recovery_codes_remaining,updated_at=NOW()`,[req.user.id,JSON.stringify(codes.map(hash)),codes.length]);
@@ -110,7 +111,7 @@ exports.verifyFactor = async (req,res) => {
     if (!code || !["totp","recovery_code"].includes(method)) return fail(res,400,"Choose a supported factor and provide its code.");
     const r = await query("SELECT totp_secret,totp_enabled,recovery_code_hashes FROM user_security WHERE user_id=$1",[req.user.id]);
     const s = r.rows[0];
-    if (method === "totp" && s?.totp_enabled && verifyTotp(s.totp_secret,code)) return res.json({success:true,verified:true});
+    if (method === "totp" && s?.totp_enabled && verifyTotp(decryptSecret(s.totp_secret),code)) return res.json({success:true,verified:true});
     if (method === "recovery_code" && /^\d{5}$/.test(String(code)) && Array.isArray(s?.recovery_code_hashes)) {
       const candidate = hash(String(code));
       const idx = s.recovery_code_hashes.indexOf(candidate);
