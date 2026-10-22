@@ -567,7 +567,7 @@ exports.completeLoginFactor = async (req, res) => {
       return res.status(429).json({success:false,message:"Too many attempts. Sign in again to restart verification."});
     }
     let valid = false;
-    if (method === "totp" && u.totp_enabled && /^\\d{6}$/.test(String(code))) {
+    if (method === "totp" && u.totp_enabled && /^\d{6}$/.test(String(code))) {
       const alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
       const secret=String(u.totp_secret||"");
       let bits=0,value=0,bytes=[];
@@ -576,7 +576,7 @@ exports.completeLoginFactor = async (req, res) => {
       const step=Math.floor(Date.now()/30000);
       valid=[-1,0,1].some(d=>{const msg=Buffer.alloc(8);msg.writeBigUInt64BE(BigInt(step+d));const h=crypto.createHmac("sha1",Buffer.from(bytes)).update(msg).digest();const off=h[h.length-1]&15;const expected=Buffer.from(String((h.readUInt32BE(off)&0x7fffffff)%1000000).padStart(6,"0"));return supplied.length===expected.length&&crypto.timingSafeEqual(supplied,expected);});
     }
-    if (method === "recovery_code" && /^\\d{5}$/.test(String(code)) && Array.isArray(u.recovery_code_hashes)) {
+    if (method === "recovery_code" && /^\d{5}$/.test(String(code)) && Array.isArray(u.recovery_code_hashes)) {
       const digest=crypto.createHash("sha256").update(String(code)).digest("hex");
       const idx=u.recovery_code_hashes.indexOf(digest);
       if(idx>=0){
