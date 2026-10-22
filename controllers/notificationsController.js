@@ -497,9 +497,9 @@ const createNotificationInternal = async ({
         const { rows } = await query(sql, params)
         if (!rows.length) return
         const isAdminNotice = targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))
-        const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/$/, "")
+        const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/$/, "")
         const requestedUrl = actionUrl || (isAdminNotice ? "/notifications" : "/dashboard/notifications")
-        const url = /^https?:\\/\\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`
+        const url = /^https?:\/\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`
         await pushUtility.sendPushToSubscriptions(rows, {
           title: title || "Altuvera Safaris",
           body: message || "",
