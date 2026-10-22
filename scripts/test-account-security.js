@@ -9,7 +9,7 @@ const currentStep=Math.floor(Date.now()/30000);
 const code=security.hotp(secret,currentStep);
 assert.match(code,/^\d{6}$/,"TOTP should be six numeric digits");
 assert.equal(security.verifyTotp(secret,code),true,"current TOTP should verify");
-assert.equal(security.verifyTotp(secret,"000000"),security.hotp(secret,currentStep)==="000000","invalid TOTP should not verify unless it is actually current");
+assert.equal(security.verifyTotp(secret,security.hotp(secret,currentStep+10)),false,"a code from outside the accepted time window must fail");
 assert.equal(security.base32Encode(security.base32Decode(secret)),secret,"base32 encode/decode should round-trip");
 const codes=security.createRecoveryCodes();
 assert.equal(codes.length,10,"exactly ten recovery codes should be generated");
