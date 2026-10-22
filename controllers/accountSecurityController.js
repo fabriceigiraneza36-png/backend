@@ -33,7 +33,7 @@ const hotp = (secret, counter) => {
 const verifyTotp = (secret, code) => {
   const now = Math.floor(Date.now() / 30000);
   const supplied = Buffer.from(String(code || ""));
-  return /^\\d{6}$/.test(String(code || "")) && [-1,0,1].some((delta) => {
+  return /^\d{6}$/.test(String(code || "")) && [-1,0,1].some((delta) => {
     const expected = Buffer.from(hotp(secret, now + delta));
     return supplied.length === expected.length && crypto.timingSafeEqual(expected, supplied);
   });
@@ -111,7 +111,7 @@ exports.verifyFactor = async (req,res) => {
     const r = await query("SELECT totp_secret,totp_enabled,recovery_code_hashes FROM user_security WHERE user_id=$1",[req.user.id]);
     const s = r.rows[0];
     if (method === "totp" && s?.totp_enabled && verifyTotp(s.totp_secret,code)) return res.json({success:true,verified:true});
-    if (method === "recovery_code" && /^\\d{5}$/.test(String(code)) && Array.isArray(s?.recovery_code_hashes)) {
+    if (method === "recovery_code" && /^\d{5}$/.test(String(code)) && Array.isArray(s?.recovery_code_hashes)) {
       const candidate = hash(String(code));
       const idx = s.recovery_code_hashes.indexOf(candidate);
       if (idx >= 0) {
