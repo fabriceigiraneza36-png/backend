@@ -482,6 +482,10 @@ exports.verifyCode = async (req, res) => {
     const security = await query("SELECT s.totp_enabled,s.recovery_codes_remaining,COALESCE((SELECT COUNT(*) FROM user_passkeys p WHERE p.user_id=$1),0) AS passkey_count FROM user_security s WHERE s.user_id=$1", [user.id]).catch(async () => ({rows:(await query("SELECT false AS totp_enabled,0 AS recovery_codes_remaining,0 AS passkey_count")).rows}));
     const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(security.rows[0]?.passkey_count || 0) > 0 ? ["passkey"] : [])];
     if (factorMethods.length) {
+      // Consume the email OTP before issuing a one-time second-factor challenge.
+      // This prevents replaying the same email code to mint multiple challenges.
+      await query("UPDATE users SET verification_code=NULL,code_expiry=NULL,code_attempts=0 WHERE id=$1",[user.id]);
+      await query("DELETE FROM login_factor_challenges WHERE user_id=$1",[user.id]);
       const challengeId = require("crypto").randomBytes(24).toString("hex");
       await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
         VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
@@ -592,7 +596,7 @@ exports.completeLoginFactor = async (req, res) => {
     }
     const consumedChallenge=await query("DELETE FROM login_factor_challenges WHERE id=$1 AND challenge_hash=$2 RETURNING id",[row.rows[0].id,challengeHash]);
     if(!consumedChallenge.rows.length) return res.status(401).json({success:false,message:"Challenge already used. Sign in again."});
-    const updated=await query("UPDATE users SET last_login=NOW(),login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *",[u.id]);
+    const updated=await query("UPDATE users SET is_verified=true,verification_code=NULL,code_expiry=NULL,code_attempts=0,last_login=NOW(),login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *",[u.id]);
     if(!updated.rows[0]) return res.status(401).json({success:false,message:"Account is inactive."});
     const fresh=updated.rows[0];
     return res.json({success:true,message:"Signed in securely.",data:{token:generateToken(fresh,"user"),refreshToken:generateRefreshToken(fresh,"user"),user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10)}});
