@@ -141,5 +141,12 @@ if (errors.length > 0) {
   process.exit(1);
 }
 
+try {
+  execFileSync(process.execPath, [path.join(ROOT, "scripts/test-account-security.js")], { stdio: "inherit" });
+} catch (err) {
+  console.error("\nAccount security tests failed.");
+  process.exit(1);
+}
+
 console.log(`\n${GREEN}${BOLD}All files passed syntax check ✓${RESET}\n`);
 process.exit(0);
