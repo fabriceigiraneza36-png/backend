@@ -937,9 +937,8 @@ exports.googleAuth = async (req, res) => {
       bio:        req.body.bio    || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    logger.info("[Google Auth] Success:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    logger.info("[Google Auth] Provider verified; email OTP required:", { email: user.email, isNew });
+    return respondWithAuth(res, user, isNew);
   } catch (err) {
     handleError(res, err, "Google auth failed");
   }
@@ -1020,9 +1019,9 @@ exports.completeGoogleSignUp = async (req, res) => {
       [JSON.stringify(profilePreferences), user.id],
     );
 
-    const freshUser = await incrementLoginCounter(profileUpdate.rows[0]?.id || user.id);
-    logger.info("[Google Signup] Complete:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    const verifiedProfile = profileUpdate.rows[0] || user;
+    logger.info("[Google Signup] Profile complete; email OTP required:", { email: verifiedProfile.email, isNew });
+    return respondWithAuth(res, verifiedProfile, isNew);
   } catch (err) {
     handleError(res, err, "Google signup failed");
   }
@@ -1096,9 +1095,8 @@ exports.githubAuth = async (req, res) => {
       bio:        bio || gh.bio || null,
     });
 
-    const freshUser = await incrementLoginCounter(user.id);
-    logger.info("[GitHub Auth] Success:", { email: freshUser.email, isNew });
-    return respondWithAuth(res, freshUser, isNew);
+    logger.info("[GitHub Auth] Provider verified; email OTP required:", { email: user.email, isNew });
+    return respondWithAuth(res, user, isNew);
   } catch (err) {
     handleError(res, err, "GitHub auth failed");
   }
