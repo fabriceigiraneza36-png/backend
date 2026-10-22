@@ -595,7 +595,7 @@ exports.completeLoginFactor = async (req, res) => {
       valid=[-1,0,1].some(d=>{const msg=Buffer.alloc(8);msg.writeBigUInt64BE(BigInt(step+d));const h=crypto.createHmac("sha1",Buffer.from(bytes)).update(msg).digest();const off=h[h.length-1]&15;const expected=Buffer.from(String((h.readUInt32BE(off)&0x7fffffff)%1000000).padStart(6,"0"));return supplied.length===expected.length&&crypto.timingSafeEqual(supplied,expected);});
     }
     if (method === "recovery_code" && /^\d{5}$/.test(String(code)) && Array.isArray(u.recovery_code_hashes)) {
-      const digest=crypto.createHash("sha256").update(String(code)).digest("hex");
+      const digest=crypto.createHmac("sha256",String(process.env.ACCOUNT_SECURITY_ENCRYPTION_KEY||process.env.JWT_SECRET||"")).update(String(code)).digest("hex");
       const idx=u.recovery_code_hashes.indexOf(digest);
       if(idx>=0){
         const remaining=u.recovery_code_hashes.filter((_,i)=>i!==idx);
