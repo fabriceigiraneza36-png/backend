@@ -380,13 +380,13 @@ const sendWelcomeEmail = async ({ to, recipientName = "" }) => {
   try {
     await sendEmail({
       to,
-      subject: `Welcome to ${APP_NAME}! ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°`,
+      subject: `Thank you for joining ${APP_NAME}!`,
       html:    baseTemplate({
-        title:    `Welcome to ${APP_NAME}! ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°`,
+        title:    `Welcome to ${APP_NAME}!`,
         subtitle: "Your account is verified and ready to use.",
         recipientName,
-        body:     `<p style="font-size:15px;color:#4b5563;line-height:1.75;">Start exploring our handpicked destinations.</p>`,
-        ctaText:  "Start Exploring ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢",
+        body:     `<p style="font-size:15px;color:#4b5563;line-height:1.75;">Thank you for joining Altuvera, ${esc(recipientName || "traveler")}. We are delighted to have you with us. Explore remarkable East African destinations, discover authentic local experiences, and contact our team whenever you are ready to plan your journey.</p>`,
+        ctaText:  "Explore Destinations",
         ctaUrl:   `${FRONTEND_URL}/destinations`,
       }),
     });
