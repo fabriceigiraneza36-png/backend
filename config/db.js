@@ -803,6 +803,17 @@ const ensureUserSchema = async () => {
     ]);
 
     await query(`
+      CREATE TABLE IF NOT EXISTS login_factor_challenges (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        challenge_hash CHAR(64) NOT NULL UNIQUE,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        expires_at TIMESTAMPTZ NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await query(`
       CREATE TABLE IF NOT EXISTS user_security (
         user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
         totp_secret TEXT,
