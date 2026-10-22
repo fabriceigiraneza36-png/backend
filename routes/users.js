@@ -97,6 +97,10 @@ router.post("/security/verify-factor", verifyLimiter, protect, accountSecurity.v
 // PUBLIC — safe account-recovery request; never logs a user in
 router.post("/account-recovery/request", authLimiter, accountSecurity.requestRecovery);
 
+// ADMIN — Manual account recovery review (must precede the /:id wildcard)
+router.get("/security/recovery-requests", adminProtect, accountSecurity.listRecoveryRequests);
+router.patch("/security/recovery-requests/:id", adminProtect, accountSecurity.reviewRecoveryRequest);
+
 // ═══════════════════════════════════════════════════════════════
 // ADMIN — Export (before /:id wildcard)
 // ═══════════════════════════════════════════════════════════════
