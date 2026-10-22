@@ -151,7 +151,7 @@ exports.requestRecovery = async (req,res) => {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
       await query("INSERT INTO account_recovery_requests(user_id,token_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '24 hours')",[r.rows[0].id,hash(ticket)]);
       const support = process.env.ACCOUNT_RECOVERY_EMAIL || process.env.SUPPORT_EMAIL;
-      if (support) await sendEmail({to:support,subject:"Altuvera account recovery review",text:`Recovery review requested for user ${r.rows[0].id} (${email}). Reference: ${ticket}. Verify identity manually before making changes.`});
+      if (support) await sendEmail({to:support,subject:"Altuvera account recovery review",text:`Recovery review requested for user ${r.rows[0].id} (${email}). Reference: ${ticket}. Verify identity manually before making changes.`}).catch(()=>{});
     }
     return res.json({success:true,message:"If the account is eligible, the Altuvera team will review the recovery request. This does not sign you in."});
   } catch(e) { return fail(res,500,"Recovery request could not be submitted."); }
