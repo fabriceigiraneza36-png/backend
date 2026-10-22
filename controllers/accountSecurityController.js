@@ -147,10 +147,7 @@ exports.requestRecovery = async (req,res) => {
     const r = await query("SELECT id,email,full_name FROM users WHERE email=$1 AND is_active=true",[email]);
     if (r.rows[0]) {
       const ticket = crypto.randomBytes(24).toString("hex");
-      await query(`CREATE TABLE IF NOT EXISTS account_recovery_requests(
-        id BIGSERIAL PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        token_hash CHAR(64) NOT NULL,expires_at TIMESTAMPTZ NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'pending',
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
+      await ensureRecoveryReviewSchema();
       await query("INSERT INTO account_recovery_requests(user_id,token_hash,expires_at,recovery_contact_email) VALUES($1,$2,NOW()+INTERVAL '24 hours',$3)",[r.rows[0].id,hash(ticket),contactEmail||null]);
       const support = process.env.ACCOUNT_RECOVERY_EMAIL || process.env.SUPPORT_EMAIL;
       if (support) await sendEmail({to:support,subject:"Altuvera account recovery review",text:`Recovery review requested for user ${r.rows[0].id} (${email}). Reference: ${ticket}. Verify identity manually before making changes.`}).catch(()=>{});
