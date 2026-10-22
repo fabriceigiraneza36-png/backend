@@ -39,7 +39,7 @@ const verifyTotp = (secret, code) => {
     return supplied.length === expected.length && crypto.timingSafeEqual(expected, supplied);
   });
 };
-const hash = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
+const hash = (s) => crypto.createHmac("sha256", String(process.env.ACCOUNT_SECURITY_ENCRYPTION_KEY || process.env.JWT_SECRET || "")).update(String(s)).digest("hex");
 // Ten 5-digit numeric codes as requested. Five digits are low entropy, so each
 // code is single-use, stored only as a hash, and protected by strict rate limits.
 const createRecoveryCodes = () => {
