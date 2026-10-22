@@ -141,7 +141,9 @@ exports.verifyFactor = async (req,res) => {
 exports.requestRecovery = async (req,res) => {
   try {
     const email = String(req.body.email || "").trim().toLowerCase();
+    const contactEmail = String(req.body.recoveryContactEmail || "").trim().toLowerCase();
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return fail(res,400,"Enter a valid email address.");
+    if (contactEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(contactEmail)) return fail(res,400,"Enter a valid alternate contact email.");
     const r = await query("SELECT id,email,full_name FROM users WHERE email=$1 AND is_active=true",[email]);
     if (r.rows[0]) {
       const ticket = crypto.randomBytes(24).toString("hex");
@@ -149,7 +151,7 @@ exports.requestRecovery = async (req,res) => {
         id BIGSERIAL PRIMARY KEY,user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         token_hash CHAR(64) NOT NULL,expires_at TIMESTAMPTZ NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'pending',
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW())`);
-      await query("INSERT INTO account_recovery_requests(user_id,token_hash,expires_at) VALUES($1,$2,NOW()+INTERVAL '24 hours')",[r.rows[0].id,hash(ticket)]);
+      await query("INSERT INTO account_recovery_requests(user_id,token_hash,expires_at,recovery_contact_email) VALUES($1,$2,NOW()+INTERVAL '24 hours',$3)",[r.rows[0].id,hash(ticket),contactEmail||null]);
       const support = process.env.ACCOUNT_RECOVERY_EMAIL || process.env.SUPPORT_EMAIL;
       if (support) await sendEmail({to:support,subject:"Altuvera account recovery review",text:`Recovery review requested for user ${r.rows[0].id} (${email}). Reference: ${ticket}. Verify identity manually before making changes.`}).catch(()=>{});
     }
@@ -177,6 +179,10 @@ const ensureRecoveryReviewSchema = async () => {
   await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ");
   await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS reviewed_by INTEGER REFERENCES users(id) ON DELETE SET NULL");
   await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS review_note TEXT");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS recovery_contact_email VARCHAR(320)");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS verified_contact_email VARCHAR(320)");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS completion_token_hash CHAR(64)");
+  await query("ALTER TABLE account_recovery_requests ADD COLUMN IF NOT EXISTS completion_expires_at TIMESTAMPTZ");
   await query(`CREATE TABLE IF NOT EXISTS account_security_audit (
     id BIGSERIAL PRIMARY KEY,
     actor_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
