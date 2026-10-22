@@ -4,6 +4,8 @@
 const express = require("express");
 const { query } = require("../config/db");
 const logger  = require("../utils/logger");
+let pushUtility = null;
+try { pushUtility = require("../utils/push"); } catch { /* optional */ }
 
 /* ─────────────────────────────────────────────────────────────
    AUTH MIDDLEWARE — resolve from whatever your project uses
@@ -138,7 +140,47 @@ const createNotificationInternal = async ({
       JSON.stringify(metadata),    expiresAt,
     ],
   );
-  return result.rows[0];
+  const notification = result.rows[0];
+
+  // Admin-created notifications use this router's internal helper, so deliver
+  // web push here as well as through the central notifications controller.
+  if (pushUtility && ["individual", "all", "admin", "role"].includes(targetScope)) {
+    ;(async () => {
+      try {
+        let sql = "SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps";
+        const params = [];
+        if (targetScope === "individual") {
+          if (userId) { params.push(userId); sql += " WHERE ps.admin_id = $1"; }
+          else if (userEmail) { params.push(userEmail); sql += " WHERE LOWER(ps.admin_email) = LOWER($1)"; }
+          else return;
+        } else if (targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))) {
+          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = ANY($1)";
+          params.push(targetScope === "admin" ? ["admin", "manager"] : [targetRole]);
+        } else if (targetScope === "role" && targetRole) {
+          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = $1";
+          params.push(targetRole);
+        }
+        const { rows } = await query(sql, params);
+        if (!rows.length) return;
+        const adminAudience = targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole));
+        const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/$/, "");
+        const requestedUrl = actionUrl || (adminAudience ? "/notifications" : "/notifications");
+        const url = /^https?:\\/\\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`;
+        await pushUtility.sendPushToSubscriptions(rows, {
+          title: title || "Altuvera Safaris",
+          body: message || "",
+          icon: "/favicon.ico",
+          badge: "/favicon.ico",
+          data: { url, id: notification.id },
+          requireInteraction: priority === "high",
+        });
+      } catch (err) {
+        logger.warn("[Notifications] Web Push delivery failed:", err.message);
+      }
+    })();
+  }
+
+  return notification;
 };
 
 /* Export so server.js socket handler can import it */
