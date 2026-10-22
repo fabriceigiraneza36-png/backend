@@ -269,7 +269,7 @@ ${esc(preheader)}
   </td></tr>
   <tr><td class="bd">
     ${recipientName ? `<p style="margin:0 0 20px;font-size:15px;color:#374151;font-weight:500;">
-      Hello, <strong>${esc(recipientName)}</strong> ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã‹Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹
+      Hello, <strong>${esc(recipientName)}</strong>
     </p>` : ""}
     <h1 style="margin:0 0 8px;font-size:22px;font-weight:800;color:#064e3b;line-height:1.3;">
       ${esc(title)}
@@ -340,7 +340,7 @@ const buildOtpHtml = ({ otp, recipientName = "", purpose = "verify", expiryMinut
       </table>
       <div class="warn">
         <p style="margin:0;font-size:13px;color:#92400e;line-height:1.55;">
-          <strong>ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã‚Â¡Ãƒâ€šÃ‚Â ÃƒÆ’Ã‚Â¯Ãƒâ€šÃ‚Â¸Ãƒâ€šÃ‚Â Never share this code.</strong> ${esc(APP_NAME)} staff will never ask for it.
+          <strong>Security reminder: Never share this code.</strong> ${esc(APP_NAME)} staff will never ask for it.
         </p>
       </div>
     `,
@@ -381,13 +381,13 @@ const sendWelcomeEmail = async ({ to, recipientName = "" }) => {
   try {
     await sendEmail({
       to,
-      subject: `Welcome to ${APP_NAME}! ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°`,
+      subject: `Welcome to ${APP_NAME}!`,
       html:    baseTemplate({
-        title:    `Welcome to ${APP_NAME}! ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°`,
+        title:    `Welcome to ${APP_NAME}!`,
         subtitle: "Your account is verified and ready to use.",
         recipientName,
         body:     `<p style="font-size:15px;color:#4b5563;line-height:1.75;">Start exploring our handpicked destinations.</p>`,
-        ctaText:  "Start Exploring ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ÃƒÂ¢Ã¢â€šÂ¬Ã¢â€žÂ¢",
+        ctaText:  "Start Exploring",
         ctaUrl:   `${FRONTEND_URL}/destinations`,
       }),
     });
@@ -401,9 +401,9 @@ const sendBookingConfirmation = async (booking) => {
   try {
     await sendEmail({
       to:      booking.email,
-      subject: `ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ Booking Confirmed ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â Ref ${booking.booking_number} | ${APP_NAME}`,
+      subject: `Booking Confirmed - Ref ${booking.booking_number} | ${APP_NAME}`,
       html:    baseTemplate({
-        title:        "Booking Confirmed! ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸Ãƒâ€¦Ã‚Â½ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â°",
+        title:        "Booking Confirmed!",
         subtitle:     "Your adventure is booked.",
         recipientName: booking.full_name,
         body:         `<p style="font-size:14px;color:#6b7280;">&#128203; Booking reference (press and hold to copy): <strong style="user-select:all;">${esc(booking.booking_number)}</strong></p>`, 
@@ -421,7 +421,7 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
   try {
     await sendEmail({
       to:      booking.email,
-      subject: `Booking ${toStatus} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${booking.booking_number} | ${APP_NAME}`,
+      subject: `Booking ${toStatus} - ${booking.booking_number} | ${APP_NAME}`,
       html:    baseTemplate({
         title:        `Booking ${toStatus}`,
         subtitle:     reason || `Your booking status has been updated.`,
@@ -443,7 +443,7 @@ const sendAdminBookingNotification = async (booking) => {
   try {
     await sendEmail({
       to:      ADMIN_EMAIL,
-      subject: `ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¹ New Booking ${booking.booking_number} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${booking.full_name} | ${APP_NAME}`,
+      subject: `New Booking ${booking.booking_number} - ${booking.full_name} | ${APP_NAME}`,
       html:    baseTemplate({
         title:        "New Booking Received",
         subtitle:     `From: ${booking.full_name} <${booking.email}>`,
@@ -460,7 +460,7 @@ const sendActivityAlert = async ({ to, recipientName = "", activityType }) => {
   try {
     await sendEmail({
       to,
-      subject: `Account Activity ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${APP_NAME}`,
+      subject: `Account Activity - ${APP_NAME}`,
       html:    baseTemplate({
         title:        "Account Activity",
         subtitle:     `Activity: ${activityType}`,
@@ -477,7 +477,7 @@ const sendContactNotification = async (message) => {
   return sendEmail({
     to:      ADMIN_EMAIL,
     replyTo: message.email,
-    subject: `ÃƒÆ’Ã‚Â°Ãƒâ€¦Ã‚Â¸ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒâ€šÃ‚Â¬ Contact from ${message.full_name || message.name} ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â ${APP_NAME}`,
+    subject: `Contact from ${message.full_name || message.name} - ${APP_NAME}`,
     html:    baseTemplate({
       title:    `New Contact Message`,
       subtitle: `From: ${message.full_name || message.name} <${message.email}>`,
