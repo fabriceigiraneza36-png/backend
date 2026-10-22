@@ -587,7 +587,7 @@ exports.completeLoginFactor = async (req, res) => {
     let valid = false;
     if (method === "totp" && u.totp_enabled && /^\d{6}$/.test(String(code))) {
       const alphabet="ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
-      const secret=String(u.totp_secret||"");
+      const secret=require("../utils/accountSecurityCrypto").decryptSecret(String(u.totp_secret||""));
       let bits=0,value=0,bytes=[];
       for(const ch of secret){const n=alphabet.indexOf(ch);if(n<0)break;value=(value<<5)|n;bits+=5;if(bits>=8){bytes.push((value>>(bits-8))&255);bits-=8;}}
       const supplied=Buffer.from(String(code));
