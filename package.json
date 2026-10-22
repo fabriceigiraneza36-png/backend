@@ -20,7 +20,8 @@
     "setup-db": "node scripts/setup-database.js",
     "lint": "node scripts/lint-check.js",
     "health": "node scripts/health-check.js",
-    "rebuild": "node scripts/rebuild.js"
+    "rebuild": "node scripts/rebuild.js",
+    "test:security": "node scripts/test-account-security.js"
   },
   "nodemonConfig": {
     "watch": [
