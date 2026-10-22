@@ -802,6 +802,20 @@ const ensureUserSchema = async () => {
       { name: "subscribed",         type: "BOOLEAN DEFAULT false" },
     ]);
 
+    await query(`
+      CREATE TABLE IF NOT EXISTS user_security (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        totp_secret TEXT,
+        totp_enabled BOOLEAN NOT NULL DEFAULT false,
+        totp_pending_secret TEXT,
+        totp_pending_expires TIMESTAMPTZ,
+        recovery_code_hashes JSONB NOT NULL DEFAULT '[]'::jsonb,
+        recovery_codes_remaining INTEGER NOT NULL DEFAULT 0,
+        passkey_count INTEGER NOT NULL DEFAULT 0,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
+
     await createIndexes([
       `CREATE INDEX IF NOT EXISTS idx_users_email              ON users(email)`,
       `CREATE INDEX IF NOT EXISTS idx_users_google_id          ON users(google_id)`,
