@@ -3,6 +3,7 @@
 const crypto = require("crypto");
 const { query } = require("../config/db");
 const { sendEmail } = require("../utils/email");
+const jwt = require("jsonwebtoken");
 
 const b32 = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567";
 const base32Encode = (buf) => {
@@ -31,13 +32,20 @@ const hotp = (secret, counter) => {
 };
 const verifyTotp = (secret, code) => {
   const now = Math.floor(Date.now() / 30000);
-  return [-1,0,1].some((delta) => crypto.timingSafeEqual(
-    Buffer.from(hotp(secret, now + delta)), Buffer.from(String(code || "").padStart(6,"0").slice(-6))
-  ));
+  const supplied = Buffer.from(String(code || ""));
+  return /^\\d{6}$/.test(String(code || "")) && [-1,0,1].some((delta) => {
+    const expected = Buffer.from(hotp(secret, now + delta));
+    return supplied.length === expected.length && crypto.timingSafeEqual(expected, supplied);
+  });
 };
 const hash = (s) => crypto.createHash("sha256").update(String(s)).digest("hex");
-const createRecoveryCodes = () => Array.from({length: 10}, () =>
-  crypto.randomBytes(5).toString("hex").toUpperCase().match(/.{1,5}/g).join("-"));
+// Ten 5-digit numeric codes as requested. Five digits are low entropy, so each
+// code is single-use, stored only as a hash, and protected by strict rate limits.
+const createRecoveryCodes = () => {
+  const used = new Set();
+  while (used.size < 10) used.add(String(crypto.randomInt(0, 100000)).padStart(5, "0"));
+  return [...used];
+};
 const fail = (res, status, message) => res.status(status).json({success:false,message});
 
 exports.status = async (req,res) => {
@@ -103,8 +111,8 @@ exports.verifyFactor = async (req,res) => {
     const r = await query("SELECT totp_secret,totp_enabled,recovery_code_hashes FROM user_security WHERE user_id=$1",[req.user.id]);
     const s = r.rows[0];
     if (method === "totp" && s?.totp_enabled && verifyTotp(s.totp_secret,code)) return res.json({success:true,verified:true});
-    if (method === "recovery_code" && Array.isArray(s?.recovery_code_hashes)) {
-      const candidate = hash(String(code).toUpperCase());
+    if (method === "recovery_code" && /^\\d{5}$/.test(String(code)) && Array.isArray(s?.recovery_code_hashes)) {
+      const candidate = hash(String(code));
       const idx = s.recovery_code_hashes.indexOf(candidate);
       if (idx >= 0) {
         const remaining = s.recovery_code_hashes.filter((_,i)=>i!==idx);
