@@ -468,31 +468,48 @@ const createNotificationInternal = async ({
   // 2) Realtime
   emitNotification(req, notif);
 
-  // 2b) Push notification (fire-and-forget)
-  if (
-    pushUtility &&
-    (targetScope === "admin" || targetRole === "admin" || targetRole === "manager")
-  ) {
+  // 2b) Web Push for the same audience as the in-app notification.
+  // Each browser subscription is scoped to the authenticated account in admin_id.
+  if (pushUtility && (
+    targetScope === "individual" ||
+    targetScope === "all" ||
+    targetScope === "admin" ||
+    (targetScope === "role" && ["admin", "manager"].includes(targetRole))
+  )) {
     ;(async () => {
       try {
-        const { rows } = await query(
-          `SELECT endpoint, p256dh, auth FROM push_subscriptions`
-        )
-        if (rows.length) {
-          await pushUtility.sendPushToSubscriptions(rows, {
-            title: title || "Altuvera Admin",
-            body: message || "",
-            icon: "/favicon.ico",
-            badge: "/favicon.ico",
-            data: {
-              url: actionUrl || "/notifications",
-              id: notif.id,
-            },
-            requireInteraction: priority === "high",
-          })
+        let sql = "SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps"
+        const params = []
+        if (targetScope === "individual") {
+          if (userId) {
+            params.push(userId)
+            sql += ` WHERE ps.admin_id = $1`
+          } else if (userEmail) {
+            params.push(userEmail)
+            sql += ` WHERE LOWER(ps.admin_email) = LOWER($1)`
+          } else {
+            return
+          }
+        } else if (targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))) {
+          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = ANY($1)"
+          params.push(["admin", "manager"])
         }
-      } catch {
-        /* non-fatal */
+        const { rows } = await query(sql, params)
+        if (!rows.length) return
+        const isAdminNotice = targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))
+        const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/$/, "")
+        const requestedUrl = actionUrl || (isAdminNotice ? "/notifications" : "/dashboard/notifications")
+        const url = /^https?:\\/\\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`
+        await pushUtility.sendPushToSubscriptions(rows, {
+          title: title || "Altuvera Safaris",
+          body: message || "",
+          icon: "/favicon.ico",
+          badge: "/favicon.ico",
+          data: { url, id: notif.id },
+          requireInteraction: priority === "high",
+        })
+      } catch (err) {
+        logger.warn("[Notifications] Web Push delivery failed:", err.message)
       }
     })()
   }
