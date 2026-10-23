@@ -3,6 +3,7 @@
 
 const crypto = require("crypto");
 const { query } = require("../config/db");
+const { recordAccountActivity } = require("../utils/accountActivity");
 const logger = require("../utils/logger");
 /* ═════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: HELPERS
@@ -928,6 +929,18 @@ exports.create = async (req, res, next) => {
       `Booking ${bookingNumber} created via ${body.source || "website"}`,
       req.admin?.id || req.user?.id || null,
     );
+    recordAccountActivity({
+      userId: req.user.id,
+      eventType: "booking_created",
+      title: "Booking request submitted",
+      description: `Your booking request ${bookingNumber} was submitted successfully.`,
+      metadata: {
+        bookingId: booking.id,
+        bookingNumber,
+        destination: body.destination_name || body.destination || null,
+        attraction: body.attraction_name || null,
+      },
+    }).catch(() => {});
 
     logger.info(`[Bookings] ✅ Created: ${bookingNumber} | emailVerified=${emailVerified} | admin notified`);
 
