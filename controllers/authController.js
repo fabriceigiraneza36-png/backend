@@ -16,7 +16,7 @@ const {
 } = require("../utils/email");
 const logger = require("../utils/logger");
 const { validateEmail, validateName } = require("../utils/validators");
-const { notifyUserRegistered } = require("./notificationsController");
+const { notifyUserRegistered, notifyUserLogin } = require("./notificationsController");
 
 /* ════════════════════════════════════════════════════════════════
    CONFIG
@@ -540,19 +540,33 @@ exports.verifyCode = async (req, res) => {
       }).catch(() => {});
     }
 
+    const sessionToken = generateToken(freshUser, "user");
+    const refreshToken = generateRefreshToken(freshUser, "user");
+    const decodedToken = jwt.decode(sessionToken);
+    const sessionExpiresAt = decodedToken?.exp ? new Date(decodedToken.exp * 1000).toISOString() : null;
+    notifyUserLogin({
+      id: freshUser.id,
+      email: freshUser.email,
+      name: freshUser.full_name || freshUser.email,
+      full_name: freshUser.full_name,
+    }, sessionExpiresAt).catch((notifyErr) => {
+      logger.warn("[Auth] Successful sign-in notification failed:", notifyErr.message);
+    });
+
     return res.json({
       success: true,
       message: isFirstVerification
         ? "Account verified! Welcome to Altuvera!"
         : "Signed in successfully!",
       data: {
-        token:        generateToken(freshUser, "user"),
-        refreshToken: generateRefreshToken(freshUser, "user"),
-        user:         sanitizeUser(freshUser),
-        fullName:     freshUser.full_name || "",
-        username:     freshUser.username || freshUser.full_name || "",
-        isNewUser:    isFirstVerification,
+        token: sessionToken,
+        refreshToken,
+        user: sanitizeUser(freshUser),
+        fullName: freshUser.full_name || "",
+        username: freshUser.username || freshUser.full_name || "",
+        isNewUser: isFirstVerification,
         loginCounter: parseInt(freshUser.login_counter, 10),
+        sessionExpiresAt,
       },
     });
   } catch (err) {
@@ -616,7 +630,17 @@ exports.completeLoginFactor = async (req, res) => {
     const updated=await query("UPDATE users SET is_verified=true,verification_code=NULL,code_expiry=NULL,code_attempts=0,last_login=NOW(),login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *",[u.id]);
     if(!updated.rows[0]) return res.status(401).json({success:false,message:"Account is inactive."});
     const fresh=updated.rows[0];
-    return res.json({success:true,message:"Signed in securely.",data:{token:generateToken(fresh,"user"),refreshToken:generateRefreshToken(fresh,"user"),user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10)}});
+    const sessionToken = generateToken(fresh, "user");
+    const refreshToken = generateRefreshToken(fresh, "user");
+    const decodedToken = jwt.decode(sessionToken);
+    const sessionExpiresAt = decodedToken?.exp ? new Date(decodedToken.exp * 1000).toISOString() : null;
+    notifyUserLogin({
+      id: fresh.id, email: fresh.email, name: fresh.full_name || fresh.email,
+      full_name: fresh.full_name,
+    }, sessionExpiresAt).catch((notifyErr) => {
+      logger.warn("[Auth] Successful second-factor sign-in notification failed:", notifyErr.message);
+    });
+    return res.json({success:true,message:"Signed in securely.",data:{token:sessionToken,refreshToken,user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10),sessionExpiresAt}});
   } catch(err) { handleError(res,err,"Additional verification failed"); }
 };
 
