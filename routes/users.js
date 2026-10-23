@@ -6,6 +6,7 @@ const accountPasskeys = require("../controllers/accountPasskeyController");
 const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
+const { eraseUserData } = require("../utils/eraseUserData");
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Stats (no auth)
@@ -301,10 +302,11 @@ router.post("/:id/deactivate", adminProtect, async (req, res) => {
 
 router.delete("/:id", adminProtect, async (req, res) => {
   try {
-    await query(`DELETE FROM users WHERE id = $1`, [req.params.id]);
-    return res.json({ success: true, message: "User deleted" });
+    const result = await eraseUserData(req.params.id);
+    if (!result.found) return res.status(404).json({ success: false, message: "User not found" });
+    return res.json({ success: true, message: "User and associated activity permanently deleted", deletedRows: result.deletedRows });
   } catch (error) {
-    return res.status(500).json({ success: false, message: error.message });
+    return res.status(500).json({ success: false, message: "User deletion failed; no changes were committed" });
   }
 });
 
