@@ -330,6 +330,23 @@ exports.createComment = async (req, res, next) => {
       return res.status(404).json({ status: 'error', message: 'Destination not found' })
     }
 
+    // One top-level comment per signed-in user and destination. Replies remain separate.
+    if (!parentId) {
+      const existingComment = await query(
+        `SELECT id FROM destination_comments
+          WHERE destination_id = $1 AND user_id = $2 AND parent_id IS NULL
+          LIMIT 1`,
+        [destinationId, userId],
+      )
+      if (existingComment.rows[0]) {
+        return res.status(409).json({
+          status: 'error',
+          code: 'COMMENT_ALREADY_EXISTS',
+          message: 'You have already shared a comment for this destination.',
+        })
+      }
+    }
+
     /* Verify parent (if provided) */
     let parentIdInt = null
     if (parentId) {
