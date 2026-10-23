@@ -100,8 +100,10 @@ exports.getLikes = async (req, res, next) => {
 exports.toggleLike = async (req, res, next) => {
   try {
     const { destinationId } = req.params;
-    const { userId } = req.user || {};
-    const { sessionId } = req.body;
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Please sign in to like a destination." });
+    }
 
     const destination = await Destination.findByPk(destinationId);
     if (!destination) {
@@ -111,20 +113,7 @@ exports.toggleLike = async (req, res, next) => {
       });
     }
 
-    if (!userId && !sessionId) {
-      return res.status(400).json({
-        status: "error",
-        message: "User ID or session ID is required",
-      });
-    }
-
-    const whereClause = { destinationId: parseInt(destinationId, 10) };
-    if (userId) {
-      whereClause.userId = userId;
-    } else {
-      whereClause.sessionId = sessionId;
-      whereClause.userId = null;
-    }
+    const whereClause = { destinationId: parseInt(destinationId, 10), userId };
 
     const existingLike = await DestinationLike.findOne({ where: whereClause });
 
@@ -169,22 +158,12 @@ exports.toggleLike = async (req, res, next) => {
 exports.checkLike = async (req, res, next) => {
   try {
     const { destinationId } = req.params;
-    const { userId } = req.user || {};
-    const { sessionId } = req.query;
-
-    if (!userId && !sessionId) {
-      return res.json({
-        status: "success",
-        data: { isLiked: false },
-      });
+    const userId = req.user?.id;
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Please sign in to view your likes." });
     }
 
-    const whereClause = { destinationId: parseInt(destinationId, 10) };
-    if (userId) {
-      whereClause.userId = userId;
-    } else {
-      whereClause.sessionId = sessionId;
-    }
+    const whereClause = { destinationId: parseInt(destinationId, 10), userId };
 
     const existingLike = await DestinationLike.findOne({ where: whereClause });
 
