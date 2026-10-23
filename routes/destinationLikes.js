@@ -8,7 +8,7 @@ const { protect, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:destinationId/likes", destinationLikesController.getLikes);
-router.get("/:destinationId/likes/check", destinationLikesController.checkLike);
+router.get("/:destinationId/likes/check", protect, destinationLikesController.checkLike);
 router.post("/likes/stats", destinationLikesController.getLikeStats);
 
 // Protected routes
