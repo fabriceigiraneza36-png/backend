@@ -657,20 +657,59 @@ const notifyUserRegistered = async (user) => {
     userEmail: user?.email,
     type: "user_registered",
     category: "user",
-    title: "Welcome to Altuvera! 🌍",
-    message: "Your account is ready. Start exploring unforgettable adventures.",
-    actionUrl: "/",
-    actionLabel: "Explore",
+    title: "Welcome to Altuvera",
+    message: "Your account is ready. Start exploring unforgettable African adventures.",
+    actionUrl: "/destinations",
+    actionLabel: "Explore destinations",
     actor: user,
   });
   await notifyAdminsImmediately({
     type: "user_registered",
     category: "user",
-    title: "New traveller registered 👤",
+    title: "New traveller registered",
     message: `${user?.name || user?.email || "A traveller"} created an Altuvera account.`,
     actionUrl: user?.id ? `/users?userId=${encodeURIComponent(user.id)}` : "/users",
     actionLabel: "Open traveller",
     metadata: { userId: user?.id || null },
+  });
+  return userNotif;
+};
+
+/* Successful sign-in — persist a user notification and alert the admin inbox.
+ * The signed JWT expiry is recorded so both dashboards can show an accurate
+ * session-expiry countdown instead of guessing a duration. */
+const notifyUserLogin = async (user, sessionExpiresAt) => {
+  const expiryLabel = sessionExpiresAt
+    ? new Date(sessionExpiresAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC"
+    : "according to your account session settings";
+  const metadata = {
+    userId: user?.id || null,
+    userEmail: user?.email || null,
+    lastLoginAt: new Date().toISOString(),
+    sessionExpiresAt: sessionExpiresAt || null,
+  };
+  const userNotif = await createNotificationInternal({
+    userId: user?.id,
+    userEmail: user?.email,
+    type: "login_success",
+    category: "security",
+    title: "Sign-in successful",
+    message: `You signed in successfully. This session is scheduled to expire ${expiryLabel}. You can review your account security at any time.`,
+    actionUrl: "/account/security",
+    actionLabel: "Review account security",
+    priority: "high",
+    metadata,
+    actor: user,
+  });
+  await notifyAdminsImmediately({
+    type: "user_login_success",
+    category: "security",
+    title: "Traveller signed in",
+    message: `${user?.name || user?.full_name || user?.email || "A traveller"} signed in successfully. Session expiry: ${expiryLabel}.`,
+    actionUrl: user?.id ? `/users?userId=${encodeURIComponent(user.id)}` : "/users",
+    actionLabel: "View traveller",
+    metadata,
+    priority: "normal",
   });
   return userNotif;
 };
@@ -765,6 +804,7 @@ module.exports = {
   notifyPackageBookingCreated,
   notifyReviewPosted,
   notifyUserRegistered,
+  notifyUserLogin,
   notifyContactMessage,
   notifyAdminMessage,
   notifyAdminsImmediately,
