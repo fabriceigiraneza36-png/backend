@@ -1197,6 +1197,21 @@ exports.updateProfile = async (req, res) => {
       recipientName: result.rows[0].full_name || "",
       activityType:  "profile_updated",
     }).catch(() => {});
+    recordAccountActivity({
+      userId: id,
+      eventType: "profile_updated",
+      title: "Profile updated",
+      description: "Your account profile information was updated.",
+      metadata: {
+        changedFields: [
+          name ? "name" : null,
+          avatar ? "avatar" : null,
+          phone !== undefined ? "phone" : null,
+          bio !== undefined ? "bio" : null,
+          prefs !== undefined ? "preferences" : null,
+        ].filter(Boolean),
+      },
+    }).catch(() => {});
 
     return res.json({
       success: true,
