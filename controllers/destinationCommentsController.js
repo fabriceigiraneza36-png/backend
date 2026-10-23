@@ -301,8 +301,12 @@ exports.createComment = async (req, res, next) => {
     await ensureCommentsSchema()
 
     const destinationId = safeInt(req.params.destinationId, 0, 1)
-    const userId        = req.user?.id || null
-    const { content, parentId, authorName, authorEmail } = req.body
+    const userId        = req.user?.id
+    const { content, parentId } = req.body
+
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Please sign in to comment." })
+    }
 
     if (!destinationId) {
       return res.status(400).json({ status: 'error', message: 'Invalid destination ID' })
@@ -354,8 +358,8 @@ exports.createComment = async (req, res, next) => {
         userId || null,
         parentIdInt,
         cleanContent,
-        userId ? null : (authorName || 'Anonymous'),
-        userId ? null : (authorEmail || null),
+        null,
+        null,
       ],
     )
 
