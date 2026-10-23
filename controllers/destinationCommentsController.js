@@ -42,6 +42,7 @@ const ensureCommentsSchema = async () => {
 
     await query(`CREATE INDEX IF NOT EXISTS idx_dcomments_dest ON destination_comments(destination_id)`).catch(() => {})
     await query(`CREATE INDEX IF NOT EXISTS idx_dcomments_user ON destination_comments(user_id)`).catch(() => {})
+    await query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_dcomments_one_top_level_per_user_destination ON destination_comments(destination_id, user_id) WHERE parent_id IS NULL AND user_id IS NOT NULL`).catch(() => {})
     await query(`CREATE INDEX IF NOT EXISTS idx_dcomments_parent ON destination_comments(parent_id)`).catch(() => {})
     await query(`CREATE INDEX IF NOT EXISTS idx_dcomments_created ON destination_comments(created_at DESC)`).catch(() => {})
 
