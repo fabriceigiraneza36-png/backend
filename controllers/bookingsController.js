@@ -347,21 +347,36 @@ const notifyUserBookingEvent = async ({
   priority = "normal",
 }) => {
   try {
-    const bookingType = booking.booking_type || 'booking';
+    const destinationImage =
+      booking?.destination_image_url ||
+      booking?.destination_image ||
+      booking?.image_url ||
+      booking?.imageUrl ||
+      booking?.package_image_url ||
+      null;
     return await createNotificationInternal({
-      userId: user?.id || null,
-      userEmail: user?.email || null,
+      userId: user?.id || booking?.user_id || null,
+      userEmail: user?.email || booking?.email || null,
       type: "booking_created",
-      category: bookingType,
+      // Keep all booking-related notifications in the booking feed regardless
+      // of whether the request is for a package, destination, or custom trip.
+      category: "booking",
       title,
       message,
       actionUrl: actionUrl || "/my-bookings",
       actionLabel: actionLabel || "View Booking",
+      imageUrl: destinationImage,
       priority,
-      senderType: "admin",
-      senderName: "Altuvera Team",
-      metadata: { bookingNumber: booking?.booking_number || null },
-    }).catch(() => null);
+      senderType: "system",
+      senderName: "Altuvera Safaris",
+      metadata: {
+        bookingId: booking?.id || booking?.booking_id || null,
+        bookingNumber: booking?.booking_number || null,
+        destinationName: booking?.destination_name || booking?.package_name || booking?.attraction_name || null,
+        destinationImage,
+        bookingType: booking?.booking_type || "custom",
+      },
+    });
   } catch (err) {
     logger.warn("[Bookings] notifyUserBookingEvent:", err.message);
     return null;
@@ -918,6 +933,24 @@ exports.create = async (req, res, next) => {
       asyncNoThrow(sendAdminBookingNotification(full), "sendAdminBookingNotification");
     }
     pingAdminNewRequest(full);
+    // Persist an in-app notification for the traveller as well as the admin.
+    // Email is handled separately above; this notification feeds the user's
+    // booking tab and realtime/push delivery when the device is subscribed.
+    asyncNoThrow(
+      notifyUserBookingEvent({
+        user: {
+          id: req.user?.id || full.user_id || null,
+          email: req.user?.email || full.email || null,
+        },
+        booking: full,
+        title: "Booking request received",
+        message: `We've received booking ${full.booking_number || bookingNumber} and our team will review it shortly.`,
+        actionUrl: "/my-bookings",
+        actionLabel: "View booking",
+        priority: "normal",
+      }),
+      "notifyUserBookingEvent",
+    );
     // Intentionally do not send a second notification email here.
     // The branded sendBookingReceivedEmail above is the sole traveller booking-request email.
 
