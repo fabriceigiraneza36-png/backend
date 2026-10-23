@@ -1461,14 +1461,25 @@ io.on('connection', (socket) => {
       if (convId) {
         const existing = await resolveConversationForSocket({ conversationId: convId, sessionId: payload.sessionId })
         if (!existing) throw new Error('Conversation not found')
-        if (existing.group_id && socket.data.userId && !socket.data.isAdmin) {
+        // Never allow a guest or an unrelated account to send to a group
+        // conversation just because it knows the conversation ID.
+        if (existing.group_id) {
+          if (!socket.data.userId) throw new Error('Sign in to send messages in this group')
           const membership = await query(
             `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
             [existing.group_id, socket.data.userId],
           )
           if (!membership.rows[0]) throw new Error('Not a member of this group')
-        } else if (!socket.data.isAdmin && existing.user_id && String(existing.user_id) !== String(socket.data.userId)) {
+        } else if (existing.user_id && String(existing.user_id) !== String(socket.data.userId)) {
           throw new Error('Access denied')
+        } else if (!existing.user_id && socket.data.userId) {
+          // A signed-in account must not take over an anonymous support thread.
+          const sessionMatches = Boolean(
+            socket.data.sessionId &&
+            existing.session_id &&
+            String(socket.data.sessionId) === String(existing.session_id)
+          )
+          if (!sessionMatches) throw new Error('Access denied')
         }
         convId = existing.id
         sid = existing.session_id
