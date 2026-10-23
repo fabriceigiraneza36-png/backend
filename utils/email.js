@@ -481,14 +481,24 @@ const sendActivityAlert = async ({ to, recipientName = "", activityType }) => {
 };
 
 const sendContactNotification = async (message) => {
+  const senderName = message.full_name || message.name || "Website visitor";
+  const inquirySubject = String(message.subject || "General Inquiry").trim().slice(0, 300);
+  const details = [
+    message.phone ? `Phone: ${esc(message.phone)}` : "",
+    message.trip_type ? `Trip type: ${esc(message.trip_type)}` : "",
+    message.travel_date ? `Travel date: ${esc(message.travel_date)}` : "",
+    message.number_of_travelers ? `Travellers: ${esc(message.number_of_travelers)}` : "",
+    message.source ? `Source: ${esc(message.source)}` : "",
+  ].filter(Boolean).map((line) => `<p style="font-size:13px;color:#4b5563;margin:5px 0;">${line}</p>`).join("");
+
   return sendEmail({
     to:      ADMIN_EMAIL,
     replyTo: message.email,
-    subject: `Contact from ${message.full_name || message.name} - ${APP_NAME}`,
+    subject: `New Contact: ${inquirySubject} — ${senderName} | ${APP_NAME}`,
     html:    baseTemplate({
-      title:    `New Contact Message`,
-      subtitle: `From: ${message.full_name || message.name} <${message.email}>`,
-      body:     `<p style="font-size:14px;white-space:pre-wrap;">${esc(message.message || "")}</p>`,
+      title:    "New Contact Inquiry",
+      subtitle: `From: ${esc(senderName)} <${esc(message.email || "")}>`,
+      body:     `<div>${details}<h3 style="font-size:14px;margin:18px 0 8px;">Inquiry message</h3><p style="font-size:14px;line-height:1.7;white-space:pre-wrap;">${esc(message.message || "")}</p></div>`,
     }),
   });
 };
