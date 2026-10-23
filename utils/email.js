@@ -482,7 +482,7 @@ const sendActivityAlert = async ({ to, recipientName = "", activityType }) => {
 
 const sendContactNotification = async (message) => {
   const senderName = message.full_name || message.name || "Website visitor";
-  const inquirySubject = String(message.subject || "General Inquiry").trim().slice(0, 300);
+  const inquirySubject = String(message.subject || "General Inquiry").replace(/[\r\n]+/g, " ").trim().slice(0, 300);
   const details = [
     message.phone ? `Phone: ${esc(message.phone)}` : "",
     message.trip_type ? `Trip type: ${esc(message.trip_type)}` : "",
