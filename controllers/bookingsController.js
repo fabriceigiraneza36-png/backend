@@ -3,6 +3,7 @@
 
 const crypto = require("crypto");
 const { query } = require("../config/db");
+const { recordAccountActivity } = require("../utils/accountActivity");
 const logger = require("../utils/logger");
 /* ═════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: HELPERS
@@ -961,6 +962,20 @@ exports.create = async (req, res, next) => {
       `Booking ${bookingNumber} created via ${body.source || "website"}`,
       req.admin?.id || req.user?.id || null,
     );
+    if (req.user?.id) {
+      recordAccountActivity({
+        userId: req.user.id,
+        eventType: "booking_created",
+        title: "Booking request submitted",
+        description: `Your booking request ${bookingNumber} was submitted successfully.`,
+        metadata: {
+          bookingId: booking.id,
+          bookingNumber,
+          destination: body.destination_name || body.destination || null,
+          attraction: body.attraction_name || null,
+        },
+      }).catch(() => {});
+    }
 
     logger.info(`[Bookings] ✅ Created: ${bookingNumber} | emailVerified=${emailVerified} | admin notified`);
 
@@ -1944,6 +1959,20 @@ exports.updateStatus = async (req, res, next) => {
     }
 
     if (full?.user_id) {
+      if (["confirmed", "cancelled", "completed"].includes(status)) {
+        recordAccountActivity({
+          userId: full.user_id,
+          eventType: `booking_${status}`,
+          title: `Booking ${status.charAt(0).toUpperCase() + status.slice(1)}`,
+          description: `Booking ${full.booking_number || id} for ${full.destination_name || full.package_name || "your trip"} is now ${status}.`,
+          metadata: {
+            bookingId: id,
+            bookingNumber: full.booking_number || null,
+            destinationName: full.destination_name || null,
+            status,
+          },
+        }).catch(() => {});
+      }
       asyncNoThrow(
         createNotificationInternal({
           userId: full.user_id,
