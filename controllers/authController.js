@@ -8,6 +8,8 @@ const https  = require("https");
 const http   = require("http");
 
 const { query }   = require("../config/db");
+const { eraseUserData } = require("../utils/eraseUserData");
+const { recordAccountActivity } = require("../utils/accountActivity");
 const {
   sendEmail,
   sendOtpEmail,
@@ -553,6 +555,14 @@ exports.verifyCode = async (req, res) => {
       logger.warn("[Auth] Successful sign-in notification failed:", notifyErr.message);
     });
 
+    recordAccountActivity({
+      userId: freshUser.id,
+      eventType: "login_success",
+      title: "Successful sign-in",
+      description: "Your Altuvera account was signed in successfully.",
+      metadata: { authProvider: freshUser.auth_provider || "email", sessionExpiresAt },
+    }).catch(() => {});
+
     return res.json({
       success: true,
       message: isFirstVerification
@@ -640,6 +650,13 @@ exports.completeLoginFactor = async (req, res) => {
     }, sessionExpiresAt).catch((notifyErr) => {
       logger.warn("[Auth] Successful second-factor sign-in notification failed:", notifyErr.message);
     });
+    recordAccountActivity({
+      userId: fresh.id,
+      eventType: "login_success",
+      title: "Successful secure sign-in",
+      description: "Your Altuvera account was signed in after additional security verification.",
+      metadata: { authProvider: fresh.auth_provider || "email", secondFactor: method, sessionExpiresAt },
+    }).catch(() => {});
     return res.json({success:true,message:"Signed in securely.",data:{token:sessionToken,refreshToken,user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10),sessionExpiresAt}});
   } catch(err) { handleError(res,err,"Additional verification failed"); }
 };
@@ -1178,6 +1195,21 @@ exports.updateProfile = async (req, res) => {
       recipientName: result.rows[0].full_name || "",
       activityType:  "profile_updated",
     }).catch(() => {});
+    recordAccountActivity({
+      userId: id,
+      eventType: "profile_updated",
+      title: "Profile updated",
+      description: "Your account profile information was updated.",
+      metadata: {
+        changedFields: [
+          name ? "name" : null,
+          avatar ? "avatar" : null,
+          phone !== undefined ? "phone" : null,
+          bio !== undefined ? "bio" : null,
+          prefs !== undefined ? "preferences" : null,
+        ].filter(Boolean),
+      },
+    }).catch(() => {});
 
     return res.json({
       success: true,
@@ -1391,7 +1423,14 @@ exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
       const table = req.userType === "admin" ? "admin_users" : "users";
-    const { eraseUserData } = require("../utils/eraseUserData");
+      if (req.userType !== "admin") {
+        recordAccountActivity({
+          userId: req.user.id,
+          eventType: "logout",
+          title: "Signed out",
+          description: "Your Altuvera account session was signed out.",
+        }).catch(() => {});
+      }
       await query(
         `UPDATE ${table}
            SET token_version = COALESCE(token_version, 0) + 1
