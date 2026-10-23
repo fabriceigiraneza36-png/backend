@@ -4,7 +4,7 @@
  */
 "use strict";
 const { pool } = require("../config/db");
-const OWNERSHIP_COLUMNS = ["user_id","author_id","created_by","owner_id","actor_id","sender_id","sender_user_id","account_id","traveller_id","requester_id","liked_by","commenter_id","member_user_id"];
+const OWNERSHIP_COLUMNS = ["user_id","author_id","actor_id","sender_id","sender_user_id","account_id","traveller_id","requester_id","liked_by","commenter_id","member_user_id"];
 const qi = (s) => '"' + String(s).replace(/"/g, '""') + '"';
 
 async function eraseUserData(userId) {
