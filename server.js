@@ -1122,6 +1122,29 @@ const resolveConversationForSocket = async ({ conversationId, sessionId }) => {
   })
 }
 
+// Centralized authorization for every socket operation that touches a conversation.
+// A conversation ID is a locator, never proof that the caller owns the conversation.
+const socketCanAccessConversation = async (socket, conv) => {
+  if (!conv || !socket) return false
+  if (socket.data?.isAdmin) return true
+
+  if (conv.group_id) {
+    if (!socket.data?.userId) return false
+    const membership = await query(
+      `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
+      [conv.group_id, socket.data.userId],
+    )
+    return Boolean(membership.rows[0])
+  }
+
+  if (conv.user_id && socket.data?.userId &&
+      String(conv.user_id) === String(socket.data.userId)) return true
+
+  const socketSessionId = String(socket.data?.sessionId || '').trim()
+  return Boolean(socketSessionId && conv.session_id &&
+    socketSessionId === String(conv.session_id))
+}
+
 // Legacy helpers (chat_messages table � backwards compat)
 const fetchSessionMessages = async (sessionId) => {
   try {
@@ -1409,17 +1432,8 @@ io.on('connection', (socket) => {
       })
       if (!conv) throw new Error('Conversation not found')
 
-      if (!socket.data.isAdmin) {
-        const owns = conv.user_id && String(conv.user_id) === String(socket.data.userId)
-        let member = false
-        if (conv.group_id && socket.data.userId) {
-          const membership = await query(
-            `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
-            [conv.group_id, socket.data.userId],
-          )
-          member = Boolean(membership.rows[0])
-        }
-        if (!owns && !member) throw new Error('Not a member of this conversation')
+      if (!await socketCanAccessConversation(socket, conv)) {
+        throw new Error('Not authorized to join this conversation')
       }
 
       socket.data.conversationId = conv.id
@@ -1461,13 +1475,7 @@ io.on('connection', (socket) => {
       if (convId) {
         const existing = await resolveConversationForSocket({ conversationId: convId, sessionId: payload.sessionId })
         if (!existing) throw new Error('Conversation not found')
-        if (existing.group_id && socket.data.userId && !socket.data.isAdmin) {
-          const membership = await query(
-            `SELECT 1 FROM message_group_members WHERE group_id=$1 AND user_id=$2 LIMIT 1`,
-            [existing.group_id, socket.data.userId],
-          )
-          if (!membership.rows[0]) throw new Error('Not a member of this group')
-        } else if (!socket.data.isAdmin && existing.user_id && String(existing.user_id) !== String(socket.data.userId)) {
+        if (!await socketCanAccessConversation(socket, existing)) {
           throw new Error('Access denied')
         }
         convId = existing.id
@@ -1722,6 +1730,10 @@ io.on('connection', (socket) => {
     if (!convId) return
 
     try {
+      const conv = await resolveConversationForSocket({ conversationId: convId })
+      if (!conv || !await socketCanAccessConversation(socket, conv)) return
+
+      try {
       if (isTyping) {
         await query(
           `INSERT INTO typing_indicators
@@ -1737,9 +1749,9 @@ io.on('connection', (socket) => {
       } else {
         await query(`DELETE FROM typing_indicators WHERE socket_id=$1`, [socket.id])
       }
-    } catch { /* non-fatal */ }
+      } catch { /* non-fatal typing persistence */ }
 
-    socket.to(`conv:${convId}`).emit('msg:typing', {
+      socket.to(`conv:${convId}`).emit('msg:typing', {
       conversationId: parseInt(convId, 10),
       senderType,
       senderName:
@@ -1747,13 +1759,20 @@ io.on('connection', (socket) => {
         socket.data.user?.full_name ||
         (socket.data.isAdmin ? 'Support' : 'Guest'),
       isTyping,
-    })
+      })
+    } catch { /* unauthorized or transient typing errors are non-fatal */ }
   })
 
   socket.on('msg:mark-read', async (payload = {}, cb) => {
     try {
       const convId = payload.conversationId || socket.data.conversationId
       if (!convId) throw new Error('conversationId required')
+
+      const conv = await resolveConversationForSocket({ conversationId: convId })
+      if (!conv) throw new Error('Conversation not found')
+      if (!await socketCanAccessConversation(socket, conv)) {
+        throw new Error('Not authorized to mark this conversation as read')
+      }
 
       if (socket.data.isAdmin) {
         await Promise.all([
