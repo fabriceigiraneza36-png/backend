@@ -652,6 +652,13 @@ exports.completeLoginFactor = async (req, res) => {
     }, sessionExpiresAt).catch((notifyErr) => {
       logger.warn("[Auth] Successful second-factor sign-in notification failed:", notifyErr.message);
     });
+    recordAccountActivity({
+      userId: fresh.id,
+      eventType: "login_success",
+      title: "Successful secure sign-in",
+      description: "Your Altuvera account was signed in after additional security verification.",
+      metadata: { authProvider: fresh.auth_provider || "email", secondFactor: method, sessionExpiresAt },
+    }).catch(() => {});
     return res.json({success:true,message:"Signed in securely.",data:{token:sessionToken,refreshToken,user:sanitizeUser(fresh),isNewUser:false,loginCounter:parseInt(fresh.login_counter,10),sessionExpiresAt}});
   } catch(err) { handleError(res,err,"Additional verification failed"); }
 };
@@ -1402,6 +1409,14 @@ exports.changePassword = async (req, res) => {
 exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
+      if (req.userType !== "admin") {
+        recordAccountActivity({
+          userId: req.user.id,
+          eventType: "logout",
+          title: "Signed out",
+          description: "Your Altuvera account session was signed out.",
+        }).catch(() => {});
+      }
       const table = req.userType === "admin" ? "admin_users" : "users";
       await query(
         `UPDATE ${table}
