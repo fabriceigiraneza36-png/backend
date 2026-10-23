@@ -75,6 +75,8 @@ router.post("/my/:activityId/deletion-request", protect, async (req, res) => {
     );
     return res.status(201).json({ success: true, data: created.rows[0], message: "Your request was sent to an administrator for review." });
   } catch (error) {
+    if (error.code === "23505")
+      return res.status(409).json({ success: false, message: "A pending review request already exists for this record." });
     return res.status(500).json({ success: false, message: "Could not submit the review request." });
   }
 });
