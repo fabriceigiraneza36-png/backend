@@ -1949,6 +1949,7 @@ exports.updateStatus = async (req, res, next) => {
           actionLabel: "View Booking",
           category: "booking",
           priority: status === "cancelled" ? "urgent" : "normal",
+          imageUrl: full.destination_image || full.destination_details?.image_url || full.destination_details?.thumbnail_url || null,
           metadata: {
             bookingId: id,
             bookingNumber: full.booking_number || null,
