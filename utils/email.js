@@ -247,6 +247,11 @@ body{margin:0;padding:0;width:100%!important;background:#f0fdf4;
           font-size:15px;font-weight:700;}
 .warn{background:#fffbeb;border-left:4px solid #f59e0b;
        border-radius:0 10px 10px 0;padding:14px 18px;margin:20px 0 0;}
+@keyframes welcomeConfettiFall{0%{transform:translateY(-12px) rotate(0deg);opacity:1}100%{transform:translateY(22px) rotate(220deg);opacity:.35}}
+.welcome-confetti-piece{display:inline-block;width:7px;height:15px;margin:0 7px;border-radius:2px;animation:welcomeConfettiFall 1.8s ease-in-out infinite alternate}
+.welcome-confetti-piece:nth-child(2n){animation-delay:.25s}
+.welcome-confetti-piece:nth-child(3n){animation-delay:.5s}
+@media (prefers-reduced-motion:reduce){.welcome-confetti-piece{animation:none}}
 @media only screen and (max-width:600px){
   .wrapper{padding:0!important;}.container{border-radius:0!important;}
   .bd{padding:24px 16px!important;}
@@ -388,7 +393,7 @@ const sendWelcomeEmail = async ({ to, recipientName = "" }) => {
         title:    `Welcome to ${APP_NAME}!`,
         subtitle: "Your account is verified and ready to use.",
         recipientName,
-        body:     `<p style="font-size:15px;color:#4b5563;line-height:1.75;">Start exploring our handpicked destinations.</p>`,
+        body:     `<div role="presentation" style="text-align:center;margin:0 0 20px;padding:10px 0;background:#f0fdf4;border-radius:12px;overflow:hidden;line-height:1;"><span class="welcome-confetti-piece" style="background:#059669"></span><span class="welcome-confetti-piece" style="background:#f59e0b"></span><span class="welcome-confetti-piece" style="background:#0ea5e9"></span><span class="welcome-confetti-piece" style="background:#a78bfa"></span><span class="welcome-confetti-piece" style="background:#10b981"></span><span class="welcome-confetti-piece" style="background:#f97316"></span><span class="welcome-confetti-piece" style="background:#059669"></span></div><p style="font-size:15px;color:#4b5563;line-height:1.75;">Your Altuvera account is ready. We’re delighted to welcome you. Start exploring our handpicked African destinations, save places you love, and plan your next adventure.</p>`,
         ctaText:  "Start Exploring",
         ctaUrl:   `${FRONTEND_URL}/destinations`,
       }),
