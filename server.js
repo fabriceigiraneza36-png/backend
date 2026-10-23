@@ -1038,7 +1038,7 @@ const saveConversationMessage = async ({
       userId: senderId,
       eventType: 'message_sent',
       title: 'Message sent',
-      description: String(body).trim().split(/\\r?\\n/)[0].slice(0, 180),
+      description: "You sent a message in an Altuvera conversation.",
       metadata: {
         conversationId,
         messageId: msg.id,
