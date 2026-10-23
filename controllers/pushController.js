@@ -14,8 +14,9 @@ const logger    = require('../utils/logger')
    ───────────────────────────────────────────────────────────────────────────── */
 exports.subscribe = async (req, res) => {
   try {
-    const adminId   = req.admin?.id   || req.user?.id   || 0
-    const adminEmail = req.admin?.email || req.user?.email || ''
+    const accountId   = req.admin?.id || req.user?.id
+    const accountEmail = req.admin?.email || req.user?.email || ''
+    if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to enable push notifications.' })
     const { endpoint, p256dh, auth, userAgent } = req.body || {}
 
     if (!endpoint || !p256dh || !auth) {
@@ -27,7 +28,7 @@ exports.subscribe = async (req, res) => {
          SET p256dh=$1, auth=$2, user_agent=$3, updated_at=NOW()
        WHERE endpoint=$4 AND admin_id=$5
        RETURNING id`,
-      [p256dh, auth, userAgent || null, endpoint, adminId],
+      [p256dh, auth, userAgent || null, endpoint, accountId],
     )
 
     let subId
@@ -37,12 +38,12 @@ exports.subscribe = async (req, res) => {
       const inserted = await query(
         `INSERT INTO push_subscriptions (admin_id, admin_email, endpoint, p256dh, auth, user_agent)
          VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [adminId, adminEmail, endpoint, p256dh, auth, userAgent || null],
+        [accountId, accountEmail, endpoint, p256dh, auth, userAgent || null],
       )
       subId = inserted.rows[0]?.id
     }
 
-    logger.info(`[Push] Admin ${adminId} subscribed (subId=${subId})`)
+    logger.info(`[Push] Account ${accountId} subscribed (subId=${subId})`)
     return res.json({ success: true, id: subId })
   } catch (err) {
     logger.error('[Push] subscribe failed:', err.message)
@@ -57,15 +58,16 @@ exports.subscribe = async (req, res) => {
    ───────────────────────────────────────────────────────────────────────────── */
 exports.unsubscribe = async (req, res) => {
   try {
-    const adminId = req.admin?.id || req.user?.id || 0
+    const accountId = req.admin?.id || req.user?.id
     const { endpoint } = req.body || {}
+    if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to manage push notifications.' })
 
     if (!endpoint) {
       return res.status(400).json({ success: false, message: 'endpoint is required.' })
     }
 
-    await query(`DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id=$2`, [endpoint, adminId])
-    logger.info(`[Push] Admin ${adminId} unsubscribed`)
+    await query(`DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id=$2`, [endpoint, accountId])
+    logger.info(`[Push] Account ${accountId} unsubscribed`)
     return res.json({ success: true })
   } catch (err) {
     logger.error('[Push] unsubscribe failed:', err.message)
@@ -91,10 +93,11 @@ exports.getVapidPublicKey = async (req, res) => {
    ───────────────────────────────────────────────────────────────────────────── */
 exports.mySubscriptions = async (req, res) => {
   try {
-    const adminId = req.admin?.id || req.user?.id || 0
+    const accountId = req.admin?.id || req.user?.id
+    if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to view push subscriptions.' })
     const { rows } = await query(
       `SELECT id, endpoint, created_at FROM push_subscriptions WHERE admin_id=$1 ORDER BY created_at DESC`,
-      [adminId],
+      [accountId],
     )
     return res.json({ success: true, data: rows })
   } catch (err) {
