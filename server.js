@@ -123,6 +123,8 @@ const pushRouter                = require('./routes/push')            // ? push 
 const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
 const bookingIdentityRouter     = require('./routes/bookingIdentity')
+const accountActivityRouter      = require('./routes/accountActivity')
+const { recordAccountActivity } = require('./utils/accountActivity')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
@@ -884,6 +886,7 @@ app.use('/api/destination-likes',    destinationLikesRouter)
 app.use('/api/destination-comments', destinationCommentsRouter)
 app.use('/api/destination-ratings',  destinationRatingsRouter)
 app.use('/api/notifications',        notificationsRouter)
+app.use('/api/account-activity',     accountActivityRouter)
 app.use('/api/booking-identity',     bookingIdentityRouter)
 app.use('/api/admin/notifications',  notificationsRouter.aliasRouter)
 app.use('/api/email-broadcast',      require('./routes/emailBroadcast'))
@@ -1029,6 +1032,16 @@ const saveConversationMessage = async ({
 
   const msg    = rows[0]
   const isUser = senderType !== 'admin'
+
+  if (senderType === 'user' && senderId) {
+    recordAccountActivity({
+      userId: senderId,
+      eventType: 'message_sent',
+      title: 'Message sent',
+      description: "You sent a message in an Altuvera conversation.",
+      metadata: { conversationId, messageId: msg.id },
+    }).catch(() => {})
+  }
 
   await query(
     `UPDATE conversations SET
