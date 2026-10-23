@@ -1472,12 +1472,14 @@ io.on('connection', (socket) => {
           if (!membership.rows[0]) throw new Error('Not a member of this group')
         } else if (existing.user_id && String(existing.user_id) !== String(socket.data.userId)) {
           throw new Error('Access denied')
-        } else if (!existing.user_id && socket.data.userId) {
-          // A signed-in account must not take over an anonymous support thread.
+        } else if (!existing.user_id) {
+          // Anonymous conversations are protected by their session identifier;
+          // knowing a numeric conversation ID alone must never grant access.
+          const suppliedSessionId = socket.data.sessionId || payload.sessionId
           const sessionMatches = Boolean(
-            socket.data.sessionId &&
+            suppliedSessionId &&
             existing.session_id &&
-            String(socket.data.sessionId) === String(existing.session_id)
+            String(suppliedSessionId) === String(existing.session_id)
           )
           if (!sessionMatches) throw new Error('Access denied')
         }
