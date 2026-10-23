@@ -123,6 +123,7 @@ const pushRouter                = require('./routes/push')            // ? push 
 const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
 const bookingIdentityRouter     = require('./routes/bookingIdentity')
+const accountActivityRouter      = require('./routes/accountActivity')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
