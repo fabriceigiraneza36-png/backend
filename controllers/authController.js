@@ -17,6 +17,7 @@ const {
 const logger = require("../utils/logger");
 const { validateEmail, validateName } = require("../utils/validators");
 const { notifyUserRegistered, notifyUserLogin } = require("./notificationsController");
+const { recordAccountActivity } = require("../utils/accountActivity");
 
 /* ════════════════════════════════════════════════════════════════
    CONFIG
