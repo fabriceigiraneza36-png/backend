@@ -39,6 +39,12 @@ const ensureSchema = () => {
         CREATE INDEX IF NOT EXISTS idx_activity_deletion_status
         ON account_activity_deletion_requests(status, created_at DESC)
       `);
+      // Enforce one pending request per activity/requester even under concurrent requests.
+      await query(`
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_activity_deletion_pending_requester
+        ON account_activity_deletion_requests(activity_id, requester_id)
+        WHERE status = 'pending'
+      `);
       await query(`
         CREATE TABLE IF NOT EXISTS account_activity_deletion_audit (
           id BIGSERIAL PRIMARY KEY,
