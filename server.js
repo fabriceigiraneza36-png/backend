@@ -124,6 +124,7 @@ const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
 const bookingIdentityRouter     = require('./routes/bookingIdentity')
 const accountActivityRouter      = require('./routes/accountActivity')
+const { recordAccountActivity } = require('./utils/accountActivity')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
@@ -1031,6 +1032,19 @@ const saveConversationMessage = async ({
 
   const msg    = rows[0]
   const isUser = senderType !== 'admin'
+
+  if (senderType === 'user' && senderId) {
+    recordAccountActivity({
+      userId: senderId,
+      eventType: 'message_sent',
+      title: 'Message sent',
+      description: String(body).trim().split(/\\r?\\n/)[0].slice(0, 180),
+      metadata: {
+        conversationId,
+        messageId: msg.id,
+      },
+    }).catch(() => {})
+  }
 
   await query(
     `UPDATE conversations SET
