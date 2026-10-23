@@ -1391,6 +1391,7 @@ exports.logout = async (req, res) => {
   try {
     if (req.user?.id) {
       const table = req.userType === "admin" ? "admin_users" : "users";
+    const { eraseUserData } = require("../utils/eraseUserData");
       await query(
         `UPDATE ${table}
            SET token_version = COALESCE(token_version, 0) + 1
@@ -1422,7 +1423,12 @@ exports.deleteAccount = async (req, res) => {
       }).catch(() => {});
     }
 
-    await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+    if (req.userType === "admin") {
+      await query("DELETE FROM admin_users WHERE id = $1", [id]);
+    } else {
+      const result = await eraseUserData(id);
+      if (!result.found) return res.status(404).json({ success: false, message: "Account not found." });
+    }
     return res.json({ success: true, message: "Account deleted successfully." });
   } catch (err) {
     handleError(res, err, "Account deletion failed");
