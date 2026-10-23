@@ -35,11 +35,18 @@ async function eraseUserData(userId) {
       if (!optional.has(r.table_name)) optional.set(r.table_name, new Set());
       optional.get(r.table_name).add(r.column_name);
     }
+    if (optional.get("chat_sessions")?.has("user_id")) {
+      const sessions = optional.get("chat_sessions")?.has("session_id")
+        ? await client.query("SELECT session_id FROM chat_sessions WHERE user_id=$1", [userId])
+        : { rows: [] };
+      const sessionIds = sessions.rows.map((row) => row.session_id).filter(Boolean);
+      if (sessionIds.length && optional.get("chat_messages")?.has("session_id")) {
+        await client.query("DELETE FROM chat_messages WHERE session_id=ANY($1::text[])", [sessionIds]);
+      }
+      await client.query("DELETE FROM chat_sessions WHERE user_id=$1", [userId]);
+    }
     if (optional.get("chat_messages")?.has("sender_id")) {
       await client.query("DELETE FROM chat_messages WHERE sender_id=$1", [userId]);
-    }
-    if (optional.get("chat_sessions")?.has("user_id")) {
-      await client.query("DELETE FROM chat_sessions WHERE user_id=$1", [userId]);
     }
 
     const schema = await client.query(`
