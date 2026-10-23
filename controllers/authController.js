@@ -554,6 +554,17 @@ exports.verifyCode = async (req, res) => {
       logger.warn("[Auth] Successful sign-in notification failed:", notifyErr.message);
     });
 
+    recordAccountActivity({
+      userId: freshUser.id,
+      eventType: "login_success",
+      title: "Successful sign-in",
+      description: "Your Altuvera account was signed in successfully.",
+      metadata: {
+        authProvider: freshUser.auth_provider || "email",
+        sessionExpiresAt,
+      },
+    }).catch(() => {});
+
     return res.json({
       success: true,
       message: isFirstVerification
