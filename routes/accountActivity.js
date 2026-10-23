@@ -1,7 +1,7 @@
 "use strict";
 
 const router = require("express").Router();
-const { query } = require("../config/db");
+const { query, pool } = require("../config/db");
 const { protect, adminOnly } = require("../middleware/auth");
 const { ensureAccountActivitySchema } = require("../utils/accountActivity");
 
@@ -15,7 +15,7 @@ router.get("/my", protect, async (req, res) => {
   try {
     await ensureAccountActivitySchema();
     const userId = req.user?.id;
-    if (!userId) return res.status(401).json({ success: false, message: "Authentication required." });
+    if (!userId || req.userType === "admin") return res.status(401).json({ success: false, message: "A traveller account is required." });
     const page = clampInt(req.query.page, 1, 1, 100000);
     const limit = clampInt(req.query.limit, 20, 1, 50);
     const offset = (page - 1) * limit;
@@ -49,7 +49,7 @@ router.post("/my/:activityId/deletion-request", protect, async (req, res) => {
     await ensureAccountActivitySchema();
     const userId = req.user?.id;
     const activityId = Number.parseInt(req.params.activityId, 10);
-    if (!userId) return res.status(401).json({ success: false, message: "Authentication required." });
+    if (!userId || req.userType === "admin") return res.status(401).json({ success: false, message: "A traveller account is required." });
     if (!Number.isSafeInteger(activityId) || activityId < 1)
       return res.status(400).json({ success: false, message: "Invalid activity record." });
 
@@ -104,43 +104,45 @@ router.patch("/admin/deletion-requests/:requestId", protect, adminOnly, async (r
   if (!Number.isSafeInteger(requestId) || requestId < 1 || !["approve", "reject"].includes(decision))
     return res.status(400).json({ success: false, message: "A valid request and approve/reject decision are required." });
 
-  const clientQuery = query;
+  let client;
   try {
     await ensureAccountActivitySchema();
-    const found = await clientQuery(
-      `SELECT r.*, a.user_id, a.event_type, a.title, a.created_at AS activity_created_at
-         FROM account_activity_deletion_requests r
-         LEFT JOIN account_activity_logs a ON a.id = r.activity_id
-        WHERE r.id = $1 AND r.status = 'pending'`,
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const found = await client.query(
+      "SELECT r.*, a.user_id, a.event_type, a.title, a.created_at AS activity_created_at FROM account_activity_deletion_requests r LEFT JOIN account_activity_logs a ON a.id = r.activity_id WHERE r.id = $1 AND r.status = 'pending' FOR UPDATE OF r",
       [requestId],
     );
     const row = found.rows[0];
-    if (!row) return res.status(404).json({ success: false, message: "Pending request not found." });
-
-    if (decision === "approve") {
-      // Save a minimal, durable approval record before removing the activity row.
-      if (row.user_id) {
-        await clientQuery(
-          `INSERT INTO account_activity_deletion_audit
-             (activity_id, user_id, event_type, title, activity_created_at, requester_id, reviewer_id, reason)
-           VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-          [row.activity_id, row.user_id, row.event_type, row.title, row.activity_created_at, row.requester_id, req.user.id, row.reason || ""],
-        );
-        await clientQuery("DELETE FROM account_activity_logs WHERE id = $1", [row.activity_id]);
-      }
+    if (!row) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ success: false, message: "Pending request not found." });
     }
 
-    const updated = await clientQuery(
-      `UPDATE account_activity_deletion_requests
-          SET status = $1, reviewed_by = $2, reviewed_at = NOW()
-        WHERE id = $3 AND status = 'pending'
-        RETURNING id, status, reviewed_by, reviewed_at`,
+    if (decision === "approve" && row.user_id) {
+      await client.query(
+        "INSERT INTO account_activity_deletion_audit (activity_id, user_id, event_type, title, activity_created_at, requester_id, reviewer_id, reason) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        [row.activity_id, row.user_id, row.event_type, row.title, row.activity_created_at, row.requester_id, req.user.id, row.reason || ""],
+      );
+      await client.query("DELETE FROM account_activity_logs WHERE id = $1", [row.activity_id]);
+    }
+
+    const updated = await client.query(
+      "UPDATE account_activity_deletion_requests SET status = $1, reviewed_by = $2, reviewed_at = NOW() WHERE id = $3 AND status = 'pending' RETURNING id, status, reviewed_by, reviewed_at",
       [decision === "approve" ? "approved" : "rejected", req.user.id, requestId],
     );
-    if (!updated.rows[0]) return res.status(409).json({ success: false, message: "Request was already reviewed." });
+    if (!updated.rows[0]) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ success: false, message: "Request was already reviewed." });
+    }
+    await client.query("COMMIT");
     return res.json({ success: true, data: updated.rows[0] });
   } catch (error) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
+    if (error.code === "23505") return res.status(409).json({ success: false, message: "A pending review request already exists for this record." });
     return res.status(500).json({ success: false, message: "Could not review the deletion request." });
+  } finally {
+    client?.release();
   }
 });
 
