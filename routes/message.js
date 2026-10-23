@@ -41,8 +41,15 @@ const _requireAuth = (req, res, next) => {
   next();
 };
 
-if (typeof protect      !== "function") protect      = _requireAuth;
-if (typeof adminProtect !== "function") adminProtect = _requireAuth;
+if (typeof protect !== "function") protect = _requireAuth;
+// Fail closed if the dedicated admin middleware is missing. Falling back to
+// ordinary authentication would let any signed-in traveller call admin APIs.
+if (typeof adminProtect !== "function") {
+  adminProtect = (_req, res) => res.status(503).json({
+    success: false,
+    message: "Admin authorization is unavailable. Please contact support.",
+  });
+}
 if (typeof optionalAuth !== "function") optionalAuth = _pass;
 
 /* ═══════════════════════════════════════════════════════════════════════════
