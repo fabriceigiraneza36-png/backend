@@ -18,10 +18,8 @@ exports.getRatings = async (req, res, next) => {
       });
     }
 
-    const whereClause = { countryId: parseInt(countryId) };
-    if (approved !== undefined) {
-      whereClause.isApproved = approved === "true";
-    }
+    // Public feedback endpoints must never expose hidden/unapproved submissions.
+    const whereClause = { countryId: parseInt(countryId), isApproved: true };
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
     const order = sortBy === "rating" ? [["rating", "DESC"]] : [["createdAt", "DESC"]];
