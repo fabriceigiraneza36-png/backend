@@ -186,31 +186,27 @@ exports.createOrUpdateRating = async (req, res, next) => {
 
     const existingRating = await CountryRating.findOne({ where: whereClause });
 
+    // Ratings are immutable one-time votes per country/account (or anonymous session).
     if (existingRating) {
-      await existingRating.update({
-        rating,
-        review: review || existingRating.review,
-      });
-
-      // Get updated stats
-      const stats = await this.getStatsForCountry(countryId);
-
-      return res.json({
-        status: "success",
-        message: "Rating updated successfully",
-        data: {
-          rating: existingRating,
-          stats,
-        },
+      return res.status(409).json({
+        status: "error",
+        code: "COUNTRY_ALREADY_RATED",
+        message: "You have already rated this country. Each account can rate a country only once.",
+        data: { rating: existingRating },
       });
     }
 
+    const safeRating = Number(rating);
+    const safeReview = typeof review === "string" ? review.trim().slice(0, 4000) : null;
+    if (!Number.isInteger(safeRating) || safeRating < 1 || safeRating > 5) {
+      return res.status(400).json({ status: "error", message: "Rating must be a whole number from 1 to 5" });
+    }
     const newRating = await CountryRating.create({
       countryId: parseInt(countryId),
       userId: userId || null,
       sessionId: userId ? null : sessionId,
-      rating,
-      review,
+      rating: safeRating,
+      review: safeReview,
       isApproved: true,
     });
 
@@ -225,6 +221,13 @@ exports.createOrUpdateRating = async (req, res, next) => {
       },
     });
   } catch (error) {
+    if (error?.name === "SequelizeUniqueConstraintError" || error?.original?.code === "23505") {
+      return res.status(409).json({
+        status: "error",
+        code: "COUNTRY_ALREADY_RATED",
+        message: "You have already rated this country. Each account can rate a country only once.",
+      });
+    }
     next(error);
   }
 };
