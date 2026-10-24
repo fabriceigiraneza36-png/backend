@@ -161,13 +161,14 @@ router.get("/export", adminProtect, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════
 router.get("/", adminProtect, async (req, res) => {
   try {
+    await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     const {
       page = 1, limit = 20, search, status,
       sortBy = "created_at", order = "desc",
     } = req.query;
 
     const offset     = (parseInt(page) - 1) * parseInt(limit);
-    const conditions = ["1=1"];
+    const conditions = ["deleted_at IS NULL"];
     const params     = [];
     let p = 1;
 
@@ -234,7 +235,7 @@ router.get("/:id", adminProtect, async (req, res) => {
       `SELECT id, email, full_name, avatar_url, phone, nationality,
               auth_provider, is_verified, is_active,
               last_login, created_at, updated_at
-         FROM users WHERE id = $1`,
+         FROM users WHERE id = $1 AND deleted_at IS NULL`,
       [req.params.id],
     );
     if (!result.rows[0])
