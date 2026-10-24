@@ -270,7 +270,11 @@ async function eraseUserData(userId) {
 
     await client.query("DELETE FROM users WHERE id::text = $1::text", [userId]);
     await client.query("COMMIT");
-    return { found: true, deletedRows: deletedCount.rows };
+    return {
+      found: true,
+      deletedRows: deletedCount.rows,
+      preservedGroupConversations: groupConversationIds.length,
+    };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
     throw error;
