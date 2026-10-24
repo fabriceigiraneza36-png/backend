@@ -105,7 +105,9 @@ async function eraseUserData(userId) {
 
     // Preserve group message bodies and history, but clear the deleted user's
     // identity so the UI can render the sender as unavailable.
-    if (groupConversationIds.length && tableExists("messages") && hasColumn("messages", "sender_id")) {
+    if (tableExists("conversations") && hasColumn("conversations", "group_id")
+        && tableExists("messages") && hasColumn("messages", "sender_id")
+        && hasColumn("messages", "conversation_id")) {
       const sets = ["sender_id = NULL"];
       if (hasColumn("messages", "sender_name")) sets.push("sender_name = 'Deleted user'");
       if (hasColumn("messages", "sender_email")) sets.push("sender_email = NULL");
@@ -117,7 +119,10 @@ async function eraseUserData(userId) {
       await client.query(
         `UPDATE messages SET ${sets.join(", ")}
           WHERE sender_id::text = $1::text
-            AND conversation_id::text = ANY($2::text[])`,
+            AND EXISTS (
+              SELECT 1 FROM conversations c
+               WHERE c.id = messages.conversation_id AND c.group_id IS NOT NULL
+            )`,
         [userId, groupConversationIds],
       );
     }
@@ -138,7 +143,7 @@ async function eraseUserData(userId) {
     if (hasColumn("messages", "sender_id")) {
       messageParams.push(userId);
       const senderClause = `sender_id::text = ${messageParams.length}::text`;
-      messageConditions.push(groupConversationIds.length && hasColumn("messages", "conversation_id")
+      messageConditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
         ? `(${senderClause} AND NOT EXISTS (
              SELECT 1 FROM conversations preserved
               WHERE preserved.id = messages.conversation_id
@@ -188,7 +193,7 @@ async function eraseUserData(userId) {
       if (hasColumn("messages", "sender_id")) {
         params.push(userId);
         const senderClause = `sender_id::text = ${params.length}::text`;
-        conditions.push(groupConversationIds.length && hasColumn("messages", "conversation_id")
+        conditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
           ? `(${senderClause} AND NOT EXISTS (
                SELECT 1 FROM conversations preserved
                 WHERE preserved.id = messages.conversation_id
