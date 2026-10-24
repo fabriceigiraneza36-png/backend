@@ -1457,11 +1457,19 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       logger.warn("[Messages] Live message broadcast failed:", socketError.message);
     }
 
-    // The REST fallback is also responsible for personalized persistent alerts.
+    // Persist a personalized admin alert only for incoming traveller messages.
+    // Replies are delivered inside the conversation and deliberately do not
+    // create a second email or notification for either side.
     try {
-      const { createNotificationInternal } = require("../controllers/notificationsController");
       if (!isAdminReq) {
-        const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+        const { createNotificationInternal } = require("../controllers/notificationsController");
+        const profileResult = await query(
+          `SELECT id, full_name, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1`,
+          [req.user.id],
+        );
+        const profile = profileResult.rows[0] || {};
+        const senderName = profile.full_name || req.user.full_name || req.user.name || msg.sender_name || "Registered traveler";
+        const senderEmail = profile.email || req.user.email || "";
         await createNotificationInternal({
           userId: null,
           senderType: "user",
@@ -1476,38 +1484,18 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           priority: "high",
           targetScope: "role",
           targetRole: "admin",
-          metadata: { conversationId: Number(id), messageId: msg.id, senderName, senderEmail: req.user.email || "" },
-        });
-      } else if (conv.user_id) {
-        const io = req.app.get("io");
-        const userSocketOpen = io && [...io.sockets.sockets.values()].some(socket =>
-          socket?.data?.userId &&
-          String(socket.data.userId) === String(conv.user_id) &&
-          socket?.data?.messagesPageOpen === true &&
-          String(socket.data.activeConversation || socket.data.conversationId || "") === String(id)
-        );
-        if (!userSocketOpen) {
-          const senderName = msg.sender_name || "Altuvera Support";
-          await createNotificationInternal({
-            userId: conv.user_id,
-            userEmail: conv.guest_email || req.user.email || null,
-            senderType: "admin",
-            senderId: req.user.id,
+          metadata: {
+            conversationId: Number(id),
+            messageId: msg.id,
+            userId: profile.id || req.user.id,
             senderName,
-            type: "message_received",
-            category: "message",
-            title: `Message from ${senderName}`,
-            message: String(body).trim().slice(0, 500),
-            actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
-            actionLabel: "Reply now",
-            priority: "high",
-            targetScope: "individual",
-            metadata: { conversationId: Number(id), messageId: msg.id, senderName },
-          });
-        }
+            senderEmail,
+            senderAvatar: profile.avatar_url || null,
+          },
+        });
       }
     } catch (notificationError) {
-      logger.warn("[Messages] Persistent message notification failed:", notificationError.message);
+      logger.warn("[Messages] Incoming-message admin notification failed:", notificationError.message);
     }
 
     return res.json({ success: true, data: serialized });
@@ -1915,13 +1903,8 @@ function setupMessageSockets(io) {
             message: shaped,
           });
 
-          // Persist a notification so the user sees it from any page.
-          notifyAdminMessage(
-            conversationId,
-            { id: userId, email: convCheck.rows[0].user_email, full_name: convCheck.rows[0].user_full_name },
-            adminUser,
-            body.trim(),
-          ).catch((err) => logger.warn("[Messages] admin notification failed:", err.message));
+          // The live message event is sufficient here; no separate email or
+          // notification is generated for an admin reply.
         }
 
         // Acknowledge to sender
