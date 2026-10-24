@@ -108,6 +108,7 @@ async function eraseUserData(userId) {
     if (tableExists("conversations") && hasColumn("conversations", "group_id")
         && tableExists("messages") && hasColumn("messages", "sender_id")
         && hasColumn("messages", "conversation_id")) {
+      const senderTypeGuard = hasColumn("messages", "sender_type") ? " AND sender_type = 'user'" : "";
       const sets = ["sender_id = NULL"];
       if (hasColumn("messages", "sender_name")) sets.push("sender_name = 'Deleted user'");
       if (hasColumn("messages", "sender_email")) sets.push("sender_email = NULL");
@@ -122,7 +123,7 @@ async function eraseUserData(userId) {
             AND EXISTS (
               SELECT 1 FROM conversations c
                WHERE c.id = messages.conversation_id AND c.group_id IS NOT NULL
-            )`,
+            )${senderTypeGuard}`,
         [userId],
       );
     }
@@ -142,7 +143,8 @@ async function eraseUserData(userId) {
     }
     if (hasColumn("messages", "sender_id")) {
       messageParams.push(userId);
-      const senderClause = `sender_id::text = $${messageParams.length}::text`;
+      const senderTypeGuard = hasColumn("messages", "sender_type") ? " AND sender_type = 'user'" : "";
+      const senderClause = `sender_id::text = ${messageParams.length}::text${senderTypeGuard}`;
       messageConditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
         ? `(${senderClause} AND NOT EXISTS (
              SELECT 1 FROM conversations preserved
@@ -192,7 +194,8 @@ async function eraseUserData(userId) {
       }
       if (hasColumn("messages", "sender_id")) {
         params.push(userId);
-        const senderClause = `sender_id::text = $${params.length}::text`;
+        const senderTypeGuard = hasColumn("messages", "sender_type") ? " AND sender_type = 'user'" : "";
+        const senderClause = `sender_id::text = ${params.length}::text${senderTypeGuard}`;
         conditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
           ? `(${senderClause} AND NOT EXISTS (
                SELECT 1 FROM conversations preserved
@@ -212,7 +215,11 @@ async function eraseUserData(userId) {
 
     if (tableExists("chat_messages")) {
       await deleteByValues("chat_messages", "session_id", sessionIds);
-      await deleteByUser("chat_messages", "sender_id");
+      if (hasColumn("chat_messages", "sender_type")) {
+        await deleteRows("chat_messages", "sender_id::text = $1::text AND sender_type = 'user'", [userId]);
+      } else {
+        await deleteByUser("chat_messages", "sender_id");
+      }
     }
     await deleteByUser("chat_sessions", "user_id");
 
