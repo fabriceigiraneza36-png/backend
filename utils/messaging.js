@@ -247,11 +247,18 @@ async function listConversations({
   search = null,
   userFilter = null,
   bookingId = null,
+  adminView = false,
 } = "") {
 
   const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
   const conditions = ["c.deleted_at IS NULL"];
   const params     = [];
+
+  // The admin portal is an authenticated-user inbox, not a guest contact
+  // queue. Retain registered-user conversations and all shared group chats.
+  if (adminView) {
+    conditions.push("(c.user_id IS NOT NULL OR c.group_id IS NOT NULL)");
+  }
   let   p          = 1;
 
   /* Status filter — allow 'all' to skip */
