@@ -249,6 +249,7 @@ async function listConversations({
   bookingId = null,
 } = "") {
 
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
   const conditions = ["c.deleted_at IS NULL"];
   const params     = [];
@@ -319,6 +320,7 @@ async function listConversations({
        u.phone       AS user_phone,
        u.nationality AS user_nationality,
        u.username    AS user_username,
+       u.deleted_at  AS user_deleted_at,
        (
          SELECT COUNT(*)::INT FROM messages m
           WHERE m.conversation_id = c.id
@@ -346,8 +348,8 @@ async function listConversations({
     ...row,
     group_name: row.group_name || null,
     group_description: row.group_description || null,
-    guest_name:  row.guest_name  || row.user_full_name || null,
-    guest_email: row.guest_email || row.user_email     || null,
+    guest_name:  row.user_deleted_at ? "Deleted user" : (row.guest_name || row.user_full_name || null),
+    guest_email: row.user_deleted_at ? null : (row.guest_email || row.user_email || null),
     user: row.user_id
       ? {
           id:          row.user_id,
@@ -368,6 +370,7 @@ async function listConversations({
    getConversationWithMessages
    ───────────────────────────────────────────────────────────────────────────── */
 async function getConversationWithMessages(conversationId, options = {}) {
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   if (!conversationId) throw new Error("conversationId is required");
 
   /* Conversation + user info */
