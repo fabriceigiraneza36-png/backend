@@ -247,6 +247,7 @@ async function listConversations({
   search = null,
   userFilter = null,
   bookingId = null,
+  adminView = false,
 } = "") {
 
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
@@ -254,6 +255,12 @@ async function listConversations({
   const conditions = ["c.deleted_at IS NULL"];
   const params     = [];
   let   p          = 1;
+
+  // Keep group history available, but remove private conversations owned by
+  // a soft-deleted account from the active admin queue.
+  if (adminView) {
+    conditions.push("(c.group_id IS NOT NULL OR (c.user_id IS NOT NULL AND u.deleted_at IS NULL))");
+  }
 
   /* Status filter — allow 'all' to skip */
   if (status && status !== "all") {
@@ -348,8 +355,10 @@ async function listConversations({
     ...row,
     group_name: row.group_name || null,
     group_description: row.group_description || null,
-    guest_name:  row.user_deleted_at ? "Deleted user" : (row.guest_name || row.user_full_name || null),
-    guest_email: row.user_deleted_at ? null : (row.guest_email || row.user_email || null),
+    guest_name:  row.group_id
+      ? (row.group_name || row.guest_name || row.user_full_name || null)
+      : (row.user_deleted_at ? "Deleted user" : (row.guest_name || row.user_full_name || null)),
+    guest_email: row.group_id ? null : (row.user_deleted_at ? null : (row.guest_email || row.user_email || null)),
     user: row.user_id
       ? {
           id:          row.user_id,
@@ -384,7 +393,8 @@ async function getConversationWithMessages(conversationId, options = {}) {
        u.avatar_url  AS user_avatar,
        u.phone       AS user_phone,
        u.nationality AS user_nationality,
-       u.username    AS user_username
+       u.username    AS user_username,
+       u.deleted_at  AS user_deleted_at
      FROM conversations c
      LEFT JOIN users u ON u.id = c.user_id
      LEFT JOIN message_groups g ON g.id = c.group_id
@@ -408,14 +418,18 @@ async function getConversationWithMessages(conversationId, options = {}) {
 
     if (options.beforeId != null) {
       params.push(Number.parseInt(options.beforeId, 10));
-      cursorClause = ` AND id < $2`;
+      cursorClause = ` AND m.id < $2`;
     }
 
     params.push(limit + 1);
     const msgRes = await query(
-      `SELECT * FROM messages
-        WHERE conversation_id = $1${cursorClause}
-        ORDER BY id DESC
+      `SELECT m.*,
+              (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
+         FROM messages m
+         LEFT JOIN users sender_user
+           ON sender_user.id = m.sender_id AND m.sender_type = 'user'
+        WHERE m.conversation_id = $1${cursorClause}
+        ORDER BY m.id DESC
         LIMIT $${params.length}`,
       params
     );
@@ -424,9 +438,13 @@ async function getConversationWithMessages(conversationId, options = {}) {
     messages = msgRes.rows.slice(0, limit).reverse();
   } else {
     const msgRes = await query(
-      `SELECT * FROM messages
-        WHERE conversation_id = $1
-        ORDER BY created_at ASC, id ASC`,
+      `SELECT m.*,
+              (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
+         FROM messages m
+         LEFT JOIN users sender_user
+           ON sender_user.id = m.sender_id AND m.sender_type = 'user'
+        WHERE m.conversation_id = $1
+        ORDER BY m.created_at ASC, m.id ASC`,
       [conversationId]
     );
     messages = msgRes.rows;
@@ -434,8 +452,10 @@ async function getConversationWithMessages(conversationId, options = {}) {
 
   return {
     ...conv,
-    guest_name:  conv.guest_name  || conv.user_full_name || null,
-    guest_email: conv.guest_email || conv.user_email     || null,
+    guest_name:  conv.group_id
+      ? (conv.group_name || conv.guest_name || conv.user_full_name || null)
+      : (conv.user_deleted_at ? "Deleted user" : (conv.guest_name || conv.user_full_name || null)),
+    guest_email: conv.group_id ? null : (conv.user_deleted_at ? null : (conv.guest_email || conv.user_email || null)),
     user: conv.user_id
       ? {
           id:          conv.user_id,
