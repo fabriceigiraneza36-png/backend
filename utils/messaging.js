@@ -256,6 +256,12 @@ async function listConversations({
   const params     = [];
   let   p          = 1;
 
+  // Keep group history available, but remove private conversations owned by
+  // a soft-deleted account from the active admin queue.
+  if (adminView) {
+    conditions.push("(c.group_id IS NOT NULL OR (c.user_id IS NOT NULL AND u.deleted_at IS NULL))");
+  }
+
   // Admin messaging is limited to signed-in accounts and shared groups.
   // Preserve group chats after a member is soft-deleted, but remove that
   // account's private support threads from the operational inbox.
@@ -417,7 +423,7 @@ async function getConversationWithMessages(conversationId, options = {}) {
 
     if (options.beforeId != null) {
       params.push(Number.parseInt(options.beforeId, 10));
-      cursorClause = ` AND id < $2`;
+      cursorClause = ` AND m.id < $2`;
     }
 
     params.push(limit + 1);
