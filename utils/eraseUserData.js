@@ -17,12 +17,12 @@ async function eraseUserData(userId) {
       return { found: false, deletedRows: 0 };
     }
 
-    const conversations = await client.query("SELECT id FROM conversations WHERE user_id=$1", [userId]);
+    const conversations = await client.query("SELECT id FROM conversations WHERE user_id::text=$1::text", [userId]);
     const conversationIds = conversations.rows.map((r) => r.id);
     if (conversationIds.length) {
-      await client.query("DELETE FROM messages WHERE conversation_id=ANY($1::int[])", [conversationIds]);
+      await client.query("DELETE FROM messages WHERE conversation_id::text = ANY($1::text[])", [conversationIds.map(String)]);
     }
-    await client.query("DELETE FROM messages WHERE sender_id=$1", [userId]);
+    await client.query("DELETE FROM messages WHERE sender_id::text=$1::text", [userId]);
 
     const optionalTables = await client.query(`
       SELECT table_name, column_name
@@ -41,12 +41,12 @@ async function eraseUserData(userId) {
         : { rows: [] };
       const sessionIds = sessions.rows.map((row) => row.session_id).filter(Boolean);
       if (sessionIds.length && optional.get("chat_messages")?.has("session_id")) {
-        await client.query("DELETE FROM chat_messages WHERE session_id=ANY($1::text[])", [sessionIds]);
+        await client.query("DELETE FROM chat_messages WHERE session_id::text=ANY($1::text[])", [sessionIds.map(String)]);
       }
-      await client.query("DELETE FROM chat_sessions WHERE user_id=$1", [userId]);
+      await client.query("DELETE FROM chat_sessions WHERE user_id::text=$1::text", [userId]);
     }
     if (optional.get("chat_messages")?.has("sender_id")) {
-      await client.query("DELETE FROM chat_messages WHERE sender_id=$1", [userId]);
+      await client.query("DELETE FROM chat_messages WHERE sender_id::text=$1::text", [userId]);
     }
 
     const schema = await client.query(`
@@ -71,11 +71,11 @@ async function eraseUserData(userId) {
       deletedRows += result.rowCount || 0;
     }
     if (optional.get("message_group_members")?.has("user_id")) {
-      const result = await client.query("DELETE FROM message_group_members WHERE user_id=$1", [userId]);
+      const result = await client.query("DELETE FROM message_group_members WHERE user_id::text=$1::text", [userId]);
       deletedRows += result.rowCount || 0;
     }
     if (conversationIds.length) {
-      const result = await client.query("DELETE FROM conversations WHERE id=ANY($1::int[])", [conversationIds]);
+      const result = await client.query("DELETE FROM conversations WHERE id::text = ANY($1::text[])", [conversationIds.map(String)]);
       deletedRows += result.rowCount || 0;
     }
     await client.query("DELETE FROM users WHERE id=$1", [userId]);
