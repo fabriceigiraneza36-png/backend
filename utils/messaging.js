@@ -249,6 +249,7 @@ async function listConversations({
   bookingId = null,
 } = "") {
 
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
   const conditions = ["c.deleted_at IS NULL"];
   const params     = [];
@@ -369,6 +370,7 @@ async function listConversations({
    getConversationWithMessages
    ───────────────────────────────────────────────────────────────────────────── */
 async function getConversationWithMessages(conversationId, options = {}) {
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   if (!conversationId) throw new Error("conversationId is required");
 
   /* Conversation + user info */
