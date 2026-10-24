@@ -428,7 +428,7 @@ async function getConversationWithMessages(conversationId, options = {}) {
            ON sender_user.id = m.sender_id AND m.sender_type = 'user'
         WHERE m.conversation_id = $1${cursorClause}
         ORDER BY m.id DESC
-        LIMIT ${params.length}`,
+        LIMIT $${params.length}`,
       params
     );
 
