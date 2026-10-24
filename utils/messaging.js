@@ -262,13 +262,6 @@ async function listConversations({
     conditions.push("(c.group_id IS NOT NULL OR (c.user_id IS NOT NULL AND u.deleted_at IS NULL))");
   }
 
-  // Admin messaging is limited to signed-in accounts and shared groups.
-  // Preserve group chats after a member is soft-deleted, but remove that
-  // account's private support threads from the operational inbox.
-  if (adminView) {
-    conditions.push("(c.group_id IS NOT NULL OR (c.user_id IS NOT NULL AND u.deleted_at IS NULL))");
-  }
-
   /* Status filter — allow 'all' to skip */
   if (status && status !== "all") {
     conditions.push(`c.status = $${p++}`);
