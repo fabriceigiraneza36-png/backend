@@ -1307,21 +1307,15 @@ exports.adminLogin = async (req, res) => {
     if (!isMatch)
       return res.status(401).json({ success: false, message: "Invalid credentials." });
 
-    let freshAdmin;
-    try {
-      const updated = await query(
-        `UPDATE admin_users
-           SET last_login = NOW(), token_version = COALESCE(token_version, 0) + 1
-         WHERE id = $1 RETURNING *`,
-        [admin.id],
-      );
-      freshAdmin = updated.rows[0];
-    } catch {
-      await query(
-        "UPDATE admin_users SET last_login = NOW() WHERE id = $1", [admin.id],
-      );
-      freshAdmin = { ...admin, last_login: new Date(), token_version: 0 };
-    }
+    // A successful login must not invalidate other active admin sessions.
+    // Reserve token_version changes for explicit revocation events.
+    const updated = await query(
+      `UPDATE admin_users
+         SET last_login = NOW()
+       WHERE id = $1 RETURNING *`,
+      [admin.id],
+    );
+    const freshAdmin = updated.rows[0] || { ...admin, last_login: new Date() };
 
     return res.json({
       success: true,
