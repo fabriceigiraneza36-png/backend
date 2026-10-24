@@ -64,6 +64,7 @@ const syncDestinationSummary = async (destinationId) => {
   return stats
 }
 
+const publicUserDetails = "CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('name', COALESCE(to_jsonb(u)->>'full_name', to_jsonb(u)->>'name', 'Traveller'), 'avatar', COALESCE(to_jsonb(u)->>'avatar_url', to_jsonb(u)->>'avatar')) END AS user"
 const userDetails = "CASE WHEN u.id IS NULL THEN NULL ELSE jsonb_build_object('id', u.id, 'name', COALESCE(to_jsonb(u)->>'full_name', to_jsonb(u)->>'name', 'Traveller'), 'email', to_jsonb(u)->>'email', 'avatar', COALESCE(to_jsonb(u)->>'avatar_url', to_jsonb(u)->>'avatar')) END AS user"
 
 exports.ensureRatingSchema = ensureRatingSchema
@@ -78,12 +79,13 @@ exports.getRatings = async (req, res, next) => {
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1)
     const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 20))
-    const approved = req.query.approved === 'false' ? false : true
     const offset = (page - 1) * limit
-    const countResult = await query('SELECT COUNT(*)::INTEGER AS total FROM destination_ratings WHERE destination_id = $1 AND is_approved = $2', [destinationId, approved])
+    // This endpoint is public: expose approved ratings only and never expose
+    // account email addresses. Moderation data is available via /admin/all.
+    const countResult = await query('SELECT COUNT(*)::INTEGER AS total FROM destination_ratings WHERE destination_id = $1 AND is_approved = TRUE', [destinationId])
     const result = await query(
-      'SELECT r.id, r.destination_id AS "destinationId", r.user_id AS "userId", r.rating, r.review, r.is_approved AS "isApproved", r.created_at AS "createdAt", r.updated_at AS "updatedAt", ' + userDetails + ' FROM destination_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.destination_id = $1 AND r.is_approved = $2 ORDER BY r.created_at DESC LIMIT $3 OFFSET $4',
-      [destinationId, approved, limit, offset],
+      'SELECT r.id, r.destination_id AS "destinationId", r.rating, r.review, r.created_at AS "createdAt", r.updated_at AS "updatedAt", ' + publicUserDetails + ' FROM destination_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.destination_id = $1 AND r.is_approved = TRUE ORDER BY r.created_at DESC LIMIT $2 OFFSET $3',
+      [destinationId, limit, offset],
     )
     const total = Number(countResult.rows[0]?.total) || 0
     return res.json({ success: true, status: 'success', data: { ratings: result.rows, pagination: { total, page, limit, pages: Math.ceil(total / limit) } } })
@@ -112,7 +114,7 @@ exports.getRating = async (req, res, next) => {
     const ratingId = parseId(req.params.ratingId)
     if (!destinationId || !ratingId) return res.status(400).json({ success: false, status: 'error', message: 'Invalid rating ID' })
     const result = await query(
-      'SELECT r.id, r.destination_id AS "destinationId", r.user_id AS "userId", r.rating, r.review, r.is_approved AS "isApproved", r.created_at AS "createdAt", r.updated_at AS "updatedAt", ' + userDetails + ' FROM destination_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.destination_id = $1 AND r.id = $2 LIMIT 1',
+      'SELECT r.id, r.destination_id AS "destinationId", r.rating, r.review, r.created_at AS "createdAt", r.updated_at AS "updatedAt", ' + publicUserDetails + ' FROM destination_ratings r LEFT JOIN users u ON u.id = r.user_id WHERE r.destination_id = $1 AND r.id = $2 AND r.is_approved = TRUE LIMIT 1',
       [destinationId, ratingId],
     )
     if (!result.rows.length) return res.status(404).json({ success: false, status: 'error', message: 'Rating not found' })
