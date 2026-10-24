@@ -556,6 +556,16 @@ const isAdminUser = (req) =>
   ADMIN_ROLES.has(req.user?.role || "") ||
   req.user?.type === "admin";
 
+async function isActiveRegisteredUser(userId) {
+  if (userId == null || userId === "") return false;
+  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+  const result = await query(
+    "SELECT 1 FROM users WHERE id::text = $1::text AND is_active = TRUE AND deleted_at IS NULL LIMIT 1",
+    [userId],
+  );
+  return Boolean(result.rows[0]);
+}
+
 async function canAccessConversation(req, conversationId) {
   const result = await query(
     `SELECT id, user_id, group_id FROM conversations
@@ -1130,8 +1140,14 @@ router.post("/conversations", protect, async (req, res) => {
       ? (parseInt(targetUserId, 10) || null)
       : req.user.id;
 
-    if (!userId && !sessionId) {
-      return res.status(400).json({ success: false, message: "A target user or session is required." });
+    // Every direct conversation belongs to a real, active account. Admins
+    // must select a registered traveller; legacy guest sessions cannot start
+    // new conversations in this portal.
+    if (!userId) {
+      return res.status(400).json({ success: false, message: "Select an active registered user to start a conversation." });
+    }
+    if (!(await isActiveRegisteredUser(userId))) {
+      return res.status(404).json({ success: false, message: "This account is no longer available." });
     }
 
     const destination = String(destinationName || metadata?.destinationName || metadata?.destination_name || "").trim();
@@ -1384,9 +1400,14 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
+    /* Only active registered users may send messages, even with an old token. */
+    if (!isAdminUser(req) && !(await isActiveRegisteredUser(req.user?.id))) {
+      return res.status(403).json({ success: false, message: "Your account is unavailable. Sign in with an active account to send messages." });
+    }
+
     /* Users may message their own conversation or a group they belong to. */
     if (!isAdminUser(req)) {
-      const ownsConversation = convCheck.rows[0].user_id && convCheck.rows[0].user_id === req.user.id;
+      const ownsConversation = convCheck.rows[0].user_id && String(convCheck.rows[0].user_id) === String(req.user.id);
       let memberOfGroup = false;
       if (convCheck.rows[0].group_id) {
         const member = await query(
@@ -1969,8 +1990,10 @@ function setupMessageSockets(io) {
           return ack?.({ success: false, error: "You must be a member of this signed-in conversation." });
         }
 
+        await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
         const profileResult = await query(
-          "SELECT id, full_name, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1",
+          "SELECT id, full_name, email, avatar_url FROM users " +
+          "WHERE id::text = $1::text AND is_active = TRUE AND deleted_at IS NULL LIMIT 1",
           [socketUser.id]
         );
         const profile = profileResult.rows[0];
