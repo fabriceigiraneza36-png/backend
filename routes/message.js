@@ -1235,6 +1235,7 @@ router.post("/conversations", protect, async (req, res) => {
       const senderEmail = req.user.email || "";
       if (io) {
         io.to("admins").to("admin-room").emit("msg:new-from-user", {
+          senderType: "user",
           conversationId: conv.id,
           sessionId: conv.session_id || null,
           message: shapedMessage,
@@ -1470,6 +1471,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
           const senderEmail = req.user.email || "";
           io.to("admins").to("admin-room").emit("msg:new-from-user", {
+          senderType: "user",
             conversationId: Number(id),
             sessionId: conv.session_id || null,
             message: serialized,
@@ -2054,6 +2056,7 @@ function setupMessageSockets(io) {
         }
 
         const incomingPayload = {
+          senderType: "user",
           conversationId: Number(conversationId),
           senderName,
           senderEmail,
