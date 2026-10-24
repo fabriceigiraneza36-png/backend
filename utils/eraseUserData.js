@@ -144,7 +144,7 @@ async function eraseUserData(userId) {
     if (hasColumn("messages", "sender_id")) {
       messageParams.push(userId);
       const senderTypeGuard = hasColumn("messages", "sender_type") ? " AND sender_type = 'user'" : "";
-      const senderClause = `sender_id::text = ${messageParams.length}::text${senderTypeGuard}`;
+      const senderClause = `sender_id::text = $${messageParams.length}::text${senderTypeGuard}`;
       messageConditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
         ? `(${senderClause} AND NOT EXISTS (
              SELECT 1 FROM conversations preserved
@@ -195,7 +195,7 @@ async function eraseUserData(userId) {
       if (hasColumn("messages", "sender_id")) {
         params.push(userId);
         const senderTypeGuard = hasColumn("messages", "sender_type") ? " AND sender_type = 'user'" : "";
-        const senderClause = `sender_id::text = ${params.length}::text${senderTypeGuard}`;
+        const senderClause = `sender_id::text = $${params.length}::text${senderTypeGuard}`;
         conditions.push(hasColumn("conversations", "group_id") && hasColumn("messages", "conversation_id")
           ? `(${senderClause} AND NOT EXISTS (
                SELECT 1 FROM conversations preserved
