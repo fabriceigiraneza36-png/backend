@@ -149,7 +149,7 @@ exports.getRating = async (req, res, next) => {
 exports.createOrUpdateRating = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const { userId } = req.user || {};
+    const userId = req.user?.id ?? req.user?.userId;
     const { sessionId, rating, review } = req.body;
 
     const country = await Country.findByPk(countryId);
@@ -297,7 +297,7 @@ exports.deleteRating = async (req, res, next) => {
 exports.getUserRating = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const { userId } = req.user || {};
+    const userId = req.user?.id ?? req.user?.userId;
     const { sessionId } = req.query;
 
     if (!userId && !sessionId) {
