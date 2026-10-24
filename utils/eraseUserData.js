@@ -280,6 +280,39 @@ async function eraseUserData(userId) {
       );
     }
 
+    // Resolve any remaining foreign keys to users.id using the deployed
+    // schema instead of assuming every optional activity table has a known name.
+    // CASCADE constraints are left to PostgreSQL; SET NULL links are detached;
+    // restrictive links are cleaned before the account row is deleted.
+    const foreignKeys = await client.query(`
+      SELECT DISTINCT kcu.table_name, kcu.column_name, rc.delete_rule
+        FROM information_schema.referential_constraints rc
+        JOIN information_schema.key_column_usage kcu
+          ON kcu.constraint_schema = rc.constraint_schema
+         AND kcu.constraint_name = rc.constraint_name
+        JOIN information_schema.constraint_column_usage ccu
+          ON ccu.constraint_schema = rc.constraint_schema
+         AND ccu.constraint_name = rc.constraint_name
+       WHERE ccu.table_schema = 'public'
+         AND ccu.table_name = 'users'
+         AND ccu.column_name = 'id'
+    `);
+    for (const fk of foreignKeys.rows) {
+      if (!tableExists(fk.table_name) || !hasColumn(fk.table_name, fk.column_name)) continue;
+      if (fk.delete_rule === "CASCADE") continue;
+      const column = qi(fk.column_name);
+      if (fk.delete_rule === "SET NULL") {
+        await client.query(
+          `UPDATE ${qi("public")}.${qi(fk.table_name)}
+              SET ${column} = NULL
+            WHERE ${column}::text = $1::text`,
+          [userId],
+        );
+      } else {
+        await deleteRows(fk.table_name, `${column}::text = $1::text`, [userId]);
+      }
+    }
+
     await client.query("DELETE FROM users WHERE id::text = $1::text", [userId]);
     await client.query("COMMIT");
     return {
