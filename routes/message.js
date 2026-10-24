@@ -1392,13 +1392,22 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       return res.status(400).json({ success: false, message: "Message body is required" });
     }
 
+    await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     const convCheck = await query(
-      `SELECT id, user_id, group_id, session_id, guest_name, guest_email, subject, status
-         FROM conversations
-        WHERE id = $1 AND deleted_at IS NULL`,
+      `SELECT c.id, c.user_id, c.group_id, c.session_id, c.guest_name, c.guest_email, c.subject, c.status,
+              u.deleted_at AS user_deleted_at
+         FROM conversations c
+         LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.id = $1 AND c.deleted_at IS NULL`,
       [id],
     );
     if (!convCheck.rows[0]) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+    if (isAdminUser(req) && (
+      (!convCheck.rows[0].user_id && !convCheck.rows[0].group_id) ||
+      (convCheck.rows[0].user_deleted_at && !convCheck.rows[0].group_id)
+    )) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
@@ -1907,12 +1916,20 @@ function setupMessageSockets(io) {
       }
 
       try {
-        // Verify conversation exists
+        // Private threads for deleted accounts and legacy guest-only threads
+        // are not actionable in the registered-user messaging portal.
+        await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
         const convCheck = await query(
-          `SELECT id, user_id FROM conversations WHERE id = $1 AND deleted_at IS NULL`,
+          `SELECT c.id, c.user_id, c.group_id, u.deleted_at AS user_deleted_at
+             FROM conversations c
+             LEFT JOIN users u ON u.id = c.user_id
+            WHERE c.id = $1 AND c.deleted_at IS NULL`,
           [conversationId]
         );
-        if (!convCheck.rows[0]) {
+        const currentConversation = convCheck.rows[0];
+        if (!currentConversation ||
+            ((!currentConversation.user_id && !currentConversation.group_id) ||
+             (currentConversation.user_deleted_at && !currentConversation.group_id))) {
           return ack?.({ success: false, error: "Conversation not found" });
         }
 
