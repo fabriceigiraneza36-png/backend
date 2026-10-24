@@ -498,6 +498,26 @@ exports.ensureDestinationSchema = async () => {
   await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS is_active  BOOLEAN DEFAULT true`)
   await run(`ALTER TABLE destination_reviews ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`)
 
+  // A single durable vote per account and destination. Aggregate values are
+  // recalculated from approved rows and mirrored into destinations.rating/count.
+  await run(`
+    CREATE TABLE IF NOT EXISTS destination_ratings (
+      id BIGSERIAL PRIMARY KEY,
+      destination_id BIGINT NOT NULL REFERENCES destinations(id) ON DELETE CASCADE,
+      user_id BIGINT,
+      session_id VARCHAR(255),
+      rating INTEGER NOT NULL CHECK (rating >= 1 AND rating <= 5),
+      review TEXT,
+      is_approved BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      CONSTRAINT destination_ratings_unique_user UNIQUE (destination_id, user_id),
+      CONSTRAINT destination_ratings_unique_session UNIQUE (destination_id, session_id)
+    )
+  `)
+  await run(`CREATE INDEX IF NOT EXISTS idx_destination_ratings_destination_id ON destination_ratings(destination_id)`)
+  await run(`CREATE INDEX IF NOT EXISTS idx_destination_ratings_user_id ON destination_ratings(user_id)`)
+
   await run(`
     CREATE TABLE IF NOT EXISTS destination_tags (
       id             SERIAL PRIMARY KEY,
@@ -613,7 +633,9 @@ const BASE_SELECT = `
     c.continent AS country_continent,
     c.region    AS country_region,
     (SELECT COUNT(*)::INTEGER FROM destination_likes dl WHERE dl.destination_id = d.id) AS likes_count,
-    (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count
+    (SELECT COUNT(*)::INTEGER FROM destination_comments dc WHERE dc.destination_id = d.id AND dc.is_approved = true) AS comments_count,
+    (SELECT ROUND(AVG(dr.rating)::numeric, 2) FROM destination_ratings dr WHERE dr.destination_id = d.id AND dr.is_approved = true) AS submitted_average_rating,
+    (SELECT COUNT(*)::INTEGER FROM destination_ratings dr WHERE dr.destination_id = d.id AND dr.is_approved = true) AS submitted_review_count
   FROM destinations d
   LEFT JOIN countries c ON c.id = d.country_id
 `
@@ -714,8 +736,12 @@ const serialize = (row) => {
     minAge:         toNum(row.min_age),
     fitnessLevel:   row.fitness_level,
 
-    rating:        toNum(row.rating, 0),
-    reviewCount:   toNum(row.review_count, 0),
+    rating:        Number(row.submitted_review_count) > 0 ? toNum(row.submitted_average_rating, 0) : toNum(row.rating, 0),
+    averageRating: Number(row.submitted_review_count) > 0 ? toNum(row.submitted_average_rating, 0) : toNum(row.rating, 0),
+    average_rating: Number(row.submitted_review_count) > 0 ? toNum(row.submitted_average_rating, 0) : toNum(row.rating, 0),
+    reviewCount:   Number(row.submitted_review_count) > 0 ? toNum(row.submitted_review_count, 0) : toNum(row.review_count, 0),
+    review_count:  Number(row.submitted_review_count) > 0 ? toNum(row.submitted_review_count, 0) : toNum(row.review_count, 0),
+    total_reviews: Number(row.submitted_review_count) > 0 ? toNum(row.submitted_review_count, 0) : toNum(row.review_count, 0),
     viewCount:     toNum(row.view_count, 0),
     bookingCount:  toNum(row.booking_count, 0),
     wishlistCount: toNum(row.wishlist_count, 0),
