@@ -556,14 +556,15 @@ const isAdminUser = (req) =>
   ADMIN_ROLES.has(req.user?.role || "") ||
   req.user?.type === "admin";
 
-async function isActiveRegisteredUser(userId) {
-  if (userId == null || userId === "") return false;
+async function getActiveRegisteredUser(userId) {
+  if (userId == null || userId === "") return null;
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   const result = await query(
-    "SELECT 1 FROM users WHERE id::text = $1::text AND is_active = TRUE AND deleted_at IS NULL LIMIT 1",
+    "SELECT id, full_name, email, avatar_url FROM users " +
+    "WHERE id::text = $1::text AND is_active = TRUE AND deleted_at IS NULL LIMIT 1",
     [userId],
   );
-  return Boolean(result.rows[0]);
+  return result.rows[0] || null;
 }
 
 async function canAccessConversation(req, conversationId) {
@@ -1146,7 +1147,8 @@ router.post("/conversations", protect, async (req, res) => {
     if (!userId) {
       return res.status(400).json({ success: false, message: "Select an active registered user to start a conversation." });
     }
-    if (!(await isActiveRegisteredUser(userId))) {
+    const accountProfile = await getActiveRegisteredUser(userId);
+    if (!accountProfile) {
       return res.status(404).json({ success: false, message: "This account is no longer available." });
     }
 
@@ -1178,8 +1180,8 @@ router.post("/conversations", protect, async (req, res) => {
          RETURNING *`,
         [
           userId,
-          callerIsAdmin ? (guestName || null) : (req.user.full_name || req.user.name || guestName || null),
-          callerIsAdmin ? (guestEmail || null) : (req.user.email || guestEmail || null),
+          accountProfile.full_name || null,
+          accountProfile.email || null,
           channel || "live_chat",
           conversationSubject,
           priority || "normal",
@@ -1194,8 +1196,8 @@ router.post("/conversations", protect, async (req, res) => {
       conv = await getOrCreateConversation({
         userId: userId || null,
         sessionId: userId ? null : (sessionId || null),
-        guestName: guestName || req.user.full_name || req.user.name || null,
-        guestEmail: guestEmail || req.user.email || null,
+        guestName: accountProfile.full_name || null,
+        guestEmail: accountProfile.email || null,
         bookingId: bookingId || null,
         bookingNumber: bookingNumber || null,
         subject: conversationSubject,
@@ -1217,9 +1219,9 @@ router.post("/conversations", protect, async (req, res) => {
         senderId: req.user.id,
         senderName: callerIsAdmin
           ? (req.user.full_name || req.user.name || "Altuvera Support")
-          : (req.user.full_name || req.user.name || guestName || "Traveler"),
-        senderEmail: req.user.email || guestEmail || null,
-        senderAvatar: req.user.avatar_url || null,
+          : (accountProfile.full_name || "Registered traveler"),
+        senderEmail: callerIsAdmin ? (req.user.email || null) : accountProfile.email,
+        senderAvatar: callerIsAdmin ? (req.user.avatar_url || null) : accountProfile.avatar_url,
         body: initialMessage,
         metadata: { source: "messages-portal", ...conversationMetadata },
       });
@@ -1401,12 +1403,14 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     }
 
     /* Only active registered users may send messages, even with an old token. */
-    if (!isAdminUser(req) && !(await isActiveRegisteredUser(req.user?.id))) {
+    const isAdminReq = isAdminUser(req);
+    const senderProfile = isAdminReq ? req.user : await getActiveRegisteredUser(req.user?.id);
+    if (!senderProfile) {
       return res.status(403).json({ success: false, message: "Your account is unavailable. Sign in with an active account to send messages." });
     }
 
     /* Users may message their own conversation or a group they belong to. */
-    if (!isAdminUser(req)) {
+    if (!isAdminReq) {
       const ownsConversation = convCheck.rows[0].user_id && String(convCheck.rows[0].user_id) === String(req.user.id);
       let memberOfGroup = false;
       if (convCheck.rows[0].group_id) {
@@ -1421,16 +1425,15 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       }
     }
 
-    const isAdminReq = isAdminUser(req);
     const msg = await insertMessage({
       conversationId: id,
       senderType:     isAdminReq ? "admin" : "user",
       senderId:       req.user.id,
       senderName:     isAdminReq
-        ? (req.user.full_name || req.user.username || "Admin")
-        : (req.user.full_name || req.user.name || "User"),
-      senderEmail:    req.user.email,
-      senderAvatar:   req.user.avatar_url || null,
+        ? (senderProfile.full_name || senderProfile.username || "Admin")
+        : (senderProfile.full_name || "Registered traveler"),
+      senderEmail:    senderProfile.email || null,
+      senderAvatar:   senderProfile.avatar_url || null,
       body:           String(body).trim(),
       replyToId:      replyToId || null,
     });
