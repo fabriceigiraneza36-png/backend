@@ -14,7 +14,7 @@ router.get("/:countryId/ratings/user", optionalAuth, countryRatingsController.ge
 
 // Protected routes
 router.post("/:countryId/ratings", protect, countryRatingsController.createOrUpdateRating);
-router.delete("/:countryId/ratings/:ratingId", protect, countryRatingsController.deleteRating);
+router.delete("/:countryId/ratings/:ratingId", protect, adminOnly, countryRatingsController.deleteRating);
 
 // Admin routes
 router.patch("/:countryId/ratings/:ratingId/approve", adminOnly, countryRatingsController.approveRating);
