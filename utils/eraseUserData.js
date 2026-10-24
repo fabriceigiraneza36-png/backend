@@ -41,19 +41,30 @@ async function eraseUserData(userId) {
       alreadyDeleted = Boolean(existing.rows[0]?.deleted_at);
     }
 
+    // Some older deployments create messaging membership tables lazily.
+    // Detect the optional table before querying it so account cleanup stays safe.
+    const membershipTable = await client.query(
+      "SELECT to_regclass('public.message_group_members') IS NOT NULL AS available",
+    );
+    const hasMembershipTable = Boolean(membershipTable.rows[0]?.available);
+
     // Count shared threads before removing this member. Group conversations
     // are intentionally not soft-deleted even when the group had only two users.
     const groupThreads = await client.query(
-      `SELECT COUNT(DISTINCT c.id)::INT AS count
-         FROM conversations c
-        WHERE c.group_id IS NOT NULL
-          AND (
-            c.user_id::text = $1::text
-            OR EXISTS (
-              SELECT 1 FROM message_group_members gm
-               WHERE gm.group_id = c.group_id AND gm.user_id::text = $1::text
-            )
-          )`,
+      hasMembershipTable
+        ? `SELECT COUNT(DISTINCT c.id)::INT AS count
+             FROM conversations c
+            WHERE c.group_id IS NOT NULL
+              AND (
+                c.user_id::text = $1::text
+                OR EXISTS (
+                  SELECT 1 FROM message_group_members gm
+                   WHERE gm.group_id = c.group_id AND gm.user_id::text = $1::text
+                )
+              )`
+        : `SELECT COUNT(DISTINCT c.id)::INT AS count
+             FROM conversations c
+            WHERE c.group_id IS NOT NULL AND c.user_id::text = $1::text`,
       [userId],
     );
 
@@ -73,10 +84,12 @@ async function eraseUserData(userId) {
 
     // Keep the group and all messages, but mark the removed traveller as no
     // longer a participant so the remaining group members retain normal access.
-    const memberships = await client.query(
-      "DELETE FROM message_group_members WHERE user_id::text = $1::text",
-      [userId],
-    );
+    const memberships = hasMembershipTable
+      ? await client.query(
+          "DELETE FROM message_group_members WHERE user_id::text = $1::text",
+          [userId],
+        )
+      : { rowCount: 0 };
 
     await client.query("COMMIT");
     return {
