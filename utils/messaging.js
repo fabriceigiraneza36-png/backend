@@ -355,8 +355,10 @@ async function listConversations({
     ...row,
     group_name: row.group_name || null,
     group_description: row.group_description || null,
-    guest_name:  row.user_deleted_at ? "Deleted user" : (row.guest_name || row.user_full_name || null),
-    guest_email: row.user_deleted_at ? null : (row.guest_email || row.user_email || null),
+    guest_name:  row.group_id
+      ? (row.group_name || row.guest_name || row.user_full_name || null)
+      : (row.user_deleted_at ? "Deleted user" : (row.guest_name || row.user_full_name || null)),
+    guest_email: row.group_id ? null : (row.user_deleted_at ? null : (row.guest_email || row.user_email || null)),
     user: row.user_id
       ? {
           id:          row.user_id,
@@ -450,8 +452,10 @@ async function getConversationWithMessages(conversationId, options = {}) {
 
   return {
     ...conv,
-    guest_name:  conv.user_deleted_at ? "Deleted user" : (conv.guest_name || conv.user_full_name || null),
-    guest_email: conv.user_deleted_at ? null : (conv.guest_email || conv.user_email || null),
+    guest_name:  conv.group_id
+      ? (conv.group_name || conv.guest_name || conv.user_full_name || null)
+      : (conv.user_deleted_at ? "Deleted user" : (conv.guest_name || conv.user_full_name || null)),
+    guest_email: conv.group_id ? null : (conv.user_deleted_at ? null : (conv.guest_email || conv.user_email || null)),
     user: conv.user_id
       ? {
           id:          conv.user_id,
