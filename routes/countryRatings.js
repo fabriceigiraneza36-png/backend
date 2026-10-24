@@ -4,17 +4,17 @@
 const express = require("express");
 const router = express.Router();
 const countryRatingsController = require("../controllers/countryRatingsController");
-const { protect, adminOnly } = require("../middleware/auth");
+const { protect, optionalAuth, adminOnly } = require("../middleware/auth");
 
 // Public routes
 router.get("/:countryId/ratings", countryRatingsController.getRatings);
 router.get("/:countryId/ratings/stats", countryRatingsController.getRatingStats);
 router.get("/:countryId/ratings/:ratingId", countryRatingsController.getRating);
-router.get("/:countryId/ratings/user", countryRatingsController.getUserRating);
+router.get("/:countryId/ratings/user", optionalAuth, countryRatingsController.getUserRating);
 
 // Protected routes
 router.post("/:countryId/ratings", protect, countryRatingsController.createOrUpdateRating);
-router.delete("/:countryId/ratings/:ratingId", protect, countryRatingsController.deleteRating);
+router.delete("/:countryId/ratings/:ratingId", protect, adminOnly, countryRatingsController.deleteRating);
 
 // Admin routes
 router.patch("/:countryId/ratings/:ratingId/approve", adminOnly, countryRatingsController.approveRating);
