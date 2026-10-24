@@ -77,12 +77,50 @@ async function eraseUserData(userId) {
 
     // Get all chat/session/message identifiers while the transaction locks
     // the account, so dependent records can be removed before parent rows.
+    // Only direct conversations are removed. Group conversations can be
+    // owned by this user in older deployments, but must survive deletion.
     const conversationIds = tableExists("conversations") && hasColumn("conversations", "user_id")
       ? (await client.query(
-          "SELECT id::text AS id FROM conversations WHERE user_id::text = $1::text",
+          `SELECT id::text AS id FROM conversations
+            WHERE user_id::text = $1::text
+              ${hasColumn("conversations", "group_id") ? "AND group_id IS NULL" : ""}`,
           [userId],
         )).rows.map((row) => row.id)
       : [];
+
+    const groupConversationIds = tableExists("conversations") && hasColumn("conversations", "group_id")
+      ? (await client.query(
+          `SELECT DISTINCT c.id::text AS id
+             FROM conversations c
+            WHERE c.group_id IS NOT NULL
+              AND (
+                ${hasColumn("conversations", "user_id") ? "c.user_id::text = $1::text OR" : ""}
+                ${tableExists("message_group_members") && hasColumn("message_group_members", "user_id") && hasColumn("message_group_members", "group_id")
+                  ? "EXISTS (SELECT 1 FROM message_group_members gm WHERE gm.group_id = c.group_id AND gm.user_id::text = $1::text)"
+                  : "FALSE"}
+              )`,
+          [userId],
+        )).rows.map((row) => row.id)
+      : [];
+
+    // Preserve group message bodies and history, but clear the deleted user's
+    // identity so the UI can render the sender as unavailable.
+    if (groupConversationIds.length && tableExists("messages") && hasColumn("messages", "sender_id")) {
+      const sets = ["sender_id = NULL"];
+      if (hasColumn("messages", "sender_name")) sets.push("sender_name = 'Deleted user'");
+      if (hasColumn("messages", "sender_email")) sets.push("sender_email = NULL");
+      if (hasColumn("messages", "sender_avatar")) sets.push("sender_avatar = NULL");
+      if (hasColumn("messages", "metadata")) {
+        sets.push("metadata = COALESCE(metadata, '{}'::jsonb) || '{\"senderDeleted\":true,\"senderUnavailable\":true}'::jsonb");
+      }
+      if (hasColumn("messages", "updated_at")) sets.push("updated_at = NOW()");
+      await client.query(
+        `UPDATE messages SET ${sets.join(", ")}
+          WHERE sender_id::text = $1::text
+            AND conversation_id::text = ANY($2::text[])`,
+        [userId, groupConversationIds],
+      );
+    }
 
     const sessionIds = tableExists("chat_sessions") && hasColumn("chat_sessions", "user_id")
       ? (await client.query(
@@ -99,7 +137,14 @@ async function eraseUserData(userId) {
     }
     if (hasColumn("messages", "sender_id")) {
       messageParams.push(userId);
-      messageConditions.push(`sender_id::text = $${messageParams.length}::text`);
+      const senderClause = `sender_id::text = ${messageParams.length}::text`;
+      messageConditions.push(groupConversationIds.length && hasColumn("messages", "conversation_id")
+        ? `(${senderClause} AND NOT EXISTS (
+             SELECT 1 FROM conversations preserved
+              WHERE preserved.id = messages.conversation_id
+                AND preserved.group_id IS NOT NULL
+           ))`
+        : senderClause);
     }
     const messageIds = tableExists("messages") && hasColumn("messages", "id") && messageConditions.length
       ? (await client.query(
@@ -142,7 +187,14 @@ async function eraseUserData(userId) {
       }
       if (hasColumn("messages", "sender_id")) {
         params.push(userId);
-        conditions.push(`sender_id::text = $${params.length}::text`);
+        const senderClause = `sender_id::text = ${params.length}::text`;
+        conditions.push(groupConversationIds.length && hasColumn("messages", "conversation_id")
+          ? `(${senderClause} AND NOT EXISTS (
+               SELECT 1 FROM conversations preserved
+                WHERE preserved.id = messages.conversation_id
+                  AND preserved.group_id IS NOT NULL
+             ))`
+          : senderClause);
       }
       if (conditions.length) {
         const result = await client.query(
