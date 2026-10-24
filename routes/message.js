@@ -16,7 +16,7 @@
 const router = require("express").Router();
 const { query }  = require("../config/db");
 const logger     = require("../utils/logger");
-const { notifyAdminMessage } = require("../controllers/notificationsController");
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE MIDDLEWARE IMPORTS
@@ -94,10 +94,14 @@ try {
 /* ── Inline fallback: listConversations ─────────────────────────────────── */
 const listConversations = typeof _listConversations === "function"
   ? _listConversations
-  : async ({ status, limit = 100, page = 1, search, bookingId } = {}) => {
+  : async ({ status, limit = 100, page = 1, search, bookingId, adminView = false } = {}) => {
       const conditions = ["c.deleted_at IS NULL"];
       const params     = [];
       let   p          = 1;
+
+      if (adminView) {
+        conditions.push("(c.user_id IS NOT NULL OR c.group_id IS NOT NULL)");
+      }
 
       if (status && status !== "all") {
         conditions.push(`c.status = $${p++}`);
@@ -975,7 +979,8 @@ router.get("/conversations", protect, async (req, res) => {
       bookingId,
     } = req.query;
 
-    const userFilter = isAdminUser(req) ? {} : { user_id: req.user.id };
+    const adminView = isAdminUser(req);
+    const userFilter = adminView ? {} : { user_id: req.user.id };
 
     const { rows, total } = await listConversations({
       status,
@@ -984,6 +989,7 @@ router.get("/conversations", protect, async (req, res) => {
       search,
       userFilter,
       bookingId: bookingId || null,
+      adminView,
     });
 
     const lim = parseInt(limit, 10) || 100;
