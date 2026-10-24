@@ -9,8 +9,8 @@ const { protect, optionalAuth, adminOnly } = require("../middleware/auth");
 // Public routes
 router.get("/:countryId/ratings", countryRatingsController.getRatings);
 router.get("/:countryId/ratings/stats", countryRatingsController.getRatingStats);
-router.get("/:countryId/ratings/:ratingId", countryRatingsController.getRating);
 router.get("/:countryId/ratings/user", optionalAuth, countryRatingsController.getUserRating);
+router.get("/:countryId/ratings/:ratingId", countryRatingsController.getRating);
 
 // Protected routes
 router.post("/:countryId/ratings", protect, countryRatingsController.createOrUpdateRating);
