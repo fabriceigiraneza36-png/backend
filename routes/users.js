@@ -7,6 +7,7 @@ const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
 const { eraseUserData } = require("../utils/eraseUserData");
+const logger = require("../utils/logger");
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Stats (no auth)
@@ -306,7 +307,19 @@ router.delete("/:id", adminProtect, async (req, res) => {
     if (!result.found) return res.status(404).json({ success: false, message: "User not found" });
     return res.json({ success: true, message: "User and associated activity permanently deleted", deletedRows: result.deletedRows });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "User deletion failed; no changes were committed" });
+    logger.error("[Users] transactional account deletion failed", {
+      userId: String(req.params.id || ""),
+      code: error?.code || error?.errorCode || "USER_DELETE_FAILED",
+      message: error?.message || "Unknown deletion error",
+    });
+    const permissionDenied = error?.statusCode === 403 || error?.code === "42501";
+    return res.status(permissionDenied ? 403 : 500).json({
+      success: false,
+      code: error?.code || error?.errorCode || "USER_DELETE_FAILED",
+      message: permissionDenied
+        ? "Database permissions prevent this account from being deleted. Contact support."
+        : "User deletion failed; no changes were committed. Review the server error log for the cause.",
+    });
   }
 });
 
