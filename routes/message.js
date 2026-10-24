@@ -509,14 +509,18 @@ function reshapeConversation(row, includeMessages = false) {
 
 function reshapeMessage(m) {
   if (!m) return null;
+  const metadata = m.metadata && typeof m.metadata === "object" ? m.metadata : {};
+  const senderUnavailable = Boolean(
+    m.sender_unavailable || metadata.senderUnavailable || metadata.senderDeleted
+  );
   return {
     id:             m.id,
     conversationId: m.conversation_id,
     senderType:     m.sender_type,
-    senderId:       m.sender_id,
-    senderName:     m.sender_name,
-    senderEmail:    m.sender_email,
-    senderAvatar:   m.sender_avatar,
+    senderId:       senderUnavailable ? null : m.sender_id,
+    senderName:     senderUnavailable ? "Deleted user" : m.sender_name,
+    senderEmail:    senderUnavailable ? null : m.sender_email,
+    senderAvatar:   senderUnavailable ? null : m.sender_avatar,
     body:           m.body,
     msgType:        m.msg_type,
     attachmentUrl:  m.attachment_url,
@@ -531,7 +535,9 @@ function reshapeMessage(m) {
     isPinned:       m.is_pinned ?? false,
     isHighlighted:  m.is_highlighted ?? false,
     replyToId:      m.reply_to_id,
-    metadata:       m.metadata   || {},
+    metadata:       senderUnavailable
+      ? { ...metadata, senderDeleted: true, senderUnavailable: true }
+      : metadata,
     reactions:      m.reactions  || {},
     createdAt:      m.created_at,
   };
