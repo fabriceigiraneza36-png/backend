@@ -246,7 +246,7 @@ exports.getAllRatingsAdmin = async (req, res, next) => {
       params,
     )
     const total = Number(countResult.rows[0]?.total) || 0
-    const summary = await query('SELECT COUNT(*)::INTEGER AS total, COALESCE(ROUND(AVG(rating)::numeric, 2), 0)::FLOAT AS average, COUNT(*) FILTER (WHERE is_approved = TRUE)::INTEGER AS approved FROM destination_ratings')
+    const summary = await query('SELECT COUNT(*)::INTEGER AS total, COALESCE(ROUND((AVG(rating) FILTER (WHERE is_approved = TRUE))::numeric, 2), 0)::FLOAT AS average, COUNT(*) FILTER (WHERE is_approved = TRUE)::INTEGER AS approved FROM destination_ratings')
     return res.json({ success: true, status: 'success', data: { ratings: result.rows, pagination: { total, page, limit, pages: Math.ceil(total / limit) }, summary: summary.rows[0] || { total: 0, average: 0, approved: 0 } } })
   } catch (error) {
     return next(error)
