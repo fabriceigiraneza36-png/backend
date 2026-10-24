@@ -315,8 +315,15 @@ const asyncNoThrow = (promise, label) => {
 /* ═════════════════════════════════════════════════════════════════════
    BUSINESS HELPERS
 ═════════════════════════════════════════════════════════════════════ */
-const isValidTransition = (from, to) =>
-  (STATUS_TRANSITIONS[from] || []).includes(to);
+const isValidTransition = (from, to) => {
+  // Cancellation is a safe terminal action for any active booking, including
+  // legacy statuses such as "pending" and "on-hold" that predate the current
+  // workflow. Do not allow reopening/cancelling an already terminal booking.
+  if (to === BOOKING_STATUS.CANCELLED) {
+    return ![BOOKING_STATUS.COMPLETED, BOOKING_STATUS.CANCELLED, BOOKING_STATUS.DECLINED, BOOKING_STATUS.EXPIRED].includes(from);
+  }
+  return (STATUS_TRANSITIONS[from] || []).includes(to);
+};
 
 const isEligibleForRequest = (booking, type) => {
   const s = booking.status;
