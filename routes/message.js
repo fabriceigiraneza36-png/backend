@@ -16,7 +16,7 @@
 const router = require("express").Router();
 const { query }  = require("../config/db");
 const logger     = require("../utils/logger");
-const { notifyAdminMessage } = require("../controllers/notificationsController");
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE MIDDLEWARE IMPORTS
@@ -94,10 +94,14 @@ try {
 /* ── Inline fallback: listConversations ─────────────────────────────────── */
 const listConversations = typeof _listConversations === "function"
   ? _listConversations
-  : async ({ status, limit = 100, page = 1, search, bookingId } = {}) => {
+  : async ({ status, limit = 100, page = 1, search, bookingId, adminView = false } = {}) => {
       const conditions = ["c.deleted_at IS NULL"];
       const params     = [];
       let   p          = 1;
+
+      if (adminView) {
+        conditions.push("(c.user_id IS NOT NULL OR c.group_id IS NOT NULL)");
+      }
 
       if (status && status !== "all") {
         conditions.push(`c.status = $${p++}`);
@@ -975,7 +979,8 @@ router.get("/conversations", protect, async (req, res) => {
       bookingId,
     } = req.query;
 
-    const userFilter = isAdminUser(req) ? {} : { user_id: req.user.id };
+    const adminView = isAdminUser(req);
+    const userFilter = adminView ? {} : { user_id: req.user.id };
 
     const { rows, total } = await listConversations({
       status,
@@ -984,6 +989,7 @@ router.get("/conversations", protect, async (req, res) => {
       search,
       userFilter,
       bookingId: bookingId || null,
+      adminView,
     });
 
     const lim = parseInt(limit, 10) || 100;
@@ -1204,7 +1210,7 @@ router.post("/conversations", protect, async (req, res) => {
       const senderName = savedMessage.sender_name || req.user.full_name || req.user.name || "Traveler";
       const senderEmail = req.user.email || "";
       if (io) {
-        io.to("admins").emit("msg:new-from-user", {
+        io.to("admins").to("admin-room").emit("msg:new-from-user", {
           conversationId: conv.id,
           sessionId: conv.session_id || null,
           message: shapedMessage,
@@ -1215,7 +1221,7 @@ router.post("/conversations", protect, async (req, res) => {
           guestAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
           unreadCount: 1,
         });
-        io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+        io.to("admins").to("admin-room").emit("msg:conversation-updated", reshapeConversation({
           ...conv,
           guest_name: conv.guest_name || senderName,
           guest_email: conv.guest_email || senderEmail,
@@ -1298,6 +1304,12 @@ router.get("/conversations/:id", protect, async (req, res) => {
       : {};
     const data = await getConversationWithMessages(req.params.id, pageOptions);
     if (!data) {
+      return res.status(404).json({ success: false, message: "Conversation not found" });
+    }
+
+    // Legacy guest/contact-form threads are not part of the authenticated
+    // messaging portal. Admins can open registered-user threads and groups.
+    if (isAdminUser(req) && !data.user_id && !data.group_id) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
@@ -1415,7 +1427,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
         if (!isAdminReq) {
           const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
           const senderEmail = req.user.email || "";
-          io.to("admins").emit("msg:new-from-user", {
+          io.to("admins").to("admin-room").emit("msg:new-from-user", {
             conversationId: Number(id),
             sessionId: conv.session_id || null,
             message: serialized,
@@ -1433,7 +1445,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           );
           if (current.rows[0]) {
             const row = current.rows[0];
-            io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+            io.to("admins").to("admin-room").emit("msg:conversation-updated", reshapeConversation({
               ...row,
               user: row.user_id ? {
                 fullName: row.user_full_name, email: row.user_email, avatarUrl: row.user_avatar,
@@ -1451,11 +1463,19 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       logger.warn("[Messages] Live message broadcast failed:", socketError.message);
     }
 
-    // The REST fallback is also responsible for personalized persistent alerts.
+    // Persist a personalized admin alert only for incoming traveller messages.
+    // Replies are delivered inside the conversation and deliberately do not
+    // create a second email or notification for either side.
     try {
-      const { createNotificationInternal } = require("../controllers/notificationsController");
       if (!isAdminReq) {
-        const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+        const { createNotificationInternal } = require("../controllers/notificationsController");
+        const profileResult = await query(
+          `SELECT id, full_name, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1`,
+          [req.user.id],
+        );
+        const profile = profileResult.rows[0] || {};
+        const senderName = profile.full_name || req.user.full_name || req.user.name || msg.sender_name || "Registered traveler";
+        const senderEmail = profile.email || req.user.email || "";
         await createNotificationInternal({
           userId: null,
           senderType: "user",
@@ -1470,38 +1490,18 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           priority: "high",
           targetScope: "role",
           targetRole: "admin",
-          metadata: { conversationId: Number(id), messageId: msg.id, senderName, senderEmail: req.user.email || "" },
-        });
-      } else if (conv.user_id) {
-        const io = req.app.get("io");
-        const userSocketOpen = io && [...io.sockets.sockets.values()].some(socket =>
-          socket?.data?.userId &&
-          String(socket.data.userId) === String(conv.user_id) &&
-          socket?.data?.messagesPageOpen === true &&
-          String(socket.data.activeConversation || socket.data.conversationId || "") === String(id)
-        );
-        if (!userSocketOpen) {
-          const senderName = msg.sender_name || "Altuvera Support";
-          await createNotificationInternal({
-            userId: conv.user_id,
-            userEmail: conv.guest_email || req.user.email || null,
-            senderType: "admin",
-            senderId: req.user.id,
+          metadata: {
+            conversationId: Number(id),
+            messageId: msg.id,
+            userId: profile.id || req.user.id,
             senderName,
-            type: "message_received",
-            category: "message",
-            title: `Message from ${senderName}`,
-            message: String(body).trim().slice(0, 500),
-            actionUrl: `/messages?conversationId=${encodeURIComponent(id)}`,
-            actionLabel: "Reply now",
-            priority: "high",
-            targetScope: "individual",
-            metadata: { conversationId: Number(id), messageId: msg.id, senderName },
-          });
-        }
+            senderEmail,
+            senderAvatar: profile.avatar_url || null,
+          },
+        });
       }
     } catch (notificationError) {
-      logger.warn("[Messages] Persistent message notification failed:", notificationError.message);
+      logger.warn("[Messages] Incoming-message admin notification failed:", notificationError.message);
     }
 
     return res.json({ success: true, data: serialized });
@@ -1909,13 +1909,8 @@ function setupMessageSockets(io) {
             message: shaped,
           });
 
-          // Persist a notification so the user sees it from any page.
-          notifyAdminMessage(
-            conversationId,
-            { id: userId, email: convCheck.rows[0].user_email, full_name: convCheck.rows[0].user_full_name },
-            adminUser,
-            body.trim(),
-          ).catch((err) => logger.warn("[Messages] admin notification failed:", err.message));
+          // The live message event is sufficient here; no separate email or
+          // notification is generated for an admin reply.
         }
 
         // Acknowledge to sender
@@ -1928,58 +1923,140 @@ function setupMessageSockets(io) {
 
     /* ── User sends a message via socket ── */
     socket.on("msg:user-send", async (payload, ack) => {
-      const { conversationId, body, replyToId } = payload;
-      if (!conversationId || !body?.trim()) {
+      const { conversationId, body, replyToId } = payload || {};
+      if (!conversationId || !String(body || "").trim()) {
         return ack?.({ success: false, error: "conversationId and body are required" });
       }
 
       try {
+        const socketUser = socket.handshake.auth?.user || socket.user || {};
+        if (!socketUser.id) {
+          return ack?.({ success: false, error: "Sign in to message the Altuvera team." });
+        }
+
         const convCheck = await query(
-          `SELECT c.id, c.user_id, c.guest_name, c.guest_email,
-                  u.full_name AS user_full_name, u.email AS user_email
-             FROM conversations c
-             LEFT JOIN users u ON u.id = c.user_id
-            WHERE c.id = $1 AND c.deleted_at IS NULL`,
+          "SELECT c.id, c.user_id, c.group_id, c.guest_name, c.guest_email, c.subject, " +
+          "u.full_name AS user_full_name, u.email AS user_email " +
+          "FROM conversations c LEFT JOIN users u ON u.id = c.user_id " +
+          "WHERE c.id = $1 AND c.deleted_at IS NULL",
           [conversationId]
         );
-        if (!convCheck.rows[0]) {
+        const conversation = convCheck.rows[0];
+        if (!conversation) {
           return ack?.({ success: false, error: "Conversation not found" });
         }
 
-        const socketUser = socket.handshake.auth?.user || socket.user || {};
-        const conversation = convCheck.rows[0];
-        const senderName = socketUser.full_name || socketUser.name ||
-          conversation.user_full_name || conversation.guest_name ||
-          conversation.user_email || conversation.guest_email || "User";
+        // Authenticated travellers may message their own support thread or a
+        // shared group they belong to. A session id or guest name is never proof.
+        let allowed = String(conversation.user_id || "") === String(socketUser.id);
+        if (!allowed && conversation.group_id) {
+          const member = await query(
+            "SELECT 1 FROM message_group_members WHERE group_id = $1 AND user_id::text = $2::text LIMIT 1",
+            [conversation.group_id, socketUser.id]
+          );
+          allowed = Boolean(member.rows[0]);
+        }
+        if (!allowed) {
+          return ack?.({ success: false, error: "You must be a member of this signed-in conversation." });
+        }
+
+        const profileResult = await query(
+          "SELECT id, full_name, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1",
+          [socketUser.id]
+        );
+        const profile = profileResult.rows[0];
+        if (!profile) {
+          return ack?.({ success: false, error: "This account is no longer available. Please sign in again." });
+        }
+        const senderName = profile.full_name || socketUser.full_name || socketUser.name || "Registered traveler";
+        const senderEmail = profile.email || socketUser.email || "";
 
         const msg = await insertMessage({
           conversationId,
-          senderType:   "user",
-          senderId:     socketUser.id       || null,
-          senderName:   senderName,
-          senderEmail:  socketUser.email    || null,
-          senderAvatar: socketUser.avatar_url || null,
-          body:         body.trim(),
-          replyToId:    replyToId || null,
+          senderType: "user",
+          senderId: profile.id,
+          senderName,
+          senderEmail,
+          senderAvatar: profile.avatar_url || null,
+          body: String(body).trim(),
+          replyToId: replyToId || null,
         });
-
         const shaped = reshapeMessage(msg);
 
-        // Broadcast to everyone in the room
-        io.to(`conversation-${conversationId}`).emit("msg:message", shaped);
+        io.to("conversation-" + conversationId).emit("msg:message", shaped);
+        io.to("conv:" + conversationId).emit("msg:message", shaped);
+        if (conversation.group_id) {
+          const groupPayload = {
+            conversationId: Number(conversationId),
+            groupId: conversation.group_id,
+            message: shaped,
+          };
+          io.to("group-" + conversation.group_id).emit("msg:group-message", groupPayload);
+          const members = await query(
+            "SELECT user_id FROM message_group_members WHERE group_id = $1",
+            [conversation.group_id]
+          );
+          for (const member of members.rows) {
+            io.to("user-" + member.user_id).emit("msg:group-message", groupPayload);
+          }
+        }
 
-        // Notify admins with the traveller's name and the exact conversation target.
-        io.to("admin-room").emit("msg:new-from-user", {
-          conversationId,
+        const incomingPayload = {
+          conversationId: Number(conversationId),
           senderName,
-          senderEmail: socketUser.email || conversation.user_email || conversation.guest_email || "",
+          senderEmail,
+          senderAvatar: profile.avatar_url || null,
           message: shaped,
+        };
+        io.to("admins").to("admin-room").emit("msg:new-from-user", incomingPayload);
+        io.to("admins").to("admin-room").emit("msg:conversation-updated", {
+          id: Number(conversationId),
+          userId: conversation.user_id,
+          guestName: senderName,
+          guestEmail: senderEmail,
+          guestAvatar: profile.avatar_url || null,
+          subject: conversation.subject,
+          lastMessage: String(body).trim().slice(0, 255),
+          lastMessageAt: msg.created_at,
+          unreadAdmin: 1,
         });
+
+        // Keep an unread in-app admin alert in sync even when the admin inbox
+        // is closed. Never email the user or create an admin-side alert for an
+        // admin reply; this branch only handles an incoming traveller message.
+        try {
+          const { createNotificationInternal } = require("../controllers/notificationsController");
+          await createNotificationInternal({
+            userId: null,
+            senderType: "user",
+            senderId: profile.id,
+            senderName,
+            type: "message_received",
+            category: "message",
+            title: "New message from " + senderName,
+            message: String(body).trim().slice(0, 500),
+            actionUrl: "/messages?conversationId=" + encodeURIComponent(conversationId),
+            actionLabel: "Open conversation",
+            priority: "high",
+            targetScope: "role",
+            targetRole: "admin",
+            metadata: {
+              conversationId: Number(conversationId),
+              messageId: msg.id,
+              userId: profile.id,
+              senderName,
+              senderEmail,
+              senderAvatar: profile.avatar_url || null,
+            },
+          });
+        } catch (notificationError) {
+          logger.warn("[Messages] Incoming socket-message notification failed:", notificationError.message);
+        }
 
         ack?.({ success: true, message: shaped });
       } catch (err) {
-        logger.error(`[Socket] msg:user-send error: ${err.message}`);
-        ack?.({ success: false, error: err.message });
+        logger.error("[Socket] msg:user-send error: " + err.message);
+        ack?.({ success: false, error: "Message could not be sent. Please try again." });
       }
     });
 
