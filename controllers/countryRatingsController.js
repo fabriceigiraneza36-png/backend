@@ -208,7 +208,7 @@ exports.createOrUpdateRating = async (req, res, next) => {
       isApproved: true,
     });
 
-    const stats = await this.getStatsForCountry(countryId);
+    const stats = await exports.getStatsForCountry(countryId);
 
     res.status(201).json({
       status: "success",
