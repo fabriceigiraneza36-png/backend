@@ -1315,7 +1315,10 @@ router.get("/conversations/:id", protect, async (req, res) => {
 
     // Legacy guest/contact-form threads are not part of the authenticated
     // messaging portal. Admins can open registered-user threads and groups.
-    if (isAdminUser(req) && !data.user_id && !data.group_id) {
+    if (isAdminUser(req) && (
+      (!data.user_id && !data.group_id) ||
+      (data.user_deleted_at && !data.group_id)
+    )) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
     }
 
