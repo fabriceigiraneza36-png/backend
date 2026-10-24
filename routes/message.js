@@ -1210,7 +1210,7 @@ router.post("/conversations", protect, async (req, res) => {
       const senderName = savedMessage.sender_name || req.user.full_name || req.user.name || "Traveler";
       const senderEmail = req.user.email || "";
       if (io) {
-        io.to("admins").emit("msg:new-from-user", {
+        io.to("admins").to("admin-room").emit("msg:new-from-user", {
           conversationId: conv.id,
           sessionId: conv.session_id || null,
           message: shapedMessage,
@@ -1221,7 +1221,7 @@ router.post("/conversations", protect, async (req, res) => {
           guestAvatar: savedMessage.sender_avatar || req.user.avatar_url || null,
           unreadCount: 1,
         });
-        io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+        io.to("admins").to("admin-room").emit("msg:conversation-updated", reshapeConversation({
           ...conv,
           guest_name: conv.guest_name || senderName,
           guest_email: conv.guest_email || senderEmail,
@@ -1427,7 +1427,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
         if (!isAdminReq) {
           const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
           const senderEmail = req.user.email || "";
-          io.to("admins").emit("msg:new-from-user", {
+          io.to("admins").to("admin-room").emit("msg:new-from-user", {
             conversationId: Number(id),
             sessionId: conv.session_id || null,
             message: serialized,
@@ -1445,7 +1445,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           );
           if (current.rows[0]) {
             const row = current.rows[0];
-            io.to("admins").emit("msg:conversation-updated", reshapeConversation({
+            io.to("admins").to("admin-room").emit("msg:conversation-updated", reshapeConversation({
               ...row,
               user: row.user_id ? {
                 fullName: row.user_full_name, email: row.user_email, avatarUrl: row.user_avatar,
