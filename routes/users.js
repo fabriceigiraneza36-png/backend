@@ -7,6 +7,7 @@ const { protect, adminOnly, adminProtect } = require("../middleware/auth");
 const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
 const { eraseUserData } = require("../utils/eraseUserData");
+const logger = require("../utils/logger");
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Stats (no auth)
@@ -304,10 +305,40 @@ router.post("/:id/deactivate", adminProtect, async (req, res) => {
 router.delete("/:id", adminProtect, async (req, res) => {
   try {
     const result = await eraseUserData(req.params.id);
-    if (!result.found) return res.status(404).json({ success: false, message: "User not found" });
-    return res.json({ success: true, message: "User and associated activity permanently deleted", deletedRows: result.deletedRows });
+    if (!result.found) {
+      return res.status(404).json({ success: false, message: "User not found" });
+    }
+    if (result.alreadyDeleted) {
+      return res.json({
+        success: true,
+        alreadyDeleted: true,
+        softDeleted: true,
+        message: "This account was already deleted from active users.",
+        preservedMessagingHistory: true,
+      });
+    }
+    return res.json({
+      success: true,
+      softDeleted: true,
+      message: "User removed from active users. Conversation and group message history is preserved.",
+      preservedMessagingHistory: true,
+      deletedRows: result.deletedRows,
+    });
   } catch (error) {
-    return res.status(500).json({ success: false, message: "User deletion failed; no changes were committed" });
+    logger.error("[Users] account deletion failed", {
+      userId: String(req.params.id || ""),
+      code: error?.code || error?.errorCode || "USER_DELETE_FAILED",
+      message: error?.message || "Unknown deletion error",
+      stack: error?.stack,
+    });
+    const permissionDenied = error?.statusCode === 403 || error?.code === "42501";
+    return res.status(permissionDenied ? 403 : 500).json({
+      success: false,
+      code: error?.code || error?.errorCode || "USER_DELETE_FAILED",
+      message: permissionDenied
+        ? "Database permissions prevent this account from being deleted. Contact support."
+        : "User deletion failed. No changes were committed; the server log contains the cause.",
+    });
   }
 });
 
