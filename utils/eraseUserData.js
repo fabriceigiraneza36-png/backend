@@ -37,10 +37,12 @@ async function eraseUserData(userId) {
     }
 
     const columnsResult = await client.query(`
-      SELECT table_name, column_name
-        FROM information_schema.columns
-       WHERE table_schema = 'public'
-       ORDER BY table_name, ordinal_position
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public' AND t.table_type = 'BASE TABLE'
+       ORDER BY c.table_name, c.ordinal_position
     `);
     const columnsByTable = new Map();
     for (const row of columnsResult.rows) {
@@ -161,11 +163,14 @@ async function eraseUserData(userId) {
     // security factors, preferences, group membership, etc.). All names come
     // from PostgreSQL's schema catalog and are safely quoted.
     const schema = await client.query(`
-      SELECT table_name, column_name
-        FROM information_schema.columns
-       WHERE table_schema = 'public'
-         AND column_name = ANY($1::text[])
-       ORDER BY table_name, ordinal_position
+      SELECT c.table_name, c.column_name
+        FROM information_schema.columns c
+        JOIN information_schema.tables t
+          ON t.table_schema = c.table_schema AND t.table_name = c.table_name
+       WHERE c.table_schema = 'public'
+         AND t.table_type = 'BASE TABLE'
+         AND c.column_name = ANY($1::text[])
+       ORDER BY c.table_name, c.ordinal_position
     `, [OWNERSHIP_COLUMNS]);
 
     const tableColumns = new Map();
