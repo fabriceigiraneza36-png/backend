@@ -305,7 +305,12 @@ router.delete("/:id", adminProtect, async (req, res) => {
   try {
     const result = await eraseUserData(req.params.id);
     if (!result.found) return res.status(404).json({ success: false, message: "User not found" });
-    return res.json({ success: true, message: "User and associated activity permanently deleted", deletedRows: result.deletedRows });
+    return res.json({
+      success: true,
+      message: "User and associated activity permanently deleted",
+      deletedRows: result.deletedRows,
+      preservedGroupConversations: result.preservedGroupConversations || 0,
+    });
   } catch (error) {
     logger.error("[Users] transactional account deletion failed", {
       userId: String(req.params.id || ""),
