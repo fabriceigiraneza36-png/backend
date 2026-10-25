@@ -144,6 +144,11 @@ const BOOKING_STATUS = {
 };
 
 const STATUS_TRANSITIONS = {
+  // Legacy booking records still use "pending" and "on-hold". Keep these
+  // transitions explicit so existing admin Confirm actions don't fail simply
+  // because the booking predates the newer itinerary workflow.
+  pending: ["new", "under_review", "itinerary_preparing", "confirmed", "declined", "cancelled"],
+  "on-hold": ["under_review", "itinerary_preparing", "confirmed", "cancelled"],
   new: ["under_review", "declined", "cancelled"],
   under_review: ["needs_information", "itinerary_preparing", "declined", "cancelled"],
   needs_information: ["under_review", "itinerary_preparing", "cancelled", "expired"],
