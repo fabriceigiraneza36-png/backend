@@ -1440,7 +1440,8 @@ router.get("/conversations/by-booking/:bookingId", protect, async (req, res) => 
     const conv = convRows[0];
     if (!conv) return res.status(404).json({ success: false, message: "Booking support conversation is not available yet." });
     conv.user = conv.user_id ? { fullName: conv.user_full_name, email: conv.user_email, avatarUrl: conv.user_avatar } : null;
-    const result = reshapeConversation(conv);
+    const withMessages = await getConversationWithMessages(conv.id);
+    const result = reshapeConversation(withMessages || conv, true);
     result.verifiedBooking = {
       id: booking.id, bookingNumber: booking.booking_number,
       destinationName: booking.destination_name, status: booking.status,
@@ -1466,10 +1467,10 @@ router.get("/booking-context/:reference", protect, async (req, res) => {
               b.itinerary_version, b.itinerary_email_status, b.itinerary_email_error,
               b.itinerary_email_sent_at, b.itinerary_published_at,
               COALESCE(d.name,b.destination_name,'') AS destination_name,
-              COALESCE(c.name,b.country_name,b.country,'') AS country_name
+              COALESCE(c.name,to_jsonb(b)->>'country_name',to_jsonb(b)->>'country','') AS country_name
          FROM bookings b
          LEFT JOIN destinations d ON d.id=b.destination_id
-         LEFT JOIN countries c ON c.id=COALESCE(b.country_id,d.country_id)
+         LEFT JOIN countries c ON c.id=d.country_id
         WHERE (b.id::text=$1 OR UPPER(b.booking_number)=UPPER($1))
           AND (
             b.user_id::text=$2::text OR
@@ -1512,7 +1513,7 @@ router.get("/resources/search", protect, async (req, res) => {
                 COALESCE(d.image_url,d.cover_image_url) AS image_url,
                 c.name AS country_name
            FROM destinations d LEFT JOIN countries c ON c.id=d.country_id
-          WHERE COALESCE(d.is_active,TRUE)=TRUE AND
+          WHERE LOWER(COALESCE(to_jsonb(d)->>'is_active','true')) NOT IN ('false','0') AND
                 (d.name ILIKE $1 OR COALESCE(d.description,'') ILIKE $1 OR COALESCE(c.name,'') ILIKE $1)
           ORDER BY d.name LIMIT 12`, [pattern]);
       rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url, country:r.country_name}));
