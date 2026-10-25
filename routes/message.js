@@ -1083,12 +1083,17 @@ router.post("/groups/:id/messages", adminProtect, async (req, res) => {
 router.get("/conversations", protect, async (req, res) => {
   try {
     const {
-      status = "open",
+      status: requestedStatus,
+      active,
       limit  = 100,
       page   = 1,
       search,
       bookingId,
     } = req.query;
+    // The admin inbox requests active=all so it can open existing threads
+    // regardless of status (including pending, closed, resolved, and archived).
+    // Preserve explicit status filters; otherwise honor that all-status request.
+    const status = requestedStatus || (String(active || "").toLowerCase() === "all" ? "all" : "open");
 
     const adminView = isAdminUser(req);
     if (!adminView) await ensureTravelerChannels(req.user.id);
