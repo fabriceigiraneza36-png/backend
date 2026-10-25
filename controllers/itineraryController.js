@@ -266,6 +266,23 @@ exports.publish = async (req,res,next) => {
     // conversation, never into their unrelated personal chat.
     try {
       if (full.user_id) {
+        // Create the dedicated booking-support channel on demand as well. A
+        // traveller may receive an itinerary before ever opening Messages.
+        await query(
+          `INSERT INTO conversations
+             (user_id, guest_name, guest_email, channel, subject, status, priority,
+              source, conversation_type, metadata, unread_admin, unread_user, created_at, updated_at)
+           SELECT u.id, u.full_name, u.email, 'booking_support', 'Bookings & travel help',
+                  'open', 'normal', 'system', 'resource_support', '{}'::jsonb, 0, 0, NOW(), NOW()
+             FROM users u
+            WHERE u.id=$1
+              AND NOT EXISTS (
+                SELECT 1 FROM conversations c
+                 WHERE c.user_id=u.id AND c.conversation_type='resource_support'
+                   AND c.deleted_at IS NULL
+              )`,
+          [full.user_id],
+        );
         const { rows: conversationRows } = await query(
           `SELECT id FROM conversations
             WHERE user_id=$1 AND conversation_type='resource_support'
