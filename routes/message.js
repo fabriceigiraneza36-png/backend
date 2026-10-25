@@ -567,6 +567,100 @@ async function getActiveRegisteredUser(userId) {
   return result.rows[0] || null;
 }
 
+async function ensureTravelerChannels(userId) {
+  const profile = await getActiveRegisteredUser(userId);
+  if (!profile) throw Object.assign(new Error("This account is no longer available."), { status: 403 });
+  const defaults = [
+    { type: "personal", channel: "personal_support", subject: "Personal chat with Altuvera", source: "system" },
+    { type: "resource_support", channel: "booking_support", subject: "Bookings & travel help", source: "system" },
+  ];
+  for (const item of defaults) {
+    await query(
+      `INSERT INTO conversations
+         (user_id, guest_name, guest_email, channel, subject, status, priority, source,
+          conversation_type, metadata, unread_admin, unread_user, created_at, updated_at)
+       SELECT $1,$2,$3,$4,$5,'open','normal',$6,$7,'{}'::jsonb,0,0,NOW(),NOW()
+        WHERE NOT EXISTS (
+          SELECT 1 FROM conversations
+           WHERE user_id=$1 AND conversation_type=$7 AND deleted_at IS NULL
+        )`,
+      [profile.id, profile.full_name || null, profile.email || null, item.channel, item.subject, item.source, item.type],
+    );
+  }
+  const { rows } = await query(
+    `SELECT id, conversation_type FROM conversations
+      WHERE user_id=$1 AND conversation_type IN ('personal','resource_support')
+        AND deleted_at IS NULL`,
+    [profile.id],
+  );
+  const personalId = rows.find(row => row.conversation_type === "personal")?.id;
+  const supportId = rows.find(row => row.conversation_type === "resource_support")?.id;
+
+  // Preserve old private-chat history while consolidating each account to the
+  // two canonical private channels. Legacy booking-related messages move to
+  // booking support; all other old private chats merge into personal support.
+  if (personalId && supportId) {
+    const { rows: legacyRows } = await query(
+      `SELECT id, booking_id, booking_number, channel, subject
+         FROM conversations
+        WHERE user_id=$1 AND group_id IS NULL AND deleted_at IS NULL
+          AND conversation_type NOT IN ('personal','resource_support')`,
+      [profile.id],
+    );
+    for (const legacy of legacyRows) {
+      const isBookingThread = legacy.booking_id != null ||
+        /booking|package|destination|itinerary|travel|safari/i.test(String(legacy.channel || "") + " " + String(legacy.subject || ""));
+      const targetId = isBookingThread ? supportId : personalId;
+      await query(
+        `UPDATE messages
+            SET metadata = CASE WHEN $3::boolean
+              THEN COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(
+                'kind','booking_question',
+                'bookingId',$4::text,
+                'bookingNumber',$5::text
+              )
+              ELSE COALESCE(metadata,'{}'::jsonb) END,
+                conversation_id=$2
+          WHERE conversation_id=$1`,
+        [legacy.id, targetId, Boolean(legacy.booking_id), legacy.booking_id || null, legacy.booking_number || null],
+      );
+    }
+    if (legacyRows.length) {
+      await query(
+        `UPDATE conversations
+            SET deleted_at=NOW(), status='archived', updated_at=NOW()
+          WHERE id = ANY($2::bigint[]) AND user_id=$1`,
+        [profile.id, legacyRows.map(row => Number(row.id)).filter(Number.isFinite)],
+      );
+      for (const targetId of [personalId, supportId]) {
+        await query(
+          `UPDATE conversations c
+              SET last_message=(SELECT m.body FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
+                  last_message_at=(SELECT m.created_at FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
+                  updated_at=NOW()
+            WHERE c.id=$1`,
+          [targetId],
+        );
+      }
+    }
+  }
+  return { profile, channels: rows };
+}
+
+const ensureItineraryEmailColumns = async () => {
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_status VARCHAR(40) DEFAULT 'not_started'");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary JSONB DEFAULT '{}'::JSONB");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_version INTEGER DEFAULT 0");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_published_at TIMESTAMPTZ");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_approved_at TIMESTAMPTZ");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_change_request TEXT");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_author_id INTEGER");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_status VARCHAR(20) DEFAULT 'not_sent'");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_error TEXT");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_attempted_at TIMESTAMPTZ");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_sent_at TIMESTAMPTZ");
+};
+
 async function canAccessConversation(req, conversationId) {
   const result = await query(
     `SELECT id, user_id, group_id FROM conversations
@@ -997,6 +1091,7 @@ router.get("/conversations", protect, async (req, res) => {
     } = req.query;
 
     const adminView = isAdminUser(req);
+    if (!adminView) await ensureTravelerChannels(req.user.id);
     const userFilter = adminView ? {} : { user_id: req.user.id };
 
     const { rows, total } = await listConversations({
@@ -1367,19 +1462,149 @@ router.get("/conversations/:id", protect, async (req, res) => {
 });
 
 /* ── GET /conversations/by-booking/:bookingId — lookup by booking ─────────── */
+/* ── GET /conversations/by-booking/:bookingId — verified booking support channel ── */
 router.get("/conversations/by-booking/:bookingId", protect, async (req, res) => {
   try {
-    const { bookingId } = req.params;
-    const data = await getConversationByBookingId(parseInt(bookingId, 10) || bookingId);
-
-    if (!data) {
-      return res.status(404).json({ success: false, message: "No conversation found for this booking" });
+    if (!isAdminUser(req)) await ensureTravelerChannels(req.user.id);
+    const bookingRef = String(req.params.bookingId || "").trim();
+    if (!bookingRef) return res.status(400).json({ success: false, message: "Booking reference is required." });
+    const { rows: bookingRows } = await query(
+      `SELECT id, user_id, email, email_verified, booking_number, status,
+              COALESCE(destination_name, '') AS destination_name
+         FROM bookings
+        WHERE id::text=$1 OR UPPER(booking_number)=UPPER($1)
+        ORDER BY created_at DESC LIMIT 1`,
+      [bookingRef],
+    );
+    const booking = bookingRows[0];
+    if (!booking) return res.status(404).json({ success: false, message: "Booking not found." });
+    if (!isAdminUser(req)) {
+      const userEmail = String(req.user?.email || "").toLowerCase();
+      const emailMatch = Boolean(booking.email_verified && userEmail && String(booking.email || "").toLowerCase() === userEmail);
+      const ownsById = booking.user_id != null && String(booking.user_id) === String(req.user.id);
+      if (!ownsById && !emailMatch) return res.status(403).json({ success: false, message: "That booking does not belong to your account." });
     }
-
-    return res.json({ success: true, data: reshapeConversation(data, true) });
+    const targetUserId = isAdminUser(req) ? booking.user_id : req.user.id;
+    if (!targetUserId) return res.status(403).json({ success: false, message: "This booking is not linked to a registered account." });
+    const { rows: convRows } = await query(
+      `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email,
+              u.avatar_url AS user_avatar
+         FROM conversations c LEFT JOIN users u ON u.id=c.user_id
+        WHERE c.user_id=$1 AND c.conversation_type='resource_support'
+          AND c.deleted_at IS NULL
+        ORDER BY c.created_at ASC LIMIT 1`,
+      [targetUserId],
+    );
+    const conv = convRows[0];
+    if (!conv) return res.status(404).json({ success: false, message: "Booking support conversation is not available yet." });
+    conv.user = conv.user_id ? { fullName: conv.user_full_name, email: conv.user_email, avatarUrl: conv.user_avatar } : null;
+    const withMessages = await getConversationWithMessages(conv.id);
+    const result = reshapeConversation(withMessages || conv, true);
+    result.verifiedBooking = {
+      id: booking.id, bookingNumber: booking.booking_number,
+      destinationName: booking.destination_name, status: booking.status,
+    };
+    return res.json({ success: true, data: result });
   } catch (err) {
     logger.error(`[Messages] GET /conversations/by-booking: ${err.message}`, { stack: err.stack });
-    return res.status(500).json({ success: false, message: "Failed to fetch booking conversation" });
+    return res.status(err.status || 500).json({ success: false, message: err.message || "Failed to load booking conversation" });
+  }
+});
+
+/* ── Verified booking lookup for the dedicated support channel ───────────── */
+router.get("/booking-context/:reference", protect, async (req, res) => {
+  try {
+    if (isAdminUser(req)) return res.status(400).json({ success: false, message: "Use a traveler account to verify booking ownership." });
+    await ensureTravelerChannels(req.user.id);
+    await ensureItineraryEmailColumns();
+    const reference = String(req.params.reference || "").trim();
+    if (!reference || reference.length > 120) return res.status(400).json({ success: false, message: "Enter a valid booking ID or booking reference." });
+    const { rows } = await query(
+      `SELECT b.id, b.user_id, b.email, b.email_verified, b.booking_number, b.status,
+              b.travel_date, b.return_date, b.number_of_travelers, b.itinerary_status,
+              b.itinerary_version, b.itinerary_email_status, b.itinerary_email_error,
+              b.itinerary_email_sent_at, b.itinerary_published_at,
+              COALESCE(d.name,b.destination_name,'') AS destination_name,
+              COALESCE(c.name,to_jsonb(b)->>'country_name',to_jsonb(b)->>'country','') AS country_name
+         FROM bookings b
+         LEFT JOIN destinations d ON d.id=b.destination_id
+         LEFT JOIN countries c ON c.id=d.country_id
+        WHERE (b.id::text=$1 OR UPPER(b.booking_number)=UPPER($1))
+          AND (
+            b.user_id::text=$2::text OR
+            (b.user_id IS NULL AND COALESCE(b.email_verified,FALSE)=TRUE AND LOWER(COALESCE(b.email,''))=LOWER($3))
+          )
+        ORDER BY b.created_at DESC LIMIT 1`,
+      [reference, req.user.id, String(req.user?.email || "")],
+    );
+    const booking = rows[0];
+    if (!booking) return res.status(404).json({ success: false, message: "No matching booking was found for your account. Check the reference and sign in to the account used to book." });
+    return res.json({ success: true, data: {
+      id: booking.id, bookingNumber: booking.booking_number, destinationName: booking.destination_name,
+      countryName: booking.country_name, status: booking.status, travelDate: booking.travel_date,
+      returnDate: booking.return_date, travelers: booking.number_of_travelers,
+      emailVerified: Boolean(booking.email_verified), itineraryStatus: booking.itinerary_status || "not_started",
+      itineraryVersion: Number(booking.itinerary_version || 0),
+      itineraryEmailStatus: booking.itinerary_email_status || "not_sent",
+      itineraryEmailSentAt: booking.itinerary_email_sent_at || null,
+      itineraryPublishedAt: booking.itinerary_published_at || null,
+      itineraryEmailError: booking.itinerary_email_status === "failed" ? booking.itinerary_email_error : null,
+    }});
+  } catch (err) {
+    logger.error(`[Messages] booking-context lookup failed: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Could not verify this booking right now. Please try again." });
+  }
+});
+
+/* ── Search live destinations, public packages, and the user's itineraries ─ */
+router.get("/resources/search", protect, async (req, res) => {
+  try {
+    const type = String(req.query.type || "destination").toLowerCase();
+    const q = String(req.query.q || "").trim();
+    if (!["destination","package","itinerary"].includes(type)) return res.status(400).json({ success: false, message: "Choose destination, package, or itinerary." });
+    if (q.length < 2) return res.json({ success: true, data: [] });
+    const pattern = "%" + q.slice(0, 80) + "%";
+    let rows = [];
+    if (type === "destination") {
+      const result = await query(
+        `SELECT d.id, d.name, d.slug, LEFT(COALESCE(d.description,''),240) AS description,
+                COALESCE(d.image_url,d.cover_image_url) AS image_url,
+                c.name AS country_name
+           FROM destinations d LEFT JOIN countries c ON c.id=d.country_id
+          WHERE LOWER(COALESCE(to_jsonb(d)->>'is_active','true')) NOT IN ('false','0') AND
+                (d.name ILIKE $1 OR COALESCE(d.description,'') ILIKE $1 OR COALESCE(c.name,'') ILIKE $1)
+          ORDER BY d.name LIMIT 12`, [pattern]);
+      rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url, country:r.country_name}));
+    } else if (type === "package") {
+      const result = await query(
+        `SELECT p.id,
+                COALESCE(to_jsonb(p)->>'name',to_jsonb(p)->>'title','Safari package') AS name,
+                COALESCE(to_jsonb(p)->>'slug','') AS slug,
+                LEFT(COALESCE(to_jsonb(p)->>'description',to_jsonb(p)->>'overview',''),240) AS description,
+                COALESCE(to_jsonb(p)->>'image_url',to_jsonb(p)->>'cover_image_url','') AS image_url
+           FROM packages p
+          WHERE LOWER(COALESCE(to_jsonb(p)->>'is_active','true')) NOT IN ('false','0')
+            AND (COALESCE(to_jsonb(p)->>'name',to_jsonb(p)->>'title','') ILIKE $1
+              OR COALESCE(to_jsonb(p)->>'description',to_jsonb(p)->>'overview','') ILIKE $1)
+          ORDER BY name LIMIT 12`, [pattern]);
+      rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url}));
+    } else {
+      const result = await query(
+        `SELECT b.id, b.booking_number,
+                COALESCE(b.itinerary->>'title',COALESCE(d.name,b.destination_name,'Personalized itinerary')) AS name,
+                COALESCE(d.name,b.destination_name,'') AS destination_name,
+                b.itinerary_status
+           FROM bookings b LEFT JOIN destinations d ON d.id=b.destination_id
+          WHERE b.user_id::text=$1::text
+            AND b.itinerary_status IN ('sent','change_requested','approved')
+            AND (COALESCE(b.itinerary->>'title','') ILIKE $2 OR COALESCE(d.name,b.destination_name,'') ILIKE $2 OR COALESCE(b.booking_number,'') ILIKE $2)
+          ORDER BY b.itinerary_published_at DESC NULLS LAST LIMIT 12`, [req.user.id, pattern]);
+      rows = result.rows.map(r=>({type, id:r.id, bookingId:r.id, bookingNumber:r.booking_number, name:r.name, destination:r.destination_name, status:r.itinerary_status}));
+    }
+    return res.json({ success: true, data: rows });
+  } catch (err) {
+    logger.error(`[Messages] resource search failed: ${err.message}`);
+    return res.status(500).json({ success: false, message: "Search is temporarily unavailable. Please try again." });
   }
 });
 
@@ -1387,7 +1612,7 @@ router.get("/conversations/by-booking/:bookingId", protect, async (req, res) => 
 router.post("/conversations/:id/messages", protect, async (req, res) => {
   try {
     const { id }              = req.params;
-    const { body, replyToId } = req.body;
+    const { body, replyToId, metadata: requestedMetadata } = req.body || {};
 
     if (!body || !String(body).trim()) {
       return res.status(400).json({ success: false, message: "Message body is required" });
@@ -1396,6 +1621,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     const convCheck = await query(
       `SELECT c.id, c.user_id, c.group_id, c.session_id, c.guest_name, c.guest_email, c.subject, c.status,
+              c.conversation_type, c.channel, c.booking_id, c.booking_number,
               u.deleted_at AS user_deleted_at
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
@@ -1435,6 +1661,56 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       }
     }
 
+    let messageMetadata = {};
+    if (!isAdminReq && requestedMetadata && typeof requestedMetadata === "object" &&
+        (requestedMetadata.bookingId != null || requestedMetadata.booking_id != null || requestedMetadata.resource) &&
+        convCheck.rows[0].conversation_type !== "resource_support") {
+      return res.status(403).json({ success: false, message: "Booking and resource context can only be attached in the bookings & travel support conversation." });
+    }
+    if (requestedMetadata && typeof requestedMetadata === "object" && !Array.isArray(requestedMetadata)) {
+      const requestedBookingId = requestedMetadata.bookingId ?? requestedMetadata.booking_id;
+      if (requestedBookingId != null && String(requestedBookingId).trim()) {
+        const { rows: linkedBookings } = await query(
+          `SELECT id, user_id, email, email_verified, booking_number, status,
+                  travel_date, return_date, number_of_travelers, itinerary_status,
+                  COALESCE(destination_name,'') AS destination_name
+             FROM bookings WHERE id::text=$1::text LIMIT 1`,
+          [String(requestedBookingId)],
+        );
+        const linkedBooking = linkedBookings[0];
+        if (!linkedBooking) return res.status(404).json({ success: false, message: "Booking reference could not be verified." });
+        if (!isAdminReq) {
+          const owns = linkedBooking.user_id != null && String(linkedBooking.user_id) === String(req.user.id);
+          const emailMatch = Boolean(linkedBooking.user_id == null && linkedBooking.email_verified && String(linkedBooking.email || "").toLowerCase() === String(req.user.email || "").toLowerCase());
+          if (!owns && !emailMatch) return res.status(403).json({ success: false, message: "That booking does not belong to your account." });
+        } else if (convCheck.rows[0].user_id && linkedBooking.user_id && String(linkedBooking.user_id) !== String(convCheck.rows[0].user_id)) {
+          return res.status(403).json({ success: false, message: "That booking belongs to a different traveler." });
+        }
+        messageMetadata = {
+          kind: "booking_question",
+          bookingId: linkedBooking.id,
+          bookingNumber: linkedBooking.booking_number || null,
+          booking: {
+            id: linkedBooking.id, booking_number: linkedBooking.booking_number || null,
+            destination_name: linkedBooking.destination_name || null, status: linkedBooking.status,
+            travel_date: linkedBooking.travel_date || null, return_date: linkedBooking.return_date || null,
+            number_of_travelers: linkedBooking.number_of_travelers || null,
+            itinerary_status: linkedBooking.itinerary_status || null,
+          },
+          resource: requestedMetadata.resource && typeof requestedMetadata.resource === "object" ? {
+            type: String(requestedMetadata.resource.type || "").slice(0,40),
+            id: requestedMetadata.resource.id ?? null,
+            name: String(requestedMetadata.resource.name || "").slice(0,180),
+          } : null,
+        };
+      } else if (requestedMetadata.resource && typeof requestedMetadata.resource === "object") {
+        messageMetadata = { kind: "resource_question", resource: {
+          type: String(requestedMetadata.resource.type || "").slice(0,40),
+          id: requestedMetadata.resource.id ?? null,
+          name: String(requestedMetadata.resource.name || "").slice(0,180),
+        }};
+      }
+    }
     const msg = await insertMessage({
       conversationId: id,
       senderType:     isAdminReq ? "admin" : "user",
@@ -1446,6 +1722,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       senderAvatar:   senderProfile.avatar_url || null,
       body:           String(body).trim(),
       replyToId:      replyToId || null,
+      metadata:       messageMetadata,
     });
 
     const serialized = reshapeMessage(msg);
