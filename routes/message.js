@@ -635,12 +635,9 @@ async function ensureTravelerChannels(userId) {
       for (const targetId of [personalId, supportId]) {
         await query(
           `UPDATE conversations c
-              SET last_message=latest.body, last_message_at=latest.created_at, updated_at=NOW()
-             FROM LATERAL (
-               SELECT m.body,m.created_at FROM messages m
-                WHERE m.conversation_id=c.id
-                ORDER BY m.created_at DESC,m.id DESC LIMIT 1
-             ) latest
+              SET last_message=(SELECT m.body FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
+                  last_message_at=(SELECT m.created_at FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
+                  updated_at=NOW()
             WHERE c.id=$1`,
           [targetId],
         );
