@@ -272,7 +272,8 @@ async function listConversations({
      the account is a member. Admins pass no userFilter and keep their full inbox. */
   if (userFilter && userFilter.user_id != null) {
     conditions.push(`(
-      c.user_id = ${String.fromCharCode(36)}${p}
+      (c.user_id = ${String.fromCharCode(36)}${p}
+       AND c.conversation_type IN ('personal', 'resource_support'))
       OR EXISTS (
         SELECT 1 FROM message_group_members gm
          WHERE gm.group_id = c.group_id AND gm.user_id = ${String.fromCharCode(36)}${p}
