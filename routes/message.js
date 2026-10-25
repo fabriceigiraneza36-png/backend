@@ -579,10 +579,10 @@ async function ensureTravelerChannels(userId) {
       `INSERT INTO conversations
          (user_id, guest_name, guest_email, channel, subject, status, priority, source,
           conversation_type, metadata, unread_admin, unread_user, created_at, updated_at)
-       SELECT $1,$2,$3,$4,$5,'open','normal',$6,$7,'{}'::jsonb,0,0,NOW(),NOW()
+       SELECT $1,$2,$3,$4,$5,'open','normal',$6,CAST($7 AS VARCHAR),'{}'::jsonb,0,0,NOW(),NOW()
         WHERE NOT EXISTS (
           SELECT 1 FROM conversations
-           WHERE user_id=$1 AND conversation_type=$7 AND deleted_at IS NULL
+           WHERE user_id=$1 AND conversation_type=CAST($7 AS VARCHAR) AND deleted_at IS NULL
         )`,
       [profile.id, profile.full_name || null, profile.email || null, item.channel, item.subject, item.source, item.type],
     );
