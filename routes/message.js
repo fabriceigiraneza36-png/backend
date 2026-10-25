@@ -1718,13 +1718,20 @@ router.patch("/conversations/:cid/messages/:mid", protect, async (req, res) => {
 
     const admin = isAdminUser(req);
     if (admin) {
-      return res.status(403).json({ success: false, message: "Admin accounts cannot edit messages. Send a new reply instead." });
-    }
-    if (String(msg.sender_id) !== String(req.user.id)) {
-      return res.status(403).json({ success: false, message: "You can only edit your own messages" });
-    }
-    if (!admin && Date.now() - new Date(msg.created_at).getTime() > 15 * 60 * 1000) {
-      return res.status(403).json({ success: false, message: "Messages can only be edited within 15 minutes" });
+      const adminMessage = ["admin", "super_admin", "superadmin", "administrator", "moderator", "editor", "support", "staff", "agent"].includes(String(msg.sender_type || "").trim().toLowerCase().replace(/[\\s-]+/g, "_"));
+      if (!adminMessage || String(msg.sender_id) !== String(req.user.id)) {
+        return res.status(403).json({ success: false, message: "Admins can only edit their own messages" });
+      }
+      if (msg.is_read) {
+        return res.status(403).json({ success: false, message: "This message has already been seen and can no longer be edited. Send a correction instead." });
+      }
+    } else {
+      if (String(msg.sender_id) !== String(req.user.id)) {
+        return res.status(403).json({ success: false, message: "You can only edit your own messages" });
+      }
+      if (Date.now() - new Date(msg.created_at).getTime() > 15 * 60 * 1000) {
+        return res.status(403).json({ success: false, message: "Messages can only be edited within 15 minutes" });
+      }
     }
 
     const { rows } = await query(
@@ -1762,13 +1769,17 @@ router.delete("/conversations/:cid/messages/:mid", protect, async (req, res) => 
 
     const admin = isAdminUser(req);
     if (admin) {
-      return res.status(403).json({ success: false, message: "Admin accounts cannot unsend or alter messages." });
-    }
-    if (String(msg.sender_id) !== String(req.user.id)) {
-      return res.status(403).json({ success: false, message: "You can only unsend your own messages" });
-    }
-    if (!admin && Date.now() - new Date(msg.created_at).getTime() > 24 * 60 * 60 * 1000) {
-      return res.status(403).json({ success: false, message: "Messages can only be unsent within 24 hours" });
+      const adminMessage = ["admin", "super_admin", "superadmin", "administrator", "moderator", "editor", "support", "staff", "agent"].includes(String(msg.sender_type || "").trim().toLowerCase().replace(/[\\s-]+/g, "_"));
+      if (!adminMessage || String(msg.sender_id) !== String(req.user.id)) {
+        return res.status(403).json({ success: false, message: "Admins can only unsend their own messages" });
+      }
+    } else {
+      if (String(msg.sender_id) !== String(req.user.id)) {
+        return res.status(403).json({ success: false, message: "You can only unsend your own messages" });
+      }
+      if (Date.now() - new Date(msg.created_at).getTime() > 24 * 60 * 60 * 1000) {
+        return res.status(403).json({ success: false, message: "Messages can only be unsent within 24 hours" });
+      }
     }
 
     const { rows } = await query(
