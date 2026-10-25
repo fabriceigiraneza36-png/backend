@@ -35,6 +35,10 @@ const ensureSchema = async () => {
         ["itinerary_approved_at", "TIMESTAMPTZ"],
         ["itinerary_change_request", "TEXT"],
         ["itinerary_author_id", "INTEGER"],
+        ["itinerary_email_status", "VARCHAR(20) DEFAULT 'not_sent'"],
+        ["itinerary_email_error", "TEXT"],
+        ["itinerary_email_attempted_at", "TIMESTAMPTZ"],
+        ["itinerary_email_sent_at", "TIMESTAMPTZ"],
       ];
       for (const [name, type] of columns) {
         await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS " + name + " " + type);
@@ -193,19 +197,22 @@ exports.publish = async (req,res,next) => {
     );
     const full = (await bookingDetail(id)) || rows[0];
 
-    // Persisting the itinerary is the critical operation. Do not hold the admin
-    // request open while a cold email provider or notification service responds.
-    // Each side effect is still attempted and failures are logged for diagnosis.
-    const deliveryTasks = [
-      ["traveller itinerary email", () => sendItineraryEmail
-        ? sendItineraryEmail(full, itinerary, deliveryMode === "email_image"
-          ? { format: "image", imageUrl: itineraryImageUrl }
-          : { format: "dashboard_pdf" })
-        : Promise.reject(new Error("Itinerary email provider is unavailable"))],
-      ["admin itinerary notification", () => sendAdminItineraryNotification
-        ? sendAdminItineraryNotification(full, itinerary)
-        : Promise.resolve()],
-      ["traveller in-app notification", () => createNotificationInternal({
+    // The in-app notification is created first. Email delivery then runs with
+    // an explicit persisted outcome; a dashboard notification is never treated
+    // as proof that an email was sent.
+    await query(
+      `UPDATE bookings
+          SET itinerary_email_status='sending',
+              itinerary_email_error=NULL,
+              itinerary_email_attempted_at=NOW()
+        WHERE id=$1`,
+      [id],
+    );
+
+    const io = getIO();
+    let notificationResult = null;
+    try {
+      notificationResult = await createNotificationInternal({
         userId: full.user_id || null,
         userEmail: full.email || null,
         type: "itinerary_ready",
@@ -218,29 +225,109 @@ exports.publish = async (req,res,next) => {
         senderType: "admin",
         senderId: req.admin?.id || req.user?.id || null,
         metadata: { bookingId: full.id, bookingNumber: full.booking_number, itineraryVersion: version, deliveryMode, itineraryImageUrl: deliveryMode === "email_image" ? itineraryImageUrl : null },
-      })],
-    ];
-    void Promise.allSettled(deliveryTasks.map(async ([label, task]) => {
-      try {
-        const result = await task();
-        if (result?.success === false) {
-          logger.error(`[Itinerary] ${label} failed:`, result.error || "provider returned success=false");
-        }
-      } catch (deliveryError) {
-        logger.error(`[Itinerary] ${label} failed:`, deliveryError.message);
+        io,
+      });
+    } catch (notificationError) {
+      logger.error("[Itinerary] Traveller in-app notification failed:", notificationError.message);
+    }
+
+    let emailResult;
+    try {
+      emailResult = sendItineraryEmail
+        ? await sendItineraryEmail(full, itinerary, deliveryMode === "email_image"
+          ? { format: "image", imageUrl: itineraryImageUrl }
+          : { format: "dashboard_pdf" })
+        : { success: false, error: "Email provider is unavailable." };
+    } catch (emailError) {
+      emailResult = { success: false, error: emailError.message || "Email provider failed." };
+    }
+
+    const emailSent = emailResult?.success !== false && !emailResult?.error;
+    const emailError = emailSent ? null : String(emailResult?.error || "Email provider did not confirm successful delivery.").slice(0, 1000);
+    await query(
+      `UPDATE bookings
+          SET itinerary_email_status=$1,
+              itinerary_email_error=$2,
+              itinerary_email_sent_at=CASE WHEN $1='sent' THEN NOW() ELSE NULL END
+        WHERE id=$3`,
+      [emailSent ? "sent" : "failed", emailError, id],
+    );
+
+    try {
+      if (sendAdminItineraryNotification) {
+        const adminEmailResult = await sendAdminItineraryNotification(full, itinerary);
+        if (adminEmailResult?.success === false) logger.error("[Itinerary] Admin itinerary notification failed:", adminEmailResult.error || "provider returned success=false");
       }
-    }));
+    } catch (adminEmailError) {
+      logger.error("[Itinerary] Admin itinerary notification failed:", adminEmailError.message);
+    }
+
+    // Publish a rich itinerary card to the traveler's dedicated booking-support
+    // conversation, never into their unrelated personal chat.
+    try {
+      if (full.user_id) {
+        const { rows: conversationRows } = await query(
+          `SELECT id FROM conversations
+            WHERE user_id=$1 AND conversation_type='resource_support'
+              AND deleted_at IS NULL
+            ORDER BY created_at ASC LIMIT 1`,
+          [full.user_id],
+        );
+        const conversation = conversationRows[0];
+        if (conversation) {
+          const { insertMessage } = require("../utils/messaging");
+          const message = await insertMessage({
+            conversationId: conversation.id,
+            senderType: "admin",
+            senderId: req.admin?.id || req.user?.id || null,
+            senderName: req.admin?.full_name || req.user?.full_name || "Altuvera Admin",
+            senderEmail: req.admin?.email || req.user?.email || null,
+            body: `Your itinerary for ${full.destination_name || "your trip"} (booking ${full.booking_number || full.id}) is ready to review and download.`,
+            msgType: "itinerary",
+            metadata: {
+              kind: "itinerary",
+              bookingId: full.id,
+              bookingNumber: full.booking_number || null,
+              booking: {
+                id: full.id,
+                booking_number: full.booking_number || null,
+                destination_name: full.destination_name || null,
+                country_name: full.country_name || null,
+                travel_date: full.travel_date || null,
+                return_date: full.return_date || null,
+                number_of_travelers: full.number_of_travelers || null,
+              },
+              itinerary,
+              emailStatus: emailSent ? "sent" : "failed",
+            },
+          });
+          io?.to?.(`conversation-${conversation.id}`)?.emit?.("msg:message", message);
+          io?.to?.(`conv:${conversation.id}`)?.emit?.("msg:message", message);
+          io?.to?.(`user-${full.user_id}`)?.emit?.("msg:new-from-admin", { conversationId: conversation.id, message });
+        }
+      }
+    } catch (messageError) {
+      logger.error("[Itinerary] Could not add itinerary to booking-support conversation:", messageError.message);
+    }
 
     try {
       const io = getIO();
       io?.to?.(`user:${full.user_id}`)?.emit?.("itinerary:published", { bookingId: full.id, bookingNumber: full.booking_number, itinerary });
     } catch {}
 
+    const updatedBooking = (await bookingDetail(id)) || full;
     return res.json({
       success: true,
-      data: full,
-      delivery: { dashboard: "published", email: "processing" },
-      message: "Itinerary published to the traveller dashboard. Email delivery is processing separately.",
+      data: updatedBooking,
+      delivery: {
+        dashboard: "published",
+        notification: notificationResult?.success === false ? "failed" : "created",
+        email: emailSent ? "sent" : "failed",
+        emailError,
+      },
+      message: emailSent
+        ? "Itinerary published and the email provider accepted the message successfully."
+        : `Itinerary published to the dashboard, but email delivery failed: ${emailError}`,
     });
   } catch(e) { logger.error("[Itinerary] publish:",e.message); next(e); }
 };
