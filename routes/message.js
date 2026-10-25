@@ -593,10 +593,71 @@ async function ensureTravelerChannels(userId) {
         AND deleted_at IS NULL`,
     [profile.id],
   );
+  const personalId = rows.find(row => row.conversation_type === "personal")?.id;
+  const supportId = rows.find(row => row.conversation_type === "resource_support")?.id;
+
+  // Preserve old private-chat history while consolidating each account to the
+  // two canonical private channels. Legacy booking-related messages move to
+  // booking support; all other old private chats merge into personal support.
+  if (personalId && supportId) {
+    const { rows: legacyRows } = await query(
+      `SELECT id, booking_id, booking_number, channel, subject
+         FROM conversations
+        WHERE user_id=$1 AND group_id IS NULL AND deleted_at IS NULL
+          AND conversation_type NOT IN ('personal','resource_support')`,
+      [profile.id],
+    );
+    for (const legacy of legacyRows) {
+      const isBookingThread = legacy.booking_id != null ||
+        /booking|package|destination|itinerary|travel|safari/i.test(String(legacy.channel || "") + " " + String(legacy.subject || ""));
+      const targetId = isBookingThread ? supportId : personalId;
+      await query(
+        `UPDATE messages
+            SET metadata = CASE WHEN $3::boolean
+              THEN COALESCE(metadata,'{}'::jsonb) || jsonb_build_object(
+                'kind','booking_question',
+                'bookingId',$4::text,
+                'bookingNumber',$5::text
+              )
+              ELSE COALESCE(metadata,'{}'::jsonb) END,
+                conversation_id=$2
+          WHERE conversation_id=$1`,
+        [legacy.id, targetId, Boolean(legacy.booking_id), legacy.booking_id || null, legacy.booking_number || null],
+      );
+    }
+    if (legacyRows.length) {
+      await query(
+        `UPDATE conversations
+            SET deleted_at=NOW(), status='archived', updated_at=NOW()
+          WHERE id = ANY($2::bigint[]) AND user_id=$1`,
+        [profile.id, legacyRows.map(row => Number(row.id)).filter(Number.isFinite)],
+      );
+      for (const targetId of [personalId, supportId]) {
+        await query(
+          `UPDATE conversations c
+              SET last_message=latest.body, last_message_at=latest.created_at, updated_at=NOW()
+             FROM LATERAL (
+               SELECT m.body,m.created_at FROM messages m
+                WHERE m.conversation_id=c.id
+                ORDER BY m.created_at DESC,m.id DESC LIMIT 1
+             ) latest
+            WHERE c.id=$1`,
+          [targetId],
+        );
+      }
+    }
+  }
   return { profile, channels: rows };
 }
 
 const ensureItineraryEmailColumns = async () => {
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_status VARCHAR(40) DEFAULT 'not_started'");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary JSONB DEFAULT '{}'::JSONB");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_version INTEGER DEFAULT 0");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_published_at TIMESTAMPTZ");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_approved_at TIMESTAMPTZ");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_change_request TEXT");
+  await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_author_id INTEGER");
   await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_status VARCHAR(20) DEFAULT 'not_sent'");
   await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_error TEXT");
   await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_email_attempted_at TIMESTAMPTZ");
@@ -1474,7 +1535,7 @@ router.get("/booking-context/:reference", protect, async (req, res) => {
         WHERE (b.id::text=$1 OR UPPER(b.booking_number)=UPPER($1))
           AND (
             b.user_id::text=$2::text OR
-            (COALESCE(b.email_verified,FALSE)=TRUE AND LOWER(COALESCE(b.email,''))=LOWER($3))
+            (b.user_id IS NULL AND COALESCE(b.email_verified,FALSE)=TRUE AND LOWER(COALESCE(b.email,''))=LOWER($3))
           )
         ORDER BY b.created_at DESC LIMIT 1`,
       [reference, req.user.id, String(req.user?.email || "")],
@@ -1604,6 +1665,11 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     }
 
     let messageMetadata = {};
+    if (!isAdminReq && requestedMetadata && typeof requestedMetadata === "object" &&
+        (requestedMetadata.bookingId != null || requestedMetadata.booking_id != null || requestedMetadata.resource) &&
+        convCheck.rows[0].conversation_type !== "resource_support") {
+      return res.status(403).json({ success: false, message: "Booking and resource context can only be attached in the bookings & travel support conversation." });
+    }
     if (requestedMetadata && typeof requestedMetadata === "object" && !Array.isArray(requestedMetadata)) {
       const requestedBookingId = requestedMetadata.bookingId ?? requestedMetadata.booking_id;
       if (requestedBookingId != null && String(requestedBookingId).trim()) {
@@ -1618,7 +1684,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
         if (!linkedBooking) return res.status(404).json({ success: false, message: "Booking reference could not be verified." });
         if (!isAdminReq) {
           const owns = linkedBooking.user_id != null && String(linkedBooking.user_id) === String(req.user.id);
-          const emailMatch = Boolean(linkedBooking.email_verified && String(linkedBooking.email || "").toLowerCase() === String(req.user.email || "").toLowerCase());
+          const emailMatch = Boolean(linkedBooking.user_id == null && linkedBooking.email_verified && String(linkedBooking.email || "").toLowerCase() === String(req.user.email || "").toLowerCase());
           if (!owns && !emailMatch) return res.status(403).json({ success: false, message: "That booking does not belong to your account." });
         } else if (convCheck.rows[0].user_id && linkedBooking.user_id && String(linkedBooking.user_id) !== String(convCheck.rows[0].user_id)) {
           return res.status(403).json({ success: false, message: "That booking belongs to a different traveler." });
