@@ -1664,7 +1664,7 @@ io.on('connection', (socket) => {
         senderId:       socket.data.user?.id,
         senderName:     socket.data.user?.full_name || socket.data.user?.name || 'Support',
         senderEmail:    socket.data.user?.email     || null,
-        senderAvatar:   null,
+        senderAvatar:   socket.data.user?.avatar_url || socket.data.user?.profile_picture || socket.data.user?.profilePicture || socket.data.user?.photo_url || socket.data.user?.image_url || null,
         body,
         metadata:  { source: 'admin-socket' },
         replyToId: payload.replyToId ? parseInt(payload.replyToId, 10) : undefined,
