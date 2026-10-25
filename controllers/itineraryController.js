@@ -21,19 +21,31 @@ try {
   getIO = () => socketBus.getIO?.() || null;
 } catch {}
 
+let schemaReady = null;
 const ensureSchema = async () => {
-  const columns = [
-    ["itinerary_status", "VARCHAR(40) DEFAULT 'not_started'"],
-    ["itinerary", "JSONB DEFAULT '{}'::JSONB"],
-    ["itinerary_version", "INTEGER DEFAULT 0"],
-    ["itinerary_published_at", "TIMESTAMPTZ"],
-    ["itinerary_approved_at", "TIMESTAMPTZ"],
-    ["itinerary_change_request", "TEXT"],
-    ["itinerary_author_id", "INTEGER"],
-  ];
-  for (const [name, type] of columns) {
-    await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS " + name + " " + type).catch(() => {});
+  // Run the additive migration once per process instead of on every itinerary
+  // read/save/publish request. Share the same in-flight promise across requests.
+  if (!schemaReady) {
+    schemaReady = (async () => {
+      const columns = [
+        ["itinerary_status", "VARCHAR(40) DEFAULT 'not_started'"],
+        ["itinerary", "JSONB DEFAULT '{}'::JSONB"],
+        ["itinerary_version", "INTEGER DEFAULT 0"],
+        ["itinerary_published_at", "TIMESTAMPTZ"],
+        ["itinerary_approved_at", "TIMESTAMPTZ"],
+        ["itinerary_change_request", "TEXT"],
+        ["itinerary_author_id", "INTEGER"],
+      ];
+      for (const [name, type] of columns) {
+        await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS " + name + " " + type);
+      }
+    })().catch((err) => {
+      // Permit a retry on the next request if the database was temporarily down.
+      schemaReady = null;
+      throw err;
+    });
   }
+  return schemaReady;
 };
 
 const bookingDetail = async (id) => {
@@ -181,15 +193,24 @@ exports.publish = async (req,res,next) => {
     );
     const full = (await bookingDetail(id)) || rows[0];
 
-    await Promise.allSettled([
-      sendItineraryEmail ? sendItineraryEmail(full,itinerary, deliveryMode === "email_image" ? { format: "image", imageUrl: itineraryImageUrl } : { format: "dashboard_pdf" }) : Promise.resolve(),
-      sendAdminItineraryNotification ? sendAdminItineraryNotification(full,itinerary) : Promise.resolve(),
-      createNotificationInternal({
+    // Persisting the itinerary is the critical operation. Do not hold the admin
+    // request open while a cold email provider or notification service responds.
+    // Each side effect is still attempted and failures are logged for diagnosis.
+    const deliveryTasks = [
+      ["traveller itinerary email", () => sendItineraryEmail
+        ? sendItineraryEmail(full, itinerary, deliveryMode === "email_image"
+          ? { format: "image", imageUrl: itineraryImageUrl }
+          : { format: "dashboard_pdf" })
+        : Promise.reject(new Error("Itinerary email provider is unavailable"))],
+      ["admin itinerary notification", () => sendAdminItineraryNotification
+        ? sendAdminItineraryNotification(full, itinerary)
+        : Promise.resolve()],
+      ["traveller in-app notification", () => createNotificationInternal({
         userId: full.user_id || null,
         userEmail: full.email || null,
         type: "itinerary_ready",
         category: "itinerary",
-        title: "Your itinerary is ready ✨",
+        title: "Your itinerary is ready",
         message: `Your personalized itinerary for ${full.destination_name || "your trip"} is ready to review.`,
         actionUrl: "/my-bookings",
         actionLabel: "View itinerary",
@@ -197,15 +218,30 @@ exports.publish = async (req,res,next) => {
         senderType: "admin",
         senderId: req.admin?.id || req.user?.id || null,
         metadata: { bookingId: full.id, bookingNumber: full.booking_number, itineraryVersion: version, deliveryMode, itineraryImageUrl: deliveryMode === "email_image" ? itineraryImageUrl : null },
-      }),
-    ]);
+      })],
+    ];
+    void Promise.allSettled(deliveryTasks.map(async ([label, task]) => {
+      try {
+        const result = await task();
+        if (result?.success === false) {
+          logger.error(`[Itinerary] ${label} failed:`, result.error || "provider returned success=false");
+        }
+      } catch (deliveryError) {
+        logger.error(`[Itinerary] ${label} failed:`, deliveryError.message);
+      }
+    }));
 
     try {
       const io = getIO();
       io?.to?.(`user:${full.user_id}`)?.emit?.("itinerary:published", { bookingId: full.id, bookingNumber: full.booking_number, itinerary });
     } catch {}
 
-    return res.json({success:true,data:full,message: deliveryMode === "email_image" ? "Itinerary published to the dashboard and sent as an image-only email." : "Itinerary sent to the traveller dashboard and email."});
+    return res.json({
+      success: true,
+      data: full,
+      delivery: { dashboard: "published", email: "processing" },
+      message: "Itinerary published to the traveller dashboard. Email delivery is processing separately.",
+    });
   } catch(e) { logger.error("[Itinerary] publish:",e.message); next(e); }
 };
 
