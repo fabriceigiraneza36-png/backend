@@ -757,7 +757,8 @@ const sendAdminBookingNotification = async (booking) => {
   const email = safe(booking.email);
   const phone = safe(booking.phone);
   const wa = phone !== "—" ? phone.replace(/\D/g, "") : null;
-  const adminUrl = `${ENV.frontendUrl}/admin/bookings`;
+  const adminBaseUrl = (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app").replace(/\/$/, "");
+  const adminUrl = `${adminBaseUrl}/bookings?bookingId=${encodeURIComponent(booking?.id || booking?.booking_number || "")}`;
   const travelers = Number(booking.number_of_travelers) || 1;
 
   const html = shell({
@@ -829,7 +830,7 @@ const sendAdminBookingNotification = async (booking) => {
               color:#ffffff !important;text-decoration:none;border-radius:100px;
               font-family:'Inter',sans-serif;font-size:15px;font-weight:700;
               box-shadow:0 8px 24px rgba(5,150,105,.35);">
-            Open Admin Panel
+            Review Booking
           </a>
         </td></tr>
         <tr><td align="center">
@@ -1275,7 +1276,7 @@ const sendAdminItineraryNotification = async (booking, itinerary = {}) => {
   const destination = tripName(booking);
   const image = booking.destination_image_url || booking.country_image_url || ENV.heroImage;
   const days = Array.isArray(itinerary.days) ? itinerary.days : [];
-  const body = greet("Altuvera Admin") + para("A new itinerary has been sent to <strong style='color:"+T.g700+";'>"+esc(booking.full_name)+"</strong> for "+esc(destination)+".") + infoTable("Itinerary delivery", [row("Booking", booking.booking_number, true),row("Traveller", booking.full_name),row("Email", booking.email),row("Destination", destination),row("Version", booking.itinerary_version),row("Days", days.length)]) + ctaBlock("Open Booking", ENV.frontendUrl+"/my-bookings", "Admin panel", (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app")+"/bookings/"+booking.id);
+  const body = greet("Altuvera Admin") + para("A new itinerary has been sent to <strong style='color:"+T.g700+";'>"+esc(booking.full_name)+"</strong> for "+esc(destination)+".") + infoTable("Itinerary delivery", [row("Booking", booking.booking_number, true),row("Traveller", booking.full_name),row("Email", booking.email),row("Destination", destination),row("Version", booking.itinerary_version),row("Days", days.length)]) + ctaBlock("Review Booking", (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app").replace(/\/$/, "")+"/bookings?bookingId="+encodeURIComponent(booking.id || booking.booking_number || ""), "Open Itinerary Builder", (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app").replace(/\/$/, "")+"/itineraries/"+encodeURIComponent(booking.id || booking.booking_number || ""));
   const html = shell({preheader:"Itinerary sent — "+destination,heroBadge:statusPill("confirmed"),heroTitle:"Itinerary sent to traveller",heroSubtitle:"Planned journey: "+destination,heroImage:image,body});
   return safeSend(adminEmail, "Itinerary Sent — "+safe(booking.booking_number)+" | "+ENV.appName, html, "sendAdminItineraryNotification");
 };
