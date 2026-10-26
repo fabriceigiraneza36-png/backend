@@ -354,7 +354,13 @@ router.get(
       const page   = clamp(req.query.page,  1, 9999);
       const offset = (page - 1) * limit;
 
-      const conds  = ["deleted_at IS NULL"];
+      // Admin inbox must contain only notifications addressed to the admin audience.
+      // Without this scope guard, customer-specific notifications (e.g. “Your itinerary is ready”)
+      // leak into the admin panel and read as if the admin owns the customer booking.
+      const conds  = [
+        "deleted_at IS NULL",
+        "(target_scope = 'admin' OR (target_scope = 'role' AND target_role IN ('admin', 'manager')))",
+      ];
       const params = [];
 
       if (req.query.type) {
