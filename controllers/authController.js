@@ -288,8 +288,22 @@ const incrementLoginCounter = async (userId) => {
 ════════════════════════════════════════════════════════════════ */
 exports.register = async (req, res) => {
   try {
-    const { email, fullName, full_name, phone, bio, avatar } = req.body;
+    const { email, fullName, full_name, phone, bio, avatar, preferences } = req.body;
     const name   = ((fullName || full_name || "").trim()).slice(0, 100);
+    const onboarding = preferences && typeof preferences === "object" && !Array.isArray(preferences)
+      ? {
+          dateOfBirth: String(preferences.dateOfBirth || "").slice(0, 10),
+          nationality: String(preferences.nationality || "").trim().slice(0, 80),
+          residenceCountry: String(preferences.residenceCountry || "").trim().slice(0, 80),
+          preferredLanguage: String(preferences.preferredLanguage || "").trim().slice(0, 40),
+          profession: String(preferences.profession || "").trim().slice(0, 100),
+          travelStyles: Array.isArray(preferences.travelStyles)
+            ? preferences.travelStyles.filter((v) => typeof v === "string").map((v) => v.trim().slice(0, 40)).filter(Boolean).slice(0, 16)
+            : [],
+        }
+      : null;
+    const hasOnboarding = Boolean(onboarding && Object.values(onboarding).some((v) => Array.isArray(v) ? v.length : Boolean(v)));
+    const onboardingJson = hasOnboarding ? JSON.stringify({ onboarding }) : null;
     const nEmail = ((email   || "").trim().toLowerCase());
 
     if (!nEmail)
@@ -312,15 +326,17 @@ exports.register = async (req, res) => {
         });
 
       /* Patch optional profile fields */
-      if (name || phone || bio || avatar) {
+      if (name || phone || bio || avatar || onboardingJson) {
         await query(
           `UPDATE users SET
              full_name  = COALESCE(NULLIF($1,''), full_name),
              phone      = COALESCE(NULLIF($2,''), phone),
              bio        = COALESCE(NULLIF($3,''), bio),
-             avatar_url = COALESCE(NULLIF($4,''), avatar_url)
-           WHERE id = $5`,
-          [name, phone || null, bio || null, avatar || null, user.id],
+             avatar_url = COALESCE(NULLIF($4,''), avatar_url),
+             preferences = CASE WHEN $5::jsonb IS NULL THEN preferences
+               ELSE COALESCE(preferences, '{}'::jsonb) || $5::jsonb END
+           WHERE id = $6`,
+          [name, phone || null, bio || null, avatar || null, onboardingJson, user.id],
         );
       }
 
@@ -344,10 +360,10 @@ exports.register = async (req, res) => {
     /* New user */
     const created = await query(
       `INSERT INTO users
-         (email, full_name, phone, bio, avatar_url, is_verified, auth_provider, login_counter)
-       VALUES ($1,$2,$3,$4,$5,false,'email',0)
+         (email, full_name, phone, bio, avatar_url, preferences, is_verified, auth_provider, login_counter)
+       VALUES ($1,$2,$3,$4,$5,COALESCE($6::jsonb, '{}'::jsonb),false,'email',0)
        RETURNING *`,
-      [nEmail, name || null, phone || null, bio || null, avatar || null],
+      [nEmail, name || null, phone || null, bio || null, avatar || null, onboardingJson],
     );
 
     const otp = generateOTP();
@@ -697,7 +713,7 @@ exports.resendCode = async (req, res) => {
       });
 
     const otp = generateOTP();
-    await setOtp(user.id, otp, 15);
+    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
 
     // ✅ Include the user's full name in the resend email
     await sendOtpEmail({
@@ -705,12 +721,12 @@ exports.resendCode = async (req, res) => {
       recipientName: user.full_name || "",
       otp,
       purpose:       "resend",
-      expiryMinutes: 15,
+      expiryMinutes: OTP_EXPIRY_MINUTES,
     });
 
     return res.json({
       success: true,
-      message: "New code sent — valid for 15 minutes.",
+      message: "New code sent — valid for 10 minutes.",
       // ✅ Return fullName so frontend can display "Resent to <Name>"
       data: {
         email:    user.email,
