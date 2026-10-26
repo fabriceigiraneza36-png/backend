@@ -246,11 +246,11 @@ exports.publish = async (req,res,next) => {
     const emailError = emailSent ? null : String(emailResult?.error || "Email provider did not confirm successful delivery.").slice(0, 1000);
     await query(
       `UPDATE bookings
-          SET itinerary_email_status=$1,
-              itinerary_email_error=$2,
-              itinerary_email_sent_at=CASE WHEN $1='sent' THEN NOW() ELSE NULL END
+          SET itinerary_email_status=$1::varchar(20),
+              itinerary_email_error=$2::text,
+              itinerary_email_sent_at=CASE WHEN $4::boolean THEN NOW() ELSE NULL END
         WHERE id=$3`,
-      [emailSent ? "sent" : "failed", emailError, id],
+      [emailSent ? "sent" : "failed", emailError, id, emailSent],
     );
 
     try {
