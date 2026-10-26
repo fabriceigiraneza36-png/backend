@@ -164,6 +164,7 @@ const ALLOWED_ORIGINS = [
     process.env.BACKEND_URL,
     ...envOrigins,
 // -- Admin panel ------------------------------------------------------
+       'https://altuverapanel.vercel.app',
        'https://admin.altuverasafaris.com',
        'https://admin.altuvera.com',
     // -- Public site ------------------------------------------------------
