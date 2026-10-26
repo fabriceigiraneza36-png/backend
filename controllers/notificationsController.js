@@ -306,7 +306,7 @@ const notifyAdminsImmediately = async ({
   const adminPanelUrl =
     process.env.ADMIN_PANEL_URL ||
     process.env.ADMIN_URL ||
-    "https://admin.altuverasafaris.com";
+    "https://altuverapanel.vercel.app";
   const absoluteUrl = actionUrl && /^https?:\/\//i.test(actionUrl)
     ? actionUrl
     : `${adminPanelUrl.replace(/\/$/, "")}${actionUrl.startsWith("/") ? actionUrl : `/${actionUrl}`}`;
@@ -615,7 +615,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
   const adminPanelUrl =
     process.env.ADMIN_PANEL_URL ||
     process.env.ADMIN_URL ||
-    "https://admin.altuverasafaris.com";
+    "https://altuverapanel.vercel.app";
   const actionUrl = `${adminPanelUrl.replace(/\/$/, "")}${actionPath}`;
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
     "&": "&amp;",
