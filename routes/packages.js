@@ -674,8 +674,21 @@ router.post('/:id/book', authenticate, async (req, res) => {
     }
 
     // Normalize input
-    const finalName    = String(req.user?.full_name || req.user?.fullName || req.user?.name || guest_name || full_name || name || '').trim()
-    const finalEmail   = String(req.user?.email || guest_email || email || '').trim().toLowerCase()
+    const nameCandidates = [
+      req.user?.full_name,
+      req.user?.fullName,
+      guest_name,
+      full_name,
+      name,
+      req.user?.name,
+    ].map((value) => String(value || '').trim()).filter((value) => value.length >= 2)
+    const finalName = nameCandidates[0] || ''
+    const userEmail = String(req.user?.email || '').trim().toLowerCase()
+    const submittedEmail = String(guest_email || email || '').trim().toLowerCase()
+    const isValidEmail = (value) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)
+    // Keep the authenticated email when valid; fall back to the submitted account value
+    // if an older session contains an empty or malformed email field.
+    const finalEmail = isValidEmail(userEmail) ? userEmail : (submittedEmail || userEmail)
     const finalPhone   = String(guest_phone || phone || '').trim() || null
     const finalTravel  = travel_date || startDate || null
     const wantsEmailUpdates = newsletter_opt_in === true || newsletter_opt_in === 'true' || newsletterOptInCamel === true || newsletterOptInCamel === 'true'
@@ -699,7 +712,7 @@ router.post('/:id/book', authenticate, async (req, res) => {
       errors.push('Invalid email format')
     }
     if (errors.length) {
-      return res.status(400).json({ success: false, message: 'Validation failed', errors })
+      return res.status(400).json({ success: false, message: errors.join('; ') || 'Validation failed', errors })
     }
 
     const adultsNum   = Math.max(1, parseInt(adults, 10)   || 1)
@@ -729,7 +742,7 @@ router.post('/:id/book', authenticate, async (req, res) => {
       }
     }
     if (errors.length) {
-      return res.status(400).json({ success: false, message: 'Validation failed', errors })
+      return res.status(400).json({ success: false, message: errors.join('; ') || 'Validation failed', errors })
     }
 
     // Generate unique booking reference
