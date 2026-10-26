@@ -179,7 +179,8 @@ const setOtp = (userId, otp, expiryMinutes = OTP_EXPIRY_MINUTES) =>
        code_expiry       = NOW() + ($2 || ' minutes')::interval,
        code_attempts     = 0,
        last_code_sent_at = NOW()
-     WHERE id = $3`,
+     WHERE id = $3
+     RETURNING code_expiry`,
     [otp, expiryMinutes, userId],
   );
 
@@ -1148,11 +1149,49 @@ exports.githubCallback = async (req, res) => {
       bio:        gh.bio || null,
     });
 
-    // Never place an access token in the browser URL. The frontend will
-    // restart the standard email-OTP flow for this verified GitHub account.
+    // Never place an access token or OTP in the browser URL. Send one email
+    // code here, then pass only its expiry timestamp so the frontend can resume
+    // verification without issuing a second code.
+    let codeExpiresAt = user.code_expiry ? new Date(user.code_expiry) : null;
+    const hasActiveCode = Boolean(
+      user.verification_code &&
+      codeExpiresAt &&
+      codeExpiresAt.getTime() > Date.now()
+    );
+
+    if (isRateLimited(user)) {
+      // Keep an already-issued code usable during the resend cooldown. If no
+      // live code remains, stop cleanly instead of silently invalidating it.
+      if (!hasActiveCode) {
+        return res.redirect(
+          FRONTEND + "/auth/github/callback?" +
+          new URLSearchParams({ error: "verification_rate_limited", provider: "github" }),
+        );
+      }
+    } else {
+      const otp = generateOTP();
+      const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+      codeExpiresAt = otpResult.rows[0]?.code_expiry
+        ? new Date(otpResult.rows[0].code_expiry)
+        : new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+
+      await sendOtpEmail({
+        to: user.email,
+        recipientName: user.full_name || gh.name || gh.login || "",
+        otp,
+        purpose: isNew ? "verify" : "login",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
+    }
+
     return res.redirect(
       FRONTEND + "/auth/github/callback?" +
-      new URLSearchParams({ emailOtpRequired: "1", email: user.email, provider: "github" }),
+      new URLSearchParams({
+        emailOtpRequired: "1",
+        email: user.email,
+        provider: "github",
+        expiresAt: String(codeExpiresAt.getTime()),
+      }),
     );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
