@@ -147,7 +147,8 @@ const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
     // requires a fresh email OTP for every sign-in as the account's baseline
     // verification step. No session token is issued from this function.
     const otp = generateOTP();
-    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
     await sendOtpEmail({
       to: user.email,
       recipientName: user.full_name || "",
@@ -159,7 +160,7 @@ const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
       success: true,
       requiresEmailVerification: true,
       message: "Check your email for a verification code to complete sign-in.",
-      data: { email: user.email, fullName: user.full_name || "", isNewUser: isNew },
+      data: { email: user.email, fullName: user.full_name || "", isNewUser: isNew, codeExpiresAt },
     });
   } catch (err) {
     logger.error("[Auth] Could not send required email verification:", err.message);
@@ -342,7 +343,8 @@ exports.register = async (req, res) => {
       }
 
       const otp = generateOTP();
-      await setOtp(user.id, otp);
+      const otpResult = await setOtp(user.id, otp);
+      const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
       await sendOtpEmail({
         to:            nEmail,
         recipientName: name || user.full_name || "",
@@ -354,7 +356,7 @@ exports.register = async (req, res) => {
       return res.json({
         success: true,
         message: "Verification code sent. Check your inbox.",
-        data: { email: nEmail },
+        data: { email: nEmail, codeExpiresAt },
       });
     }
 
@@ -368,7 +370,8 @@ exports.register = async (req, res) => {
     );
 
     const otp = generateOTP();
-    await setOtp(created.rows[0].id, otp);
+    const otpResult = await setOtp(created.rows[0].id, otp);
+    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
     await sendOtpEmail({
       to:            nEmail,
       recipientName: name || "",
@@ -380,7 +383,7 @@ exports.register = async (req, res) => {
     return res.status(201).json({
       success: true,
       message: "Account created! Check your inbox for the verification code.",
-      data: { email: nEmail, requiresVerification: true },
+      data: { email: nEmail, requiresVerification: true, codeExpiresAt },
     });
   } catch (err) {
     handleError(res, err, "Registration failed");
@@ -430,7 +433,8 @@ exports.login = async (req, res) => {
     const otp     = generateOTP();
     const purpose = isNew ? "verify" : "login";
 
-    await setOtp(user.id, otp);
+    const otpResult = await setOtp(user.id, otp);
+    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     // ✅ Pass the stored full_name (or supplied name) so the email
     //    can greet the user and remind them of their registered name
@@ -450,6 +454,7 @@ exports.login = async (req, res) => {
         // ✅ Return the stored full name so the frontend can show it
         fullName: user.full_name || name || "",
         isNewUser: isNew,
+        codeExpiresAt,
       },
     });
   } catch (err) {
@@ -714,7 +719,8 @@ exports.resendCode = async (req, res) => {
       });
 
     const otp = generateOTP();
-    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     // ✅ Include the user's full name in the resend email
     await sendOtpEmail({
@@ -732,6 +738,7 @@ exports.resendCode = async (req, res) => {
       data: {
         email:    user.email,
         fullName: user.full_name || "",
+        codeExpiresAt,
       },
     });
   } catch (err) {
@@ -790,7 +797,7 @@ exports.forgotUsernameSendCode = async (req, res) => {
       return res.json({
         success: true,
         message: "If an account with that email exists, a verification code has been sent.",
-        data: { email: nEmail },
+        data: { email: nEmail, codeExpiresAt },
       });
     }
 
@@ -809,7 +816,8 @@ exports.forgotUsernameSendCode = async (req, res) => {
       });
 
     const otp = generateOTP();
-    await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
 
     await sendOtpEmail({
       to:            user.email,
