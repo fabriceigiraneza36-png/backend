@@ -147,12 +147,27 @@ const listConversations = typeof _listConversations === "function"
              u.avatar_url  AS u_avatar_url,
              u.phone       AS u_phone,
              u.is_verified AS u_is_verified,
+             lm.sender_type AS last_message_sender_type,
+             lm.sender_id AS last_message_sender_id,
+             COALESCE(NULLIF(lm.sender_full_name, ''), NULLIF(lm.sender_username, ''), NULLIF(lm.sender_name, '')) AS last_message_sender_name,
+             lm.sender_username AS last_message_sender_username,
+             lm.sender_avatar AS last_message_sender_avatar,
              (
                SELECT COUNT(*)::INT FROM messages m
                 WHERE m.conversation_id = c.id
              ) AS message_count
            FROM conversations c
            LEFT JOIN users u ON u.id = c.user_id
+           LEFT JOIN LATERAL (
+             SELECT m.sender_type, m.sender_id, m.sender_name, m.sender_avatar,
+                    u_sender.full_name AS sender_full_name, u_sender.username AS sender_username
+               FROM messages m
+               LEFT JOIN users u_sender
+                 ON m.sender_type IN ('user', 'traveler') AND u_sender.id = m.sender_id
+              WHERE m.conversation_id = c.id
+              ORDER BY m.created_at DESC, m.id DESC
+              LIMIT 1
+           ) lm ON TRUE
            WHERE ${where}
            ORDER BY
              c.unread_admin DESC NULLS LAST,
@@ -494,6 +509,11 @@ function reshapeConversation(row, includeMessages = false) {
     firstMessage:  row.first_message,
     lastMessage:   row.last_message,
     lastMessageAt: row.last_message_at,
+    lastMessageSenderType: row.last_message_sender_type || null,
+    lastMessageSenderId: row.last_message_sender_id ?? null,
+    lastMessageSenderName: row.last_message_sender_name || row.last_message_sender_username || null,
+    lastMessageSenderUsername: row.last_message_sender_username || null,
+    lastMessageSenderAvatar: row.last_message_sender_avatar || null,
     unreadUser:    row.unread_user    || 0,
     unreadAdmin:   row.unread_admin   || 0,
     tags:          row.tags           || [],
