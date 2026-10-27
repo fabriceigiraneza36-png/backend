@@ -387,19 +387,33 @@ const getConversationWithMessages = typeof _getConversationWithMessages === "fun
         }
         params.push(limit + 1);
         const msgsRes = await query(
-          `SELECT * FROM messages
-            WHERE conversation_id = $1${cursorClause}
-            ORDER BY id DESC
-            LIMIT $${params.length}`,
+          `SELECT m.*,
+                  sender_user.full_name AS sender_user_full_name,
+                  sender_user.username AS sender_user_username,
+                  sender_user.avatar_url AS sender_user_avatar,
+                  (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
+             FROM messages m
+             LEFT JOIN users sender_user
+               ON sender_user.id = m.sender_id AND m.sender_type = 'user'
+            WHERE m.conversation_id = $1${cursorClause}
+            ORDER BY m.id DESC
+            LIMIT ${params.length}`,
           params,
         );
         conv.hasMoreMessages = msgsRes.rows.length > limit;
         conv.messages = msgsRes.rows.slice(0, limit).reverse();
       } else {
         const msgsRes = await query(
-          `SELECT * FROM messages
-            WHERE conversation_id = $1
-            ORDER BY created_at ASC, id ASC`,
+          `SELECT m.*,
+                  sender_user.full_name AS sender_user_full_name,
+                  sender_user.username AS sender_user_username,
+                  sender_user.avatar_url AS sender_user_avatar,
+                  (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
+             FROM messages m
+             LEFT JOIN users sender_user
+               ON sender_user.id = m.sender_id AND m.sender_type = 'user'
+            WHERE m.conversation_id = $1
+            ORDER BY m.created_at ASC, m.id ASC`,
           [conversationId],
         );
         conv.messages = msgsRes.rows;
@@ -513,14 +527,24 @@ function reshapeMessage(m) {
   const senderUnavailable = Boolean(
     m.sender_unavailable || metadata.senderUnavailable || metadata.senderDeleted
   );
+  const storedSenderName = String(m.sender_name || "").trim();
+  const senderUsername = senderUnavailable ? null : (
+    String(m.sender_user_username || metadata.senderUsername || metadata.sender_username || metadata.username || metadata.user?.username || "").trim() || null
+  );
+  const senderFullName = senderUnavailable ? "" : String(m.sender_user_full_name || "").trim();
+  const genericUserName = /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|user)$/i.test(storedSenderName);
+  const resolvedSenderName = senderUnavailable
+    ? "Deleted user"
+    : (senderFullName || (m.sender_type === "user" && genericUserName ? (senderUsername || "Unknown member") : storedSenderName) || senderUsername || "Unknown member");
   return {
     id:             m.id,
-    conversationId: m.conversation_id,
-    senderType:     m.sender_type,
-    senderId:       senderUnavailable ? null : m.sender_id,
-    senderName:     senderUnavailable ? "Deleted user" : m.sender_name,
-    senderEmail:    senderUnavailable ? null : m.sender_email,
-    senderAvatar:   senderUnavailable ? null : m.sender_avatar,
+    conversationId:  m.conversation_id,
+    senderType:      m.sender_type,
+    senderId:        senderUnavailable ? null : m.sender_id,
+    senderName:      resolvedSenderName,
+    senderUsername,
+    senderEmail:     senderUnavailable ? null : m.sender_email,
+    senderAvatar:    senderUnavailable ? null : (m.sender_user_avatar || m.sender_avatar || null),
     body:           m.body,
     msgType:        m.msg_type,
     attachmentUrl:  m.attachment_url,
