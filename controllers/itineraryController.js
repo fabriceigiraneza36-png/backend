@@ -57,13 +57,16 @@ const bookingDetail = async (id) => {
     `SELECT b.*,
             COALESCE(d.name,b.destination_name,'') AS destination_name,
             COALESCE(c.name,b.country_name,b.country,'') AS country_name,
+            COALESCE(p.title,'') AS package_name,
             COALESCE(d.image_url,d.cover_image_url,c.image_url,c.cover_image_url) AS destination_image_url,
             COALESCE(c.image_url,c.cover_image_url,d.image_url,d.cover_image_url) AS country_image_url,
             to_jsonb(d) AS destination_details,
-            to_jsonb(c) AS country_details
+            to_jsonb(c) AS country_details,
+            to_jsonb(p) AS package_details
        FROM bookings b
        LEFT JOIN destinations d ON d.id=b.destination_id
        LEFT JOIN countries c ON c.id=COALESCE(b.country_id,d.country_id)
+       LEFT JOIN packages p ON p.id=b.package_id
       WHERE b.id=$1 LIMIT 1`,
     [id],
   );
@@ -89,6 +92,9 @@ const normalizeItinerary = (raw = {}) => {
     title: String(src.title || "Personalized Altuvera Itinerary").trim(),
     introduction: String(src.introduction || "").trim(),
     mode: src.mode === "assisted" ? "assisted" : "manual",
+    // The PDF renderer uses a washed-out destination image or a clean white page.
+    // Never accept arbitrary URLs here: the background is resolved from the linked booking.
+    backgroundMode: src.backgroundMode === "destination" ? "destination" : "white",
     days: days.map((day, index) => ({
       day: index + 1,
       date: day?.date || null,
@@ -114,6 +120,35 @@ const normalizeItinerary = (raw = {}) => {
       : [],
     contactNote: String(src.contactNote || "").trim(),
   };
+};
+
+exports.list = async (req,res,next) => {
+  try {
+    await ensureSchema();
+    const { rows } = await query(
+      `SELECT b.*,
+              COALESCE(d.name,b.destination_name,'') AS destination_name,
+              COALESCE(c.name,b.country_name,b.country,'') AS country_name,
+              COALESCE(p.title,'') AS package_name,
+              COALESCE(d.image_url,d.cover_image_url,c.image_url,c.cover_image_url) AS destination_image_url,
+              to_jsonb(d) AS destination_details,
+              to_jsonb(c) AS country_details,
+              to_jsonb(p) AS package_details
+         FROM bookings b
+         LEFT JOIN destinations d ON d.id=b.destination_id
+         LEFT JOIN countries c ON c.id=COALESCE(b.country_id,d.country_id)
+         LEFT JOIN packages p ON p.id=b.package_id
+        WHERE COALESCE(b.itinerary_status,'not_started') IN ('draft','sent','change_requested','approved')
+          AND b.itinerary IS NOT NULL
+          AND b.itinerary <> '{}'::jsonb
+        ORDER BY COALESCE(b.updated_at,b.created_at) DESC NULLS LAST
+        LIMIT 300`,
+    );
+    return res.json({ success:true, data:rows });
+  } catch(e) {
+    logger.error("[Itinerary] list:",e.message);
+    next(e);
+  }
 };
 
 exports.get = async (req,res,next) => {
