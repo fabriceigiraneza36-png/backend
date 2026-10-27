@@ -329,6 +329,11 @@ async function listConversations({
        u.nationality AS user_nationality,
        u.username    AS user_username,
        u.deleted_at  AS user_deleted_at,
+       lm.sender_type AS last_message_sender_type,
+       lm.sender_id AS last_message_sender_id,
+       COALESCE(NULLIF(lm.sender_full_name, ''), NULLIF(lm.sender_username, ''), NULLIF(lm.sender_name, '')) AS last_message_sender_name,
+       lm.sender_username AS last_message_sender_username,
+       lm.sender_avatar AS last_message_sender_avatar,
        (
          SELECT COUNT(*)::INT FROM messages m
           WHERE m.conversation_id = c.id
@@ -336,6 +341,16 @@ async function listConversations({
      FROM conversations c
      LEFT JOIN users u ON u.id = c.user_id
      LEFT JOIN message_groups g ON g.id = c.group_id
+     LEFT JOIN LATERAL (
+       SELECT m.sender_type, m.sender_id, m.sender_name, m.sender_avatar,
+              u_sender.full_name AS sender_full_name, u_sender.username AS sender_username
+         FROM messages m
+         LEFT JOIN users u_sender
+           ON m.sender_type IN ('user', 'traveler') AND u_sender.id = m.sender_id
+        WHERE m.conversation_id = c.id
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT 1
+     ) lm ON TRUE
      WHERE ${where}
      ORDER BY
        CASE c.priority
