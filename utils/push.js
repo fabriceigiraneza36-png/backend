@@ -15,11 +15,16 @@ function initPush () {
     vapidPublicKey  = process.env.VAPID_PUBLIC_KEY  || null
     vapidPrivateKey = process.env.VAPID_PRIVATE_KEY || null
 
-    if (!vapidPrivateKey) {
+    if (!vapidPublicKey || !vapidPrivateKey) {
+      pushReady = false
+      if (process.env.NODE_ENV === 'production') {
+        logger.error('[Push] Production VAPID keys are missing. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in the backend environment; ephemeral keys invalidate existing subscriptions after restarts.')
+        return
+      }
       const keys = webpush.generateVAPIDKeys()
       vapidPublicKey  = keys.publicKey
       vapidPrivateKey = keys.privateKey
-      logger.warn('[Push] VAPID keys not found in env. Generated ephemeral keys. Set VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY in .env for production.')
+      logger.warn('[Push] Generated temporary VAPID keys for development only.')
     }
 
     webpush.setVapidDetails(
@@ -39,7 +44,8 @@ function getVapidPublicKey () {
 }
 
 async function sendPushToSubscription (subscription, payload) {
-  if (!pushReady || !subscription) return null
+  if (!pushReady) throw new Error('Web Push is not initialized. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on the backend.')
+  if (!subscription) throw new Error('Push subscription is missing.')
   try {
     const result = await webpush.sendNotification(subscription, JSON.stringify(payload))
     return result
@@ -47,7 +53,7 @@ async function sendPushToSubscription (subscription, payload) {
     if (err.statusCode === 410 || err.statusCode === 404) {
       logger.info('[Push] Subscription expired/gone, will be cleaned by retry')
     } else {
-      logger.warn('[Push] sendNotification failed:', err.message)
+      logger.warn('[Push] sendNotification failed:', { statusCode: err.statusCode || null, message: err.message, endpoint: String(subscription.endpoint || '').slice(0, 90) })
     }
     throw err
   }
@@ -60,7 +66,7 @@ async function sendPushToSubscriptions (subscriptions, payload) {
       const res = await sendPushToSubscription(sub, payload)
       results.push({ endpoint: sub.endpoint, success: true, result: res })
     } catch {
-      results.push({ endpoint: sub.endpoint, success: false })
+      results.push({ endpoint: sub.endpoint, success: false, statusCode: null })
     }
   }
   return results
