@@ -1,7 +1,7 @@
 // routes/bookings.js
 const express = require('express')
 const router = express.Router()
-const { optionalAuth, protect } = require('../middleware/auth')
+const { optionalAuth, protect, adminOnly } = require('../middleware/auth')
 const bookingsController = require('../controllers/bookingsController')
 
 // ── 1. PUBLIC / GUEST & USER ROUTES ──────────────────────────────────────────
@@ -29,22 +29,22 @@ router.post('/:id/cancel-request', optionalAuth, bookingsController.requestCance
 // (Placed BEFORE /:id to avoid router matching "stats", "export", etc. as IDs)
 
 // General stats, trends & conversion rates
-router.get('/stats', bookingsController.getStats)
+router.get('/stats', adminOnly, bookingsController.getStats)
 
 // Country booking statistics
-router.get('/stats/countries', bookingsController.getCountriesBookingStats)
+router.get('/stats/countries', adminOnly, bookingsController.getCountriesBookingStats)
 
 // Destination booking statistics
-router.get('/stats/destinations', bookingsController.getDestinationsBookingStats)
+router.get('/stats/destinations', adminOnly, bookingsController.getDestinationsBookingStats)
 
 // List of cancellation and refund requests
-router.get('/cancel-requests', bookingsController.getCancellationRequests)
+router.get('/cancel-requests', adminOnly, bookingsController.getCancellationRequests)
 
 // Upcoming bookings countdown list
-router.get('/upcoming', bookingsController.getUpcoming)
+router.get('/upcoming', adminOnly, bookingsController.getUpcoming)
 
 // Recent bookings list
-router.get('/recent', bookingsController.getRecent)
+router.get('/recent', adminOnly, bookingsController.getRecent)
 
 // Most booked destinations list
 router.get('/destinations/most-booked', bookingsController.getMostBookedDestinations)
@@ -56,39 +56,39 @@ router.get('/destinations/:destinationId', bookingsController.getBookingsByDesti
 router.get('/countries/:countryId', bookingsController.getBookingsByCountry)
 
 // Export bookings data (JSON / CSV)
-router.get('/export', bookingsController.export)
+router.get('/export', adminOnly, bookingsController.export)
 
 // Bulk update booking statuses
-router.post('/bulk-status', bookingsController.bulkUpdateStatus)
+router.post('/bulk-status', adminOnly, bookingsController.bulkUpdateStatus)
 
 // Manually trigger countdown notification emails
-router.post('/send-countdown-emails', bookingsController.sendCountdownEmails)
+router.post('/send-countdown-emails', adminOnly, bookingsController.sendCountdownEmails)
 
 
 // ── 3. GENERAL & ADMIN MANAGEMENT ROUTES ─────────────────────────────────────
 
 // Get all bookings with pagination, search, and status filters
-router.get('/', bookingsController.getAll)
+router.get('/', adminOnly, bookingsController.getAll)
 
 // Create a booking manually as admin (auto-confirms and sends confirmation email)
-router.post('/admin', bookingsController.adminCreate)
+router.post('/admin', adminOnly, bookingsController.adminCreate)
 
 // Get single booking details with activity history
-router.get('/:id', bookingsController.getOne)
+router.get('/:id', protect, bookingsController.getOne)
 
 // Update booking information
-router.put('/:id', bookingsController.update)
+router.put('/:id', adminOnly, bookingsController.update)
 
 // Update booking status (Sends status change/cancellation/confirmation emails)
-router.patch('/:id/status', bookingsController.updateStatus)
+router.patch('/:id/status', adminOnly, bookingsController.updateStatus)
 
 // Approve or reject a cancellation / refund request
-router.post('/:id/cancel-review', bookingsController.reviewCancellation)
+router.post('/:id/cancel-review', adminOnly, bookingsController.reviewCancellation)
 
 // Add administrative or internal notes to a booking
-router.post('/:id/notes', bookingsController.addNotes)
+router.post('/:id/notes', adminOnly, bookingsController.addNotes)
 
 // Delete a booking record
-router.delete('/:id', bookingsController.remove)
+router.delete('/:id', adminOnly, bookingsController.remove)
 
 module.exports = router
