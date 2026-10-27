@@ -558,6 +558,7 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS created_by_admin_id INTEGER`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_requested_by INTEGER`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_deadline TIMESTAMPTZ`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS deleted_by INTEGER`,
     `UPDATE conversations c SET created_by_admin_id = (SELECT m.sender_id FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'admin' AND m.sender_id IS NOT NULL ORDER BY m.id ASC LIMIT 1) WHERE c.created_by_admin_id IS NULL AND c.group_id IS NULL AND c.user_id IS NOT NULL AND LOWER(COALESCE(c.source, '')) = 'admin' AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'admin' AND m.sender_id IS NOT NULL)`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_pinned       BOOLEAN DEFAULT false`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_highlighted  BOOLEAN DEFAULT false`,
@@ -1263,7 +1264,7 @@ const recycleSweep = setInterval(async () => {
       }
       io.to('admins').to('admin-room').emit('msg:conversation-recycled', payload)
     }
-  } catch (err) { logger.warn('[Messaging] Recycle Bin sweep deferred:', err.message) }
+  } catch (err) { logger.warn('[Messaging] Recycle Bin sweep deferred: ' + (err?.message || String(err))) }
 }, 1000)
 recycleSweep.unref?.()
 
