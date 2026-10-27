@@ -425,6 +425,9 @@ async function getConversationWithMessages(conversationId, options = {}) {
     params.push(limit + 1);
     const msgRes = await query(
       `SELECT m.*,
+              sender_user.full_name AS sender_user_full_name,
+              sender_user.username AS sender_user_username,
+              sender_user.avatar_url AS sender_user_avatar,
               (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
          FROM messages m
          LEFT JOIN users sender_user
@@ -440,6 +443,9 @@ async function getConversationWithMessages(conversationId, options = {}) {
   } else {
     const msgRes = await query(
       `SELECT m.*,
+              sender_user.full_name AS sender_user_full_name,
+              sender_user.username AS sender_user_username,
+              sender_user.avatar_url AS sender_user_avatar,
               (sender_user.deleted_at IS NOT NULL) AS sender_unavailable
          FROM messages m
          LEFT JOIN users sender_user
