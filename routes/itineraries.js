@@ -3,6 +3,7 @@ const router = express.Router();
 const controller = require("../controllers/itineraryController");
 const { protect, adminOnly } = require("../middleware/auth");
 
+router.get("/", adminOnly, controller.list);
 router.get("/:id", protect, controller.get);
 router.post("/:id/draft", adminOnly, controller.saveDraft);
 router.post("/:id/publish", adminOnly, controller.publish);
