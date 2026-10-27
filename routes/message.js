@@ -372,8 +372,8 @@ const getConversationWithMessages = typeof _getConversationWithMessages === "fun
            u.is_verified AS u_is_verified
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
-         WHERE c.id = $1 AND c.deleted_at IS NULL`,
-        [conversationId],
+         WHERE c.id = $1 AND ($2::boolean OR c.deleted_at IS NULL)`,
+        [conversationId, Boolean(options.includeDeleted)],
       );
       if (!convRes.rows[0]) return null;
 
