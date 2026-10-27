@@ -1632,13 +1632,18 @@ router.delete("/conversations/:id", adminProtect, async (req, res) => {
 router.get("/conversations/:id", protect, async (req, res) => {
   try {
     const requestedLimit = req.query.limit == null ? null : Number.parseInt(req.query.limit, 10);
-    const pageOptions = Number.isInteger(requestedLimit) && requestedLimit > 0
-      ? {
-          limit: Math.min(requestedLimit, 50),
-          beforeCreatedAt: req.query.beforeCreatedAt || null,
-          beforeId: req.query.beforeId || null,
-        }
-      : {};
+    const pageOptions = {
+      ...(Number.isInteger(requestedLimit) && requestedLimit > 0
+        ? {
+            limit: Math.min(requestedLimit, 50),
+            beforeCreatedAt: req.query.beforeCreatedAt || null,
+            beforeId: req.query.beforeId || null,
+          }
+        : {}),
+      // Recycled messages are reviewable only through an explicit admin request.
+      // End-user requests always continue filtering deleted conversations.
+      includeDeleted: isAdminUser(req) && req.query.includeDeleted === "true",
+    };
     const data = await getConversationWithMessages(req.params.id, pageOptions);
     if (!data) {
       return res.status(404).json({ success: false, message: "Conversation not found" });
