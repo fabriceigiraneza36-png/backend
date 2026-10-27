@@ -214,7 +214,7 @@ exports.listRecoveryRequests = async (req,res) => {
 exports.deleteRecoveryRequest = async (req,res) => {
   try {
     const requestId=String(req.params.id||"");
-    if(!/^\\d+$/.test(requestId)) return fail(res,400,"A valid recovery request ID is required.");
+    if(!/^[0-9]+$/.test(requestId)) return fail(res,400,"A valid recovery request ID is required.");
     await ensureRecoveryReviewSchema();
     const deleted=await query(`DELETE FROM account_recovery_requests WHERE id=$1
       RETURNING id,user_id,status`,[requestId]);
