@@ -1562,7 +1562,7 @@ router.post("/conversations/:id/restore-choice", protect, async (req, res) => {
     if (choice === "keep_restored" && Number.isInteger(existingId) && existingId > 0) {
       const { rows: retired } = await query(
         `UPDATE conversations
-            SET deleted_at = NOW(), deleted_by = $3, recycle_deadline = NULL,
+            SET deleted_at = NOW(), recycle_deadline = NULL,
                 recycle_requested_by = NULL, updated_at = NOW()
           WHERE id = $1 AND user_id = $2 AND id <> $4 AND group_id IS NULL AND deleted_at IS NULL
             AND conversation_type IN ('personal', 'resource_support', 'direct')
@@ -1575,7 +1575,6 @@ router.post("/conversations/:id/restore-choice", protect, async (req, res) => {
     const { rows: resolved } = await query(
       `UPDATE conversations
           SET deleted_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END,
-              deleted_by = CASE WHEN $3::boolean THEN $2 ELSE deleted_by END,
               status = CASE WHEN $3::boolean THEN status ELSE 'open' END,
               metadata = COALESCE(metadata, '{}'::jsonb) - 'restoreChoicePending' - 'restoreChoiceExistingConversationId',
               updated_at = NOW()
