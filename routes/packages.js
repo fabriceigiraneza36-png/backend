@@ -9,6 +9,32 @@ const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
 const { enqueueContextCampaign } = require('../utils/emailCampaignQueue')
 const { notifyPackageBookingCreated, createNotificationInternal } = require('../controllers/notificationsController')
 
+let packageCommentsSchemaPromise = null
+const ensurePackageCommentsSchema = () => {
+  if (!packageCommentsSchemaPromise) {
+    packageCommentsSchemaPromise = (async () => {
+      await db(`
+        CREATE TABLE IF NOT EXISTS package_comments (
+          id SERIAL PRIMARY KEY,
+          package_id INTEGER NOT NULL REFERENCES packages(id) ON DELETE CASCADE,
+          user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+          author_name VARCHAR(255) NOT NULL,
+          author_avatar TEXT,
+          content TEXT NOT NULL CHECK (char_length(content) BETWEEN 1 AND 4000),
+          is_approved BOOLEAN NOT NULL DEFAULT TRUE,
+          created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
+      await db(`CREATE INDEX IF NOT EXISTS idx_package_comments_package_created ON package_comments(package_id, created_at DESC)`)
+    })().catch((error) => {
+      packageCommentsSchemaPromise = null
+      throw error
+    })
+  }
+  return packageCommentsSchemaPromise
+}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    SAFE REQUIRE: EMAIL SERVICE (for booking notifications)
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -184,6 +210,73 @@ ensurePackagesSchema().catch(() => {})
 /* ═══════════════════════════════════════════════════════════════════════════
    GET /api/packages
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Public package discussion; posting requires a signed-in traveller ── */
+router.get('/:packageId/comments', optionalAuth, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    await ensurePackageCommentsSchema()
+    const packageId = Number.parseInt(req.params.packageId, 10)
+    if (!Number.isInteger(packageId) || packageId < 1) return res.status(400).json({ success: false, message: 'Invalid package.' })
+    const pkg = await db(`SELECT id FROM packages WHERE id = $1 AND COALESCE(is_published, false) = true LIMIT 1`, [packageId])
+    if (!pkg.rows[0]) return res.status(404).json({ success: false, message: 'Package not found.' })
+    const { rows } = await db(
+      `SELECT c.id, c.package_id, c.user_id, c.author_name, c.author_avatar,
+              c.content, c.created_at, c.updated_at,
+              u.full_name AS profile_name, u.avatar_url AS profile_avatar
+         FROM package_comments c
+         LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.package_id = $1 AND c.is_approved = TRUE
+        ORDER BY c.created_at DESC
+        LIMIT 100`,
+      [packageId],
+    )
+    return res.json({ success: true, data: rows.map(row => ({
+      id: row.id, packageId: row.package_id, content: row.content,
+      createdAt: row.created_at, updatedAt: row.updated_at,
+      authorName: row.profile_name || row.author_name || 'Traveller',
+      authorAvatar: row.profile_avatar || row.author_avatar || null,
+      userId: row.user_id,
+    })) })
+  } catch (error) {
+    logger.error('[Packages] Load package comments failed:', error.message)
+    return res.status(500).json({ success: false, message: 'Could not load package discussion.' })
+  }
+})
+
+router.post('/:packageId/comments', authenticate, async (req, res) => {
+  try {
+    await ensurePackagesSchema()
+    await ensurePackageCommentsSchema()
+    const packageId = Number.parseInt(req.params.packageId, 10)
+    const userId = Number.parseInt(req.user?.id, 10)
+    const content = String(req.body?.content || '').trim()
+    if (!Number.isInteger(packageId) || packageId < 1) return res.status(400).json({ success: false, message: 'Invalid package.' })
+    if (!Number.isInteger(userId) || userId < 1) return res.status(401).json({ success: false, message: 'Sign in to join this discussion.' })
+    if (!content || content.length > 4000) return res.status(400).json({ success: false, message: 'Write a comment of 1–4,000 characters.' })
+    const pkg = await db(`SELECT id FROM packages WHERE id = $1 AND COALESCE(is_published, false) = true LIMIT 1`, [packageId])
+    if (!pkg.rows[0]) return res.status(404).json({ success: false, message: 'Package not found.' })
+    const profile = await db(`SELECT full_name, avatar_url FROM users WHERE id = $1 LIMIT 1`, [userId])
+    const name = String(profile.rows[0]?.full_name || req.user?.full_name || req.user?.name || 'Traveller').trim().slice(0,255)
+    const avatar = profile.rows[0]?.avatar_url || req.user?.avatar_url || req.user?.avatar || null
+    const { rows } = await db(
+      `INSERT INTO package_comments (package_id, user_id, author_name, author_avatar, content)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, package_id, user_id, author_name, author_avatar, content, created_at, updated_at`,
+      [packageId, userId, name, avatar, content],
+    )
+    const row = rows[0]
+    return res.status(201).json({ success: true, data: {
+      id: row.id, packageId: row.package_id, userId: row.user_id,
+      authorName: row.author_name, authorAvatar: row.author_avatar,
+      content: row.content, createdAt: row.created_at, updatedAt: row.updated_at,
+    } })
+  } catch (error) {
+    logger.error('[Packages] Create package comment failed:', error.message)
+    return res.status(500).json({ success: false, message: 'Could not publish your comment.' })
+  }
+})
+
 router.get('/', optionalAuth, async (req, res) => {
   try {
     await ensurePackagesSchema()
