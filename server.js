@@ -555,6 +555,10 @@ const ensureMessagingSchema = async () => {
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS msg_type       VARCHAR(30) DEFAULT 'text'`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS group_id        INTEGER`,
     `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS conversation_type VARCHAR(30) DEFAULT 'direct'`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS created_by_admin_id INTEGER`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_requested_by INTEGER`,
+    `ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_deadline TIMESTAMPTZ`,
+    `UPDATE conversations c SET created_by_admin_id = (SELECT m.sender_id FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'admin' AND m.sender_id IS NOT NULL ORDER BY m.id ASC LIMIT 1) WHERE c.created_by_admin_id IS NULL AND c.group_id IS NULL AND c.user_id IS NOT NULL AND LOWER(COALESCE(c.source, '')) = 'admin' AND EXISTS (SELECT 1 FROM messages m WHERE m.conversation_id = c.id AND m.sender_type = 'admin' AND m.sender_id IS NOT NULL)`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_pinned       BOOLEAN DEFAULT false`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS is_highlighted  BOOLEAN DEFAULT false`,
     `ALTER TABLE messages      ADD COLUMN IF NOT EXISTS deleted_at      TIMESTAMP`,
@@ -1236,6 +1240,32 @@ io.use((socket, next) => {
 setInterval(async () => {
   try { await query(`DELETE FROM typing_indicators WHERE expires_at < NOW()`) } catch { /* silent */ }
 }, 15_000)
+
+// Persistent 20-second Recycle Bin countdown. The database deadline survives
+// refreshes and restarts; an atomic UPDATE lets a timely user keep-request win.
+const recycleSweep = setInterval(async () => {
+  try {
+    const { rows: due } = await query(
+      `UPDATE conversations SET deleted_at = NOW(), deleted_by = recycle_requested_by,
+          recycle_deadline = NULL, recycle_requested_by = NULL, updated_at = NOW()
+        WHERE deleted_at IS NULL AND recycle_deadline IS NOT NULL AND recycle_deadline <= NOW()
+        RETURNING id, user_id, group_id, subject, guest_name, conversation_type`,
+    )
+    for (const conv of due) {
+      const payload = { conversationId: conv.id, groupId: conv.group_id || null,
+        conversationType: conv.group_id ? 'group' : (conv.conversation_type || 'personal'),
+        title: conv.subject || conv.guest_name || (conv.group_id ? 'Group conversation' : 'Personal conversation') }
+      if (conv.user_id) io.to(`user-${conv.user_id}`).emit('msg:conversation-recycled', payload)
+      if (conv.group_id) {
+        const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [conv.group_id])
+        for (const member of members) io.to(`user-${member.user_id}`).emit('msg:conversation-recycled', payload)
+        io.to(`group-${conv.group_id}`).emit('msg:conversation-recycled', payload)
+      }
+      io.to('admins').to('admin-room').emit('msg:conversation-recycled', payload)
+    }
+  } catch (err) { logger.warn('[Messaging] Recycle Bin sweep deferred:', err.message) }
+}, 1000)
+recycleSweep.unref?.()
 
 // -------------------------------------------------------------------------------
 // SOCKET.IO � CONNECTION HANDLER
