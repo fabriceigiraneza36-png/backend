@@ -115,6 +115,7 @@ router.post("/account-recovery/complete", authLimiter, accountSecurity.completeR
 // ADMIN — Manual account recovery review (must precede the /:id wildcard)
 router.get("/security/recovery-requests", adminProtect, accountSecurity.listRecoveryRequests);
 router.patch("/security/recovery-requests/:id", adminProtect, accountSecurity.reviewRecoveryRequest);
+router.delete("/security/recovery-requests/:id", adminProtect, accountSecurity.deleteRecoveryRequest);
 
 // ═══════════════════════════════════════════════════════════════
 // ADMIN — Export (before /:id wildcard)
