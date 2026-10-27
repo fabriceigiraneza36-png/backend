@@ -495,9 +495,16 @@ exports.addComment = async (req, res, next) => {
   try {
     const { slug } = req.params;
     const { author_name, author_avatar, content, parent_id } = req.body;
+    const signedInName = String(req.user?.full_name || req.user?.fullName || req.user?.name || "").trim();
+    const signedInAvatar = req.user?.avatar_url || req.user?.avatarUrl || req.user?.avatar || null;
+    const resolvedAuthorName = (signedInName || String(author_name || "").trim()).slice(0, 120);
+    const resolvedAuthorAvatar = signedInAvatar || author_avatar || null;
 
-    if (!author_name || !content || !content.trim()) {
+    if (!resolvedAuthorName || !content || !String(content).trim()) {
       return res.status(400).json({ status: "error", message: "Name and content are required" });
+    }
+    if (String(content).trim().length > 4000) {
+      return res.status(400).json({ status: "error", message: "Comments must be 4,000 characters or fewer." });
     }
 
     const post = await query("SELECT id FROM posts WHERE slug = $1", [slug]);
@@ -511,9 +518,9 @@ exports.addComment = async (req, res, next) => {
        RETURNING *`,
       [
         post.rows[0].id,
-        author_name.trim(),
-        author_avatar || null,
-        content.trim(),
+        resolvedAuthorName,
+        resolvedAuthorAvatar,
+        String(content).trim(),
         parent_id || null,
       ]
     );
