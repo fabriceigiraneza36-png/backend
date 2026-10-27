@@ -1629,7 +1629,7 @@ router.delete("/conversations/recycle-bin", adminProtect, async (req, res) => {
       `SELECT id, group_id FROM conversations WHERE deleted_at IS NOT NULL FOR UPDATE`,
     );
     const ids = doomed.map((row) => Number(row.id)).filter(Number.isInteger);
-    const groupIds = [...new Set(doomed.map((row) => Number(row.group_id)).filter(Number.isInteger))];
+    const groupIds = [...new Set(doomed.map((row) => row.group_id == null ? null : Number(row.group_id)).filter(Number.isInteger))];
 
     if (ids.length) {
       await client.query(`DELETE FROM messages WHERE conversation_id = ANY($1::int[])`, [ids]);
