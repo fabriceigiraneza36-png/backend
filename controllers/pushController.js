@@ -118,7 +118,12 @@ exports.test = async (req, res) => {
       [adminId],
     )
     if (!rows.length) {
-      return res.status(400).json({ success: false, message: 'No push subscriptions found for your account. Enable push notifications first.' })
+      return res.status(400).json({ success: false, message: 'No push subscriptions found for your account. Enable push notifications first.', sent: 0, total: 0 })
+    }
+
+    const publicKey = pushUtil.getVapidPublicKey()
+    if (!publicKey) {
+      return res.status(503).json({ success: false, message: 'Web Push is not configured on the backend. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY environment variables, then redeploy the backend.', sent: 0, total: rows.length })
     }
 
     const payload = {
@@ -131,10 +136,21 @@ exports.test = async (req, res) => {
     const results = await pushUtil.sendPushToSubscriptions(rows, payload)
     const success = results.filter(r => r.success).length
 
-    logger.info(`[Push] Test push sent to admin ${adminId}: ${success}/${rows.length} delivered`)
-    return res.json({
-      success: true,
-      message: `Sent ${success}/${rows.length} push notifications.`,
+    const failed = results.filter(r => !r.success).length
+    logger.info(`[Push] Test push result for admin ${adminId}: ${success}/${rows.length} accepted by push services`)
+    return res.status(success === rows.length ? 200 : success > 0 ? 207 : 502).json({
+      success: success === rows.length,
+      sent: success,
+      total: rows.length,
+      failed,
+      message: success === rows.length
+        ? `Push service accepted ${success}/${rows.length} notifications. This confirms provider acceptance, not guaranteed OS display.`
+        : `Push delivery failed for ${failed}/${rows.length} subscriptions. Check backend logs for VAPID mismatch, expired subscription (404/410), or provider errors.`,
+      results: results.map(r => ({
+        success: r.success,
+        statusCode: r.statusCode || r.result?.statusCode || null,
+        error: r.success ? undefined : (r.error || 'Push provider rejected the subscription; inspect backend logs for the specific cause.'),
+      })),
     })
   } catch (err) {
     logger.error('[Push] test failed:', err.message)
