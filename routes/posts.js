@@ -1,6 +1,6 @@
 const router = require("express").Router();
 const posts = require("../controllers/postsController");
-const { protect, adminOnly } = require("../middleware/auth");
+const { protect, adminOnly, optionalAuth } = require("../middleware/auth");
 const upload = require("../middleware/upload");
 
 // ═══════════════════════════════════════════════════════════════════
@@ -15,7 +15,7 @@ router.get("/stats", posts.getStats);
 router.get("/search", posts.search);
 router.get("/:slug", posts.getBySlug);
 router.post("/:slug/like", posts.toggleLike);
-router.post("/:slug/comments", posts.addComment);
+router.post("/:slug/comments", optionalAuth, posts.addComment);
 router.get("/:slug/comments", posts.getComments);
 
 // ═══════════════════════════════════════════════════════════════════
