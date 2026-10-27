@@ -1082,14 +1082,15 @@ const countUnreadAdmin = async (conversationId) => {
   return parseInt(rows[0]?.n || 0, 10)
 }
 
-const serializeConvMessage = (row) => ({
+const serializeConvMessage = (row, senderUser = null) => ({
   id:             row.id,
   conversationId: row.conversation_id,
   senderType:     row.sender_type,
   senderId:       row.sender_id,
-  senderName:     row.sender_name,
+  senderName:     row.sender_name || senderUser?.full_name || senderUser?.username || null,
+  senderUsername: senderUser?.username || row.sender_username || null,
   senderEmail:    row.sender_email,
-  senderAvatar:   row.sender_avatar,
+  senderAvatar:   row.sender_avatar || senderUser?.avatar_url || null,
   body:           row.body,
   msgType:        row.msg_type || 'text',
   isRead:         row.is_read,
@@ -1523,7 +1524,7 @@ io.on('connection', (socket) => {
         conversationId: convId,
         senderType:     'user',
         senderId:       socket.data.userId,
-        senderName:     payload.name  || socket.data.user?.full_name || 'Guest',
+        senderName:     socket.data.user?.full_name || socket.data.user?.username || payload.name || 'Traveler',
         senderEmail:    payload.email || socket.data.user?.email     || null,
         senderAvatar:   socket.data.user?.avatar_url || null,
         body,
@@ -1531,12 +1532,14 @@ io.on('connection', (socket) => {
         replyToId: payload.replyToId ? parseInt(payload.replyToId, 10) : undefined,
       })
 
-      const serialized  = serializeConvMessage(msg)
+      const serialized  = serializeConvMessage(msg, socket.data.user)
       const unreadAdmin = await countUnreadAdmin(convId)
 
       try {
         const { createNotificationInternal } = require('./controllers/notificationsController')
-        const senderName = msg.sender_name || socket.data.user?.full_name || socket.data.user?.name || 'Traveler'
+        const senderUsername = socket.data.user?.username || null
+        const senderName = msg.sender_name || socket.data.user?.full_name || senderUsername || socket.data.user?.name || 'Traveler'
+        const senderAvatar = msg.sender_avatar || socket.data.user?.avatar_url || null
         await createNotificationInternal({
           userId: null,
           senderType: 'user',
@@ -1555,6 +1558,8 @@ io.on('connection', (socket) => {
             conversationId: convId,
             messageId: msg.id,
             senderName,
+            senderUsername,
+            senderAvatar,
             senderEmail: msg.sender_email || '',
           },
         })
@@ -1572,7 +1577,15 @@ io.on('connection', (socket) => {
           conversationId: convId,
           sessionId:      sid,
           message:        serialized,
-          senderName:     msg.sender_name  || 'Guest',
+          senderName:     msg.sender_name || socket.data.user?.full_name || socket.data.user?.username || 'Traveler',
+          senderUsername: socket.data.user?.username || null,
+          senderAvatar:   msg.sender_avatar || socket.data.user?.avatar_url || null,
+          user: socket.data.user ? {
+            id: socket.data.user.id,
+            username: socket.data.user.username || null,
+            fullName: socket.data.user.full_name || null,
+            avatarUrl: socket.data.user.avatar_url || null,
+          } : null,
           senderEmail:    msg.sender_email || '',
           unreadCount:    unreadAdmin,
         },
