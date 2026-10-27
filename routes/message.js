@@ -1960,7 +1960,7 @@ router.get("/resources/search", protect, async (req, res) => {
   try {
     const type = String(req.query.type || "destination").toLowerCase();
     const q = String(req.query.q || "").trim();
-    if (!["destination","package","itinerary"].includes(type)) return res.status(400).json({ success: false, message: "Choose destination, package, or itinerary." });
+    if (!["destination","country","package","story","itinerary"].includes(type)) return res.status(400).json({ success: false, message: "Choose a destination, country, package, story, or itinerary." });
     if (q.length < 2) return res.json({ success: true, data: [] });
     const pattern = "%" + q.slice(0, 80) + "%";
     let rows = [];
@@ -1974,18 +1974,37 @@ router.get("/resources/search", protect, async (req, res) => {
                 (d.name ILIKE $1 OR COALESCE(d.description,'') ILIKE $1 OR COALESCE(c.name,'') ILIKE $1)
           ORDER BY d.name LIMIT 12`, [pattern]);
       rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url, country:r.country_name}));
+    } else if (type === "country") {
+      const result = await query(
+        \`SELECT c.id, c.name, c.slug,
+                LEFT(COALESCE(c.description,''),240) AS description,
+                COALESCE(to_jsonb(c)->>'image_url',to_jsonb(c)->>'hero_image','') AS image_url
+           FROM countries c
+          WHERE (c.name ILIKE $1 OR COALESCE(c.description,'') ILIKE $1 OR COALESCE(c.slug,'') ILIKE $1)
+          ORDER BY c.name LIMIT 12\`, [pattern]);
+      rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url}));
     } else if (type === "package") {
       const result = await query(
-        `SELECT p.id,
+        \`SELECT p.id,
                 COALESCE(to_jsonb(p)->>'name',to_jsonb(p)->>'title','Safari package') AS name,
                 COALESCE(to_jsonb(p)->>'slug','') AS slug,
                 LEFT(COALESCE(to_jsonb(p)->>'description',to_jsonb(p)->>'overview',''),240) AS description,
                 COALESCE(to_jsonb(p)->>'image_url',to_jsonb(p)->>'cover_image_url','') AS image_url
            FROM packages p
-          WHERE LOWER(COALESCE(to_jsonb(p)->>'is_active','true')) NOT IN ('false','0')
+          WHERE LOWER(COALESCE(to_jsonb(p)->>'is_published',to_jsonb(p)->>'is_active','true')) NOT IN ('false','0')
             AND (COALESCE(to_jsonb(p)->>'name',to_jsonb(p)->>'title','') ILIKE $1
               OR COALESCE(to_jsonb(p)->>'description',to_jsonb(p)->>'overview','') ILIKE $1)
-          ORDER BY name LIMIT 12`, [pattern]);
+          ORDER BY name LIMIT 12\`, [pattern]);
+      rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url}));
+    } else if (type === "story") {
+      const result = await query(
+        \`SELECT p.id, p.title AS name, p.slug,
+                LEFT(COALESCE(p.excerpt,p.content,''),240) AS description,
+                COALESCE(to_jsonb(p)->>'cover_image_url',to_jsonb(p)->>'featured_image',to_jsonb(p)->>'image_url','') AS image_url
+           FROM posts p
+          WHERE LOWER(COALESCE(to_jsonb(p)->>'is_published',to_jsonb(p)->>'published','true')) NOT IN ('false','0')
+            AND (p.title ILIKE $1 OR COALESCE(p.excerpt,'') ILIKE $1 OR COALESCE(p.slug,'') ILIKE $1)
+          ORDER BY p.created_at DESC LIMIT 12\`, [pattern]);
       rows = result.rows.map(r=>({type, id:r.id, name:r.name, slug:r.slug, description:r.description, imageUrl:r.image_url}));
     } else {
       const result = await query(
