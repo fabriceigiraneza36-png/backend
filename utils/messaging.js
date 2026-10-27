@@ -416,8 +416,8 @@ async function getConversationWithMessages(conversationId, options = {}) {
      FROM conversations c
      LEFT JOIN users u ON u.id = c.user_id
      LEFT JOIN message_groups g ON g.id = c.group_id
-     WHERE c.id = $1 AND c.deleted_at IS NULL`,
-    [conversationId]
+     WHERE c.id = $1 AND ($2::boolean OR c.deleted_at IS NULL)`,
+    [conversationId, Boolean(options.includeDeleted)]
   );
 
   const conv = convRes.rows[0];
