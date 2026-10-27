@@ -1615,7 +1615,7 @@ exports.getStats = async (req, res, next) => {
   try {
     const period = req.query.period === "6months" ? "6 months" : "12 months";
 
-    const [overview, monthly, topDest, bySrc, upcoming, conversion] =
+    const [overview, monthly, topDest, bySrc, upcoming, conversion, daily, weekly] =
       await Promise.all([
         query(`
           SELECT
@@ -1684,6 +1684,30 @@ exports.getStats = async (req, res, next) => {
           FROM bookings
           WHERE created_at >= NOW() - INTERVAL '3 months'
         `),
+        query(`
+          SELECT TO_CHAR(day_bucket, 'YYYY-MM-DD') AS period,
+                 TO_CHAR(day_bucket, 'Dy') AS period_label,
+                 COUNT(*)::INTEGER AS total
+          FROM (
+            SELECT DATE_TRUNC('day', created_at) AS day_bucket
+            FROM bookings
+            WHERE created_at >= NOW() - INTERVAL '6 days'
+          ) daily_bookings
+          GROUP BY day_bucket
+          ORDER BY day_bucket ASC
+        `),
+        query(`
+          SELECT TO_CHAR(week_bucket, 'YYYY-MM-DD') AS period,
+                 TO_CHAR(week_bucket, 'Mon DD') AS period_label,
+                 COUNT(*)::INTEGER AS total
+          FROM (
+            SELECT DATE_TRUNC('week', created_at) AS week_bucket
+            FROM bookings
+            WHERE created_at >= NOW() - INTERVAL '34 days'
+          ) weekly_bookings
+          GROUP BY week_bucket
+          ORDER BY week_bucket ASC
+        `),
       ]);
 
     return res.json({
@@ -1691,10 +1715,12 @@ exports.getStats = async (req, res, next) => {
       data: {
         overview: overview.rows[0],
         monthly_trends: monthly.rows,
+        daily_trends: daily.rows,
+        weekly_trends: weekly.rows,
         top_destinations: topDest.rows,
         by_source: bySrc.rows,
         upcoming: upcoming.rows[0],
-        conversion_rate: parseFloat(conversion.rows[0]?.conversion_rate || 0),
+        conversion_rate: conversion.rows[0]?.conversion_rate == null ? null : Number(conversion.rows[0].conversion_rate),
       },
       generated_at: new Date().toISOString(),
     });
