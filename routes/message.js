@@ -1471,36 +1471,153 @@ router.get("/conversations/recycle-bin", adminProtect, async (req, res) => {
 router.post("/conversations/:id/restore", adminProtect, async (req, res) => {
   try {
     const { rows } = await query(
-      `SELECT id, user_id, group_id FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL`,
+      `SELECT id, user_id, group_id, conversation_type, subject, guest_name, metadata
+         FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL`,
       [req.params.id]
     );
     if (!rows[0]) return res.status(404).json({ success: false, message: "Deleted conversation not found" });
     const target = rows[0];
-    if (target.user_id) {
+    let activeConversation = null;
+    if (target.user_id && !target.group_id && ['personal', 'resource_support', 'direct'].includes(String(target.conversation_type || '').toLowerCase())) {
       const { rows: active } = await query(
         `SELECT id FROM conversations
-          WHERE user_id = $1 AND id <> $2 AND deleted_at IS NULL
-            AND conversation_type IN ('personal', 'resource_support')
+          WHERE user_id = $1 AND id <> $2 AND group_id IS NULL AND deleted_at IS NULL
+            AND conversation_type IN ('personal', 'resource_support', 'direct')
           ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
         [target.user_id, target.id]
       );
-      if (active[0] && !req.body?.confirmReplace) {
-        return res.status(409).json({
-          success: false, conflict: true, activeConversationId: active[0].id,
-          message: "This user already has a personal conversation. Confirm that the user should choose which conversation to keep before restoring this one."
-        });
-      }
+      activeConversation = active[0] || null;
     }
-    const { rows: restored } = await query(
-      `UPDATE conversations SET deleted_at = NULL, updated_at = NOW()
-        WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
-      [req.params.id]
-    );
-    if (!restored[0]) return res.status(409).json({ success: false, message: "Conversation could not be restored." });
-    return res.json({ success: true, data: reshapeConversation(restored[0]), message: "Conversation restored for admin review." });
+    if (activeConversation && !req.body?.confirmSendToUser) {
+      return res.status(409).json({
+        success: false, conflict: true, requiresAdminConfirmation: true,
+        activeConversationId: activeConversation.id,
+        message: "This traveler already has a personal conversation. Confirm sending the restored thread to the traveler so they can choose which personal conversation to keep."
+      });
+    }
+
+    const restored = activeConversation
+      ? await query(
+          `UPDATE conversations
+              SET deleted_at = NULL,
+                  status = 'pending',
+                  metadata = COALESCE(metadata, '{}'::jsonb) ||
+                    jsonb_build_object('restoreChoicePending', true, 'restoreChoiceExistingConversationId', $2::int),
+                  updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NOT NULL
+            RETURNING *`,
+          [target.id, activeConversation.id]
+        )
+      : await query(
+          `UPDATE conversations SET deleted_at = NULL, updated_at = NOW()
+            WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
+          [target.id]
+        );
+    if (!restored.rows[0]) return res.status(409).json({ success: false, message: "Conversation could not be restored." });
+    const row = restored.rows[0];
+    const io = req.app.get("io");
+    if (io && activeConversation && target.user_id) {
+      io.to(`user-${target.user_id}`).emit("msg:conversation-restore-choice", {
+        restoredConversationId: row.id,
+        existingConversationId: activeConversation.id,
+        title: target.subject || "Restored personal conversation",
+      });
+    } else if (io && target.group_id) {
+      const { rows: members } = await query("SELECT user_id FROM message_group_members WHERE group_id = $1", [target.group_id]);
+      for (const member of members) io.to(`user-${member.user_id}`).emit("msg:conversation-restored", { conversationId: row.id, groupId: target.group_id });
+    } else if (io && target.user_id) {
+      io.to(`user-${target.user_id}`).emit("msg:conversation-restored", { conversationId: row.id });
+    }
+    return res.json({
+      success: true, data: reshapeConversation(row),
+      requiresUserChoice: Boolean(activeConversation),
+      message: activeConversation
+        ? "The traveler has been asked to choose whether to keep the restored conversation or reject it."
+        : "Conversation restored."
+    });
   } catch (err) {
     logger.error(`[Messages] POST restore: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to restore conversation" });
+  }
+});
+
+router.post("/conversations/:id/restore-choice", protect, async (req, res) => {
+  try {
+    const choice = String(req.body?.choice || "");
+    if (!["keep_restored", "reject_restored"].includes(choice)) {
+      return res.status(400).json({ success: false, message: "Choose whether to keep the restored conversation or reject it." });
+    }
+    const { rows } = await query(
+      `SELECT id, user_id, group_id, metadata FROM conversations
+        WHERE id = $1 AND user_id = $2 AND group_id IS NULL AND deleted_at IS NULL`,
+      [req.params.id, req.user.id]
+    );
+    const target = rows[0];
+    const metadata = target?.metadata && typeof target.metadata === "object" ? target.metadata : {};
+    if (!target || !metadata.restoreChoicePending) {
+      return res.status(404).json({ success: false, message: "There is no pending restored-conversation choice for this account." });
+    }
+    const existingId = Number(metadata.restoreChoiceExistingConversationId);
+    let removedConversationId = null;
+    if (choice === "keep_restored" && Number.isInteger(existingId) && existingId > 0) {
+      const { rows: retired } = await query(
+        `UPDATE conversations
+            SET deleted_at = NOW(), deleted_by = $3, recycle_deadline = NULL,
+                recycle_requested_by = NULL, updated_at = NOW()
+          WHERE id = $1 AND user_id = $2 AND id <> $4 AND group_id IS NULL AND deleted_at IS NULL
+            AND conversation_type IN ('personal', 'resource_support', 'direct')
+          RETURNING id, group_id`,
+        [existingId, req.user.id, req.user.id, target.id]
+      );
+      removedConversationId = retired[0]?.id || null;
+    }
+    const rejectRestored = choice === "reject_restored";
+    const { rows: resolved } = await query(
+      `UPDATE conversations
+          SET deleted_at = CASE WHEN $3::boolean THEN NOW() ELSE NULL END,
+              deleted_by = CASE WHEN $3::boolean THEN $2 ELSE deleted_by END,
+              status = CASE WHEN $3::boolean THEN status ELSE 'open' END,
+              metadata = COALESCE(metadata, '{}'::jsonb) - 'restoreChoicePending' - 'restoreChoiceExistingConversationId',
+              updated_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND deleted_at IS NULL
+        RETURNING id, group_id`,
+      [target.id, req.user.id, rejectRestored]
+    );
+    if (!resolved[0]) return res.status(409).json({ success: false, message: "The restored conversation changed. Refresh your inbox and try again." });
+
+    const io = req.app.get("io");
+    const resultPayload = {
+      conversationId: target.id,
+      userId: req.user.id,
+      choice,
+      removedConversationId,
+    };
+    if (io) {
+      io.to("admins").to("admin-room").emit("msg:restore-choice-resolved", resultPayload);
+      if (rejectRestored) {
+        io.to("admins").to("admin-room").emit("msg:conversation-recycled", {
+          conversationId: target.id, conversationType: "personal",
+          title: "Restored conversation rejected by traveler",
+        });
+      }
+      if (removedConversationId) {
+        const recycledPayload = {
+          conversationId: removedConversationId, conversationType: "personal",
+          title: "Previous personal conversation replaced at traveler request",
+        };
+        io.to(`user-${req.user.id}`).emit("msg:conversation-recycled", recycledPayload);
+        io.to("admins").to("admin-room").emit("msg:conversation-recycled", recycledPayload);
+      }
+    }
+    return res.json({
+      success: true, choice, removedConversationId,
+      message: rejectRestored
+        ? "The restored conversation was rejected. Your current personal conversation remains unchanged."
+        : "The restored conversation is now your active personal chat.",
+    });
+  } catch (err) {
+    logger.error(`[Messages] POST restore choice: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Could not save your conversation choice." });
   }
 });
 
