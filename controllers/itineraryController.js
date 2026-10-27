@@ -118,6 +118,32 @@ const normalizeItinerary = (raw = {}) => {
           note: String(item?.note || "").trim(),
         })).filter(item => item.label)
       : [],
+    operations: (() => {
+      const operations = src.operations && typeof src.operations === "object" ? src.operations : {};
+      const allowedStages = new Set(["planning", "awaiting_suppliers", "ready", "in_progress", "completed", "on_hold"]);
+      const allowedSupplierStatuses = new Set(["pending", "requested", "confirmed", "paid", "issue", "not_required"]);
+      return {
+        coordinator: String(operations.coordinator || "").trim().slice(0, 160),
+        tripStatus: allowedStages.has(operations.tripStatus) ? operations.tripStatus : "planning",
+        suppliers: Array.isArray(operations.suppliers) ? operations.suppliers.slice(0, 30).map((supplier) => ({
+          category: String(supplier?.category || "Supplier").trim().slice(0, 120),
+          name: String(supplier?.name || "").trim().slice(0, 200),
+          contact: String(supplier?.contact || "").trim().slice(0, 240),
+          reference: String(supplier?.reference || "").trim().slice(0, 160),
+          status: allowedSupplierStatuses.has(supplier?.status) ? supplier.status : "pending",
+          notes: String(supplier?.notes || "").trim().slice(0, 1000),
+        })) : [],
+        readiness: Array.isArray(operations.readiness) ? operations.readiness.slice(0, 50).map((item, index) => ({
+          key: String(item?.key || `item_${index + 1}`).trim().slice(0, 80),
+          label: String(item?.label || "").trim().slice(0, 240),
+          done: Boolean(item?.done),
+          note: String(item?.note || "").trim().slice(0, 1000),
+        })).filter((item) => item.label) : [],
+        risks: String(operations.risks || "").trim().slice(0, 4000),
+        nextAction: String(operations.nextAction || "").trim().slice(0, 1000),
+        nextActionDue: /^\\d{4}-\\d{2}-\\d{2}$/.test(String(operations.nextActionDue || "")) ? String(operations.nextActionDue) : "",
+      };
+    })(),
     contactNote: String(src.contactNote || "").trim(),
   };
 };
