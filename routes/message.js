@@ -14,7 +14,7 @@
 "use strict";
 
 const router = require("express").Router();
-const { query }  = require("../config/db");
+const { query, pool } = require("../config/db");
 const logger     = require("../utils/logger");
 
 
@@ -1621,26 +1621,87 @@ router.post("/conversations/:id/restore-choice", protect, async (req, res) => {
 });
 
 router.delete("/conversations/recycle-bin", adminProtect, async (req, res) => {
+  let client;
   try {
-    await query("DELETE FROM conversations WHERE deleted_at IS NOT NULL");
-    return res.json({ success: true, message: "Recycle Bin permanently emptied." });
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const { rows: doomed } = await client.query(
+      `SELECT id, group_id FROM conversations WHERE deleted_at IS NOT NULL FOR UPDATE`,
+    );
+    const ids = doomed.map((row) => Number(row.id)).filter(Number.isInteger);
+    const groupIds = [...new Set(doomed.map((row) => Number(row.group_id)).filter(Number.isInteger))];
+
+    if (ids.length) {
+      await client.query(`DELETE FROM messages WHERE conversation_id = ANY($1::int[])`, [ids]);
+      await client.query(`DELETE FROM conversations WHERE id = ANY($1::int[])`, [ids]);
+    }
+    if (groupIds.length) {
+      await client.query(
+        `DELETE FROM message_group_members m
+          WHERE m.group_id = ANY($1::int[])
+            AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.group_id = m.group_id)`,
+        [groupIds],
+      );
+      await client.query(
+        `DELETE FROM message_groups g
+          WHERE g.id = ANY($1::int[])
+            AND NOT EXISTS (SELECT 1 FROM conversations c WHERE c.group_id = g.id)`,
+        [groupIds],
+      );
+    }
+    await client.query("COMMIT");
+    return res.json({
+      success: true,
+      deletedCount: ids.length,
+      message: ids.length ? "Recycle Bin and its message history have been permanently emptied." : "Recycle Bin is already empty.",
+    });
   } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     logger.error(`[Messages] DELETE recycle-bin: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to empty Recycle Bin" });
+  } finally {
+    client?.release();
   }
 });
 
 router.delete("/conversations/:id/permanent", adminProtect, async (req, res) => {
+  let client;
   try {
-    const { rows } = await query(
-      `DELETE FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id`,
-      [req.params.id]
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: "Invalid conversation ID." });
+    client = await pool.connect();
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      `SELECT id, group_id FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL FOR UPDATE`,
+      [id],
     );
-    if (!rows[0]) return res.status(404).json({ success: false, message: "Deleted conversation not found in Recycle Bin" });
-    return res.json({ success: true, message: "Conversation permanently deleted." });
+    if (!rows[0]) {
+      await client.query("COMMIT");
+      return res.status(404).json({ success: false, message: "Deleted conversation not found in Recycle Bin" });
+    }
+    const groupId = rows[0].group_id == null ? null : Number(rows[0].group_id);
+    await client.query(`DELETE FROM messages WHERE conversation_id = $1`, [id]);
+    await client.query(`DELETE FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL`, [id]);
+    if (Number.isInteger(groupId)) {
+      await client.query(
+        `DELETE FROM message_group_members
+          WHERE group_id = $1 AND NOT EXISTS (SELECT 1 FROM conversations WHERE group_id = $1)`,
+        [groupId],
+      );
+      await client.query(
+        `DELETE FROM message_groups
+          WHERE id = $1 AND NOT EXISTS (SELECT 1 FROM conversations WHERE group_id = $1)`,
+        [groupId],
+      );
+    }
+    await client.query("COMMIT");
+    return res.json({ success: true, message: "Conversation and its message history were permanently deleted." });
   } catch (err) {
+    if (client) await client.query("ROLLBACK").catch(() => {});
     logger.error(`[Messages] DELETE permanent: ${err.message}`, { stack: err.stack });
     return res.status(500).json({ success: false, message: "Failed to permanently delete conversation" });
+  } finally {
+    client?.release();
   }
 });
 
