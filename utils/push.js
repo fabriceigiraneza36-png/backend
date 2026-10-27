@@ -65,8 +65,13 @@ async function sendPushToSubscriptions (subscriptions, payload) {
     try {
       const res = await sendPushToSubscription(sub, payload)
       results.push({ endpoint: sub.endpoint, success: true, result: res })
-    } catch {
-      results.push({ endpoint: sub.endpoint, success: false, statusCode: null })
+    } catch (err) {
+      results.push({
+        endpoint: sub.endpoint,
+        success: false,
+        statusCode: err.statusCode || null,
+        error: err.message || 'Unknown Web Push delivery error',
+      })
     }
   }
   return results
