@@ -525,7 +525,7 @@ exports.addComment = async (req, res, next) => {
       ]
     );
 
-    if (shouldPublish) enqueuePostAnnouncement(result.rows[0], req);
+    // Comments are stored immediately; announcement campaigns are reserved for publishing a story itself.
     res.status(201).json({ status: "success", data: result.rows[0] });
   } catch (err) {
     next(err);
