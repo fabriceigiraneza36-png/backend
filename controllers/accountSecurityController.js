@@ -219,9 +219,12 @@ exports.deleteRecoveryRequest = async (req,res) => {
     const deleted=await query(`DELETE FROM account_recovery_requests WHERE id=$1
       RETURNING id,user_id,status`,[requestId]);
     if(!deleted.rows[0]) return fail(res,404,"Recovery request no longer exists.");
+    // Admin identities may live in admin_users rather than users. Store the
+    // actor ID in audit details and leave the nullable users FK unset so the
+    // audit insert cannot fail merely because the admin is in a separate table.
     await query(`INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details)
-      VALUES($1,$2,'account_recovery_request_deleted',$3::jsonb)`,
-      [req.user.id,deleted.rows[0].user_id,JSON.stringify({requestId:Number(deleted.rows[0].id),previousStatus:deleted.rows[0].status})]);
+      VALUES(NULL,$1,'account_recovery_request_deleted',$2::jsonb)`,
+      [deleted.rows[0].user_id,JSON.stringify({requestId:Number(deleted.rows[0].id),previousStatus:deleted.rows[0].status,adminActorId:req.user?.id ?? req.admin?.id ?? null,adminActorType:req.userType || 'admin'})]);
     return res.json({success:true,message:"Recovery request removed from the admin queue.",data:{id:Number(requestId)}});
   } catch(e) { return fail(res,500,"Could not delete the recovery request."); }
 };
