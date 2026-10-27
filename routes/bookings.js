@@ -74,7 +74,7 @@ router.get('/', adminOnly, bookingsController.getAll)
 router.post('/admin', adminOnly, bookingsController.adminCreate)
 
 // Get single booking details with activity history
-router.get('/:id', protect, bookingsController.getOne)
+router.get('/:id', adminOnly, bookingsController.getOne)
 
 // Update booking information
 router.put('/:id', adminOnly, bookingsController.update)
