@@ -1435,28 +1435,103 @@ router.post("/conversations", protect, async (req, res) => {
 });
 
 /* ── DELETE /conversations/:id — admin-only soft delete ─────────────────── */
+/* Recycle Bin: deleted threads remain private to admins until restored or purged. */
+router.get("/conversations/recycle-bin", adminProtect, async (req, res) => {
+  try {
+    await query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+    const { rows } = await query(
+      `SELECT c.*, g.name AS group_name, u.full_name AS user_full_name,
+              u.email AS user_email, u.avatar_url AS user_avatar,
+              (SELECT COUNT(*)::INT FROM messages m WHERE m.conversation_id = c.id) AS message_count
+         FROM conversations c
+         LEFT JOIN message_groups g ON g.id = c.group_id
+         LEFT JOIN users u ON u.id = c.user_id
+        WHERE c.deleted_at IS NOT NULL
+        ORDER BY c.deleted_at DESC, c.updated_at DESC`
+    );
+    return res.json({ success: true, data: rows.map(r => reshapeConversation({
+      ...r, guest_name: r.group_name || r.guest_name || r.user_full_name,
+      guest_email: r.guest_email || r.user_email, guest_avatar: r.guest_avatar || r.user_avatar,
+    })) });
+  } catch (err) {
+    logger.error(`[Messages] GET recycle-bin: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to load Recycle Bin" });
+  }
+});
+
+router.post("/conversations/:id/restore", adminProtect, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `SELECT id, user_id, group_id FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL`,
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, message: "Deleted conversation not found" });
+    const target = rows[0];
+    if (target.user_id) {
+      const { rows: active } = await query(
+        `SELECT id FROM conversations
+          WHERE user_id = $1 AND id <> $2 AND deleted_at IS NULL
+            AND conversation_type IN ('personal', 'resource_support')
+          ORDER BY updated_at DESC NULLS LAST LIMIT 1`,
+        [target.user_id, target.id]
+      );
+      if (active[0] && !req.body?.confirmReplace) {
+        return res.status(409).json({
+          success: false, conflict: true, activeConversationId: active[0].id,
+          message: "This user already has a personal conversation. Confirm that the user should choose which conversation to keep before restoring this one."
+        });
+      }
+    }
+    const { rows: restored } = await query(
+      `UPDATE conversations SET deleted_at = NULL, updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NOT NULL RETURNING *`,
+      [req.params.id]
+    );
+    if (!restored[0]) return res.status(409).json({ success: false, message: "Conversation could not be restored." });
+    return res.json({ success: true, data: reshapeConversation(restored[0]), message: "Conversation restored for admin review." });
+  } catch (err) {
+    logger.error(`[Messages] POST restore: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to restore conversation" });
+  }
+});
+
+router.delete("/conversations/recycle-bin", adminProtect, async (req, res) => {
+  try {
+    await query("DELETE FROM conversations WHERE deleted_at IS NOT NULL");
+    return res.json({ success: true, message: "Recycle Bin permanently emptied." });
+  } catch (err) {
+    logger.error(`[Messages] DELETE recycle-bin: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to empty Recycle Bin" });
+  }
+});
+
+router.delete("/conversations/:id/permanent", adminProtect, async (req, res) => {
+  try {
+    const { rows } = await query(
+      `DELETE FROM conversations WHERE id = $1 AND deleted_at IS NOT NULL RETURNING id`,
+      [req.params.id]
+    );
+    if (!rows[0]) return res.status(404).json({ success: false, message: "Deleted conversation not found in Recycle Bin" });
+    return res.json({ success: true, message: "Conversation permanently deleted." });
+  } catch (err) {
+    logger.error(`[Messages] DELETE permanent: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Failed to permanently delete conversation" });
+  }
+});
+
 router.delete("/conversations/:id", adminProtect, async (req, res) => {
   try {
     const { rows } = await query(
-      `UPDATE conversations
-          SET deleted_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id, user_id, group_id`,
+      `UPDATE conversations SET deleted_at = NOW(), updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
       [req.params.id],
     );
     if (!rows[0]) return res.status(404).json({ success: false, message: "Conversation not found" });
-    const io = req.app.get("io");
-    if (io && rows[0].user_id) {
-      io.to(`user-${rows[0].user_id}`).emit("msg:conversation-deleted", { conversationId: rows[0].id });
-    }
-    if (io && rows[0].group_id) {
-      const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [rows[0].group_id]);
-      for (const member of members) io.to(`user-${member.user_id}`).emit("msg:conversation-deleted", { conversationId: rows[0].id, groupId: rows[0].group_id });
-    }
-    return res.json({ success: true, message: "Conversation deleted" });
+    // Deliberately do not emit socket events or user notifications for admin recycle-bin actions.
+    return res.json({ success: true, message: "Conversation moved to Recycle Bin" });
   } catch (err) {
     logger.error(`[Messages] DELETE /conversations/:id: ${err.message}`, { stack: err.stack });
-    return res.status(500).json({ success: false, message: "Failed to delete conversation" });
+    return res.status(500).json({ success: false, message: "Failed to move conversation to Recycle Bin" });
   }
 });
 
