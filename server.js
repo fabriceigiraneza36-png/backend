@@ -1576,6 +1576,7 @@ io.on('connection', (socket) => {
         adminPayload: {
           conversationId: convId,
           sessionId:      sid,
+          senderType:     'user',
           message:        serialized,
           senderName:     msg.sender_name || socket.data.user?.full_name || socket.data.user?.username || 'Traveler',
           senderUsername: socket.data.user?.username || null,
