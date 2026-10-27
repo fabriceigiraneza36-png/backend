@@ -193,14 +193,37 @@ const ensureRecoveryReviewSchema = async () => {
 exports.listRecoveryRequests = async (req,res) => {
   try {
     await ensureRecoveryReviewSchema();
+    // Expire stale pending requests automatically so they cannot remain actionable in the queue.
+    await query(`UPDATE account_recovery_requests
+      SET status='expired', reviewed_at=COALESCE(reviewed_at, NOW()),
+          review_note=COALESCE(review_note, 'Automatically expired; request validity window elapsed.'),
+          completion_token_hash=NULL, completion_expires_at=NULL
+      WHERE status='pending' AND expires_at<=NOW()`);
+    // Keep completed reviews visible for admin housekeeping, but expired requests are
+    // explicitly labeled and deletable. Expired/reviewed rows are never actionable.
     const r = await query(`SELECT r.id,r.user_id,u.email,u.full_name,r.status,r.created_at,
         r.expires_at,r.reviewed_at,r.reviewed_by,r.review_note,r.recovery_contact_email,r.verified_contact_email,r.completion_expires_at
       FROM account_recovery_requests r JOIN users u ON u.id=r.user_id
-      WHERE r.expires_at > NOW() OR r.status='pending'
-      ORDER BY CASE WHEN r.status='pending' THEN 0 ELSE 1 END,r.created_at DESC
+      ORDER BY CASE WHEN r.status='pending' THEN 0 WHEN r.status='expired' THEN 1 ELSE 2 END,r.created_at DESC
       LIMIT 100`);
     return res.json({success:true,data:r.rows});
   } catch(e) { return fail(res,500,"Recovery review queue is temporarily unavailable."); }
+};
+
+// Admin may remove stale or reviewed queue items. Keep an audit record, not the actionable request.
+exports.deleteRecoveryRequest = async (req,res) => {
+  try {
+    const requestId=String(req.params.id||"");
+    if(!/^\\d+$/.test(requestId)) return fail(res,400,"A valid recovery request ID is required.");
+    await ensureRecoveryReviewSchema();
+    const deleted=await query(`DELETE FROM account_recovery_requests WHERE id=$1
+      RETURNING id,user_id,status`,[requestId]);
+    if(!deleted.rows[0]) return fail(res,404,"Recovery request no longer exists.");
+    await query(`INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details)
+      VALUES($1,$2,'account_recovery_request_deleted',$3::jsonb)`,
+      [req.user.id,deleted.rows[0].user_id,JSON.stringify({requestId:Number(deleted.rows[0].id),previousStatus:deleted.rows[0].status})]);
+    return res.json({success:true,message:"Recovery request removed from the admin queue.",data:{id:Number(requestId)}});
+  } catch(e) { return fail(res,500,"Could not delete the recovery request."); }
 };
 
 exports.reviewRecoveryRequest = async (req,res) => {
