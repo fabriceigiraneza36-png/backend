@@ -532,6 +532,9 @@ function reshapeConversation(row, includeMessages = false) {
     groupName:     row.group_name    || null,
     groupDescription: row.group_description || null,
     conversationType: row.conversation_type || (row.group_id ? "group" : "direct"),
+    createdByAdminId: row.created_by_admin_id ?? row.createdByAdminId ?? null,
+    groupCreatedBy: row.group_created_by ?? row.groupCreatedBy ?? null,
+    recycleDeadline: row.recycle_deadline ?? row.recycleDeadline ?? null,
   };
 
   if (includeMessages && Array.isArray(row.messages)) {
@@ -989,6 +992,8 @@ router.post("/groups", adminProtect, async (req, res) => {
       [name, group.id, JSON.stringify({ groupId: group.id, groupName: name })],
     );
     const conv = convRes.rows[0];
+    await query(`UPDATE conversations SET created_by_admin_id = $1 WHERE id = $2 AND created_by_admin_id IS NULL`, [req.user.id, conv.id]);
+    conv.created_by_admin_id = req.user.id;
 
     let message = null;
     if (firstMessage) {
@@ -1336,6 +1341,10 @@ router.post("/conversations", protect, async (req, res) => {
         ],
       );
       conv = created.rows[0];
+      if (callerIsAdmin) {
+        await query(`UPDATE conversations SET created_by_admin_id = $1 WHERE id = $2 AND created_by_admin_id IS NULL`, [req.user.id, conv.id]);
+        conv.created_by_admin_id = req.user.id;
+      }
     } else {
       conv = await getOrCreateConversation({
         userId: userId || null,
@@ -1440,7 +1449,7 @@ router.get("/conversations/recycle-bin", adminProtect, async (req, res) => {
   try {
     await query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
     const { rows } = await query(
-      `SELECT c.*, g.name AS group_name, u.full_name AS user_full_name,
+      `SELECT c.*, g.name AS group_name, g.created_by AS group_created_by, u.full_name AS user_full_name,
               u.email AS user_email, u.avatar_url AS user_avatar,
               (SELECT COUNT(*)::INT FROM messages m WHERE m.conversation_id = c.id) AS message_count
          FROM conversations c
@@ -1519,19 +1528,103 @@ router.delete("/conversations/:id/permanent", adminProtect, async (req, res) => 
   }
 });
 
+router.post("/conversations/:id/recycle-cancel", protect, async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: "Invalid conversation ID." });
+    const { rows: cancelled } = await query(
+      `UPDATE conversations SET recycle_deadline = NULL, recycle_requested_by = NULL, updated_at = NOW()
+        WHERE id = $1 AND user_id = $2 AND group_id IS NULL AND deleted_at IS NULL
+          AND recycle_deadline IS NOT NULL AND recycle_deadline > NOW()
+          AND conversation_type IN ('personal','resource_support','direct')
+        RETURNING id, subject`,
+      [id, req.user.id],
+    );
+    if (!cancelled[0]) return res.status(410).json({ success: false, expired: true,
+      message: "The 20-second request window has ended, or this conversation is no longer eligible." });
+    const conv = cancelled[0];
+    const payload = {
+      conversationId: conv.id, userId: req.user.id,
+      userName: req.user.full_name || req.user.username || req.user.name || "Traveler",
+      conversationTitle: conv.subject || "Personal chat with Altuvera",
+      message: "A traveler asked to keep this personal conversation. The recycle request has been cancelled.",
+      requestedAt: new Date().toISOString(),
+    };
+    const io = req.app.get("io");
+    if (io) {
+      io.to("admins").to("admin-room").emit("msg:delete-cancel-request", payload);
+      io.to(`user-${req.user.id}`).emit("msg:recycle-cancelled", { conversationId: conv.id });
+      io.to("admins").to("admin-room").emit("msg:recycle-cancelled", { conversationId: conv.id });
+    }
+    return res.json({ success: true, cancelled: true,
+      message: "Your request was sent. This personal conversation will stay available." });
+  } catch (err) {
+    logger.error(`[Messages] POST recycle-cancel: ${err.message}`, { stack: err.stack });
+    return res.status(500).json({ success: false, message: "Could not send your request. Please try again." });
+  }
+});
+
 router.delete("/conversations/:id", adminProtect, async (req, res) => {
   try {
+    await query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS created_by_admin_id INTEGER");
+    await query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_requested_by INTEGER");
+    await query("ALTER TABLE conversations ADD COLUMN IF NOT EXISTS recycle_deadline TIMESTAMPTZ");
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(id)) return res.status(400).json({ success: false, message: "Invalid conversation ID." });
     const { rows } = await query(
-      `UPDATE conversations SET deleted_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND deleted_at IS NULL RETURNING id`,
-      [req.params.id],
+      `SELECT c.id, c.user_id, c.group_id, c.conversation_type, c.subject, c.guest_name,
+              c.created_by_admin_id, c.recycle_deadline, g.created_by AS group_created_by
+         FROM conversations c LEFT JOIN message_groups g ON g.id = c.group_id
+        WHERE c.id = $1 AND c.deleted_at IS NULL LIMIT 1`,
+      [id],
     );
-    if (!rows[0]) return res.status(404).json({ success: false, message: "Conversation not found" });
-    // Deliberately do not emit socket events or user notifications for admin recycle-bin actions.
-    return res.json({ success: true, message: "Conversation moved to Recycle Bin" });
+    const conv = rows[0];
+    if (!conv) return res.status(404).json({ success: false, message: "Conversation not found or already in Recycle Bin." });
+    const creatorId = conv.group_id ? conv.group_created_by : conv.created_by_admin_id;
+    if (creatorId == null || String(creatorId) !== String(req.user.id)) {
+      return res.status(403).json({ success: false,
+        message: "Only the admin who created this conversation can move it to the Recycle Bin." });
+    }
+    if (conv.recycle_deadline && new Date(conv.recycle_deadline).getTime() > Date.now()) {
+      return res.status(409).json({ success: false, pending: true, deadlineAt: conv.recycle_deadline,
+        message: "This conversation already has an active 20-second recycle warning." });
+    }
+    const { rows: scheduled } = await query(
+      `UPDATE conversations SET recycle_requested_by = $2,
+          recycle_deadline = NOW() + INTERVAL '20 seconds', updated_at = NOW()
+        WHERE id = $1 AND deleted_at IS NULL
+          AND (recycle_deadline IS NULL OR recycle_deadline <= NOW())
+        RETURNING id, user_id, group_id, subject, guest_name, conversation_type, recycle_deadline`,
+      [id, req.user.id],
+    );
+    if (!scheduled[0]) return res.status(409).json({ success: false, message: "This conversation changed. Refresh and try again." });
+    const due = scheduled[0];
+    const isGroup = Boolean(due.group_id);
+    const canRequestKeep = !isGroup && Boolean(due.user_id) &&
+      ["personal", "resource_support", "direct"].includes(String(due.conversation_type || "").toLowerCase());
+    const payload = {
+      conversationId: due.id, groupId: due.group_id || null,
+      conversationType: isGroup ? "group" : (due.conversation_type || "personal"),
+      title: due.subject || due.guest_name || (isGroup ? "Group conversation" : "Personal conversation"),
+      requestedByName: req.user.full_name || req.user.username || "Altuvera admin",
+      deadlineAt: new Date(due.recycle_deadline).toISOString(), durationSeconds: 20, canRequestKeep,
+    };
+    const io = req.app.get("io");
+    if (io) {
+      if (due.user_id) io.to(`user-${due.user_id}`).emit("msg:conversation-recycle-warning", payload);
+      if (due.group_id) {
+        const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [due.group_id]);
+        for (const member of members) io.to(`user-${member.user_id}`).emit("msg:conversation-recycle-warning", payload);
+        io.to(`group-${due.group_id}`).emit("msg:conversation-recycle-warning", payload);
+      }
+      io.to("admins").to("admin-room").emit("msg:recycle-request-started", payload);
+    }
+    return res.status(202).json({ success: true, pending: true, deadlineAt: payload.deadlineAt,
+      durationSeconds: 20,
+      message: "A live 20-second notice has been sent to the conversation members. The conversation will move to Recycle Bin unless a personal-chat keep request arrives in time." });
   } catch (err) {
     logger.error(`[Messages] DELETE /conversations/:id: ${err.message}`, { stack: err.stack });
-    return res.status(500).json({ success: false, message: "Failed to move conversation to Recycle Bin" });
+    return res.status(500).json({ success: false, message: "Could not start the recycle request." });
   }
 });
 
@@ -2249,30 +2342,7 @@ for (const [pathSuffix, column, eventName] of [
   });
 }
 
-/* ── DELETE /conversations/:id — soft delete ────────────────────────────── */
-router.delete("/conversations/:id", adminProtect, async (req, res) => {
-  try {
-    const result = await query(
-      `UPDATE conversations
-          SET deleted_at = NOW(), updated_at = NOW()
-        WHERE id = $1 AND deleted_at IS NULL
-        RETURNING id`,
-      [req.params.id],
-    );
-
-    if (!result.rows[0]) {
-      return res.status(404).json({
-        success: false,
-        message: "Conversation not found or already deleted",
-      });
-    }
-
-    return res.json({ success: true, message: "Conversation deleted" });
-  } catch (err) {
-    logger.error(`[Messages] DELETE /conversations/:id: ${err.message}`, { stack: err.stack });
-    return res.status(500).json({ success: false, message: "Failed to delete conversation" });
-  }
-});
+/* All conversation recycle requests use the ownership-checked 20-second route above. */
 
 // backend/src/routes/message.js  — ADD these socket handlers after the routes
 // Add this at the bottom of message.js, before module.exports
