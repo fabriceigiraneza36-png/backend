@@ -6,6 +6,11 @@ const router = express.Router();
 const countryCommentsController = require("../controllers/countryCommentsController");
 const { protect, adminOnly } = require("../middleware/auth");
 
+// Admin moderation routes.
+router.get("/admin/all", adminOnly, countryCommentsController.adminGetAllComments);
+router.delete("/admin/:commentId", adminOnly, countryCommentsController.adminDeleteComment);
+router.patch("/admin/:commentId/approve", adminOnly, countryCommentsController.adminApproveComment);
+
 // Public routes
 router.get("/:countryId/comments", countryCommentsController.getComments);
 router.get("/:countryId/comments/:commentId", countryCommentsController.getComment);
