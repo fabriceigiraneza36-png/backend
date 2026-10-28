@@ -180,7 +180,7 @@ exports.getComments = async (req, res, next) => {
     let pi = 2
 
     if (isAdminReq(req) && approved !== undefined) {
-      conds.push(`c.is_approved = ${pi++}`)
+      conds.push("c.is_approved = $" + pi++)
       params.push(approved === 'true')
     } else if (!isAdminReq(req)) {
       // Public users cannot reveal hidden comments by supplying ?approved=false.
