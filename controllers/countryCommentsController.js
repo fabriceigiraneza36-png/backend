@@ -9,7 +9,7 @@ const { Op } = require("sequelize");
 exports.getComments = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const { page = 1, limit = 20, approved } = req.query;
+    const { page = 1, limit = 20 } = req.query;
 
     const country = await Country.findByPk(countryId);
     if (!country) {
@@ -24,12 +24,8 @@ exports.getComments = async (req, res, next) => {
       parentId: null, // Only get top-level comments
     };
 
-    if (approved !== undefined) {
-      whereClause.isApproved = approved === "true";
-    } else {
-      // Public visitors only see comments currently approved by admins.
-      whereClause.isApproved = true;
-    }
+    // Never expose hidden comments through public query-string overrides.
+    whereClause.isApproved = true;
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
@@ -88,6 +84,7 @@ exports.getComment = async (req, res, next) => {
       where: {
         id: parseInt(commentId),
         countryId: parseInt(countryId),
+        isApproved: true,
       },
       include: [
         {
