@@ -16,6 +16,7 @@
 const router = require("express").Router();
 const { query, pool } = require("../config/db");
 const logger     = require("../utils/logger");
+const notifyGroupMembersOfMessage = require("../utils/groupMessageNotifications");
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1121,6 +1122,14 @@ router.post("/groups/:id/messages", adminProtect, async (req, res) => {
       const { rows: members } = await query(`SELECT user_id FROM message_group_members WHERE group_id = $1`, [groupId]);
       for (const member of members) io.to(`user-${member.user_id}`).emit("msg:group-message", payload);
     }
+    await notifyGroupMembersOfMessage({
+      groupId,
+      conversationId: group.conversation_id,
+      groupName: group.name,
+      message: shaped,
+      senderId: req.user.id,
+      senderType: "admin",
+    });
     return res.json({ success: true, data: shaped });
   } catch (err) {
     logger.error(`[Messages] POST /groups/:id/messages: ${err.message}`);
@@ -2241,6 +2250,17 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       }
     } catch (notificationError) {
       logger.warn("[Messages] Incoming-message admin notification failed:", notificationError.message);
+    }
+
+    if (conv.group_id) {
+      await notifyGroupMembersOfMessage({
+        groupId: conv.group_id,
+        conversationId: id,
+        groupName: conv.guest_name || conv.subject || "Group",
+        message: serialized,
+        senderId: req.user.id,
+        senderType: isAdminReq ? "admin" : "user",
+      });
     }
 
     return res.json({ success: true, data: serialized });
