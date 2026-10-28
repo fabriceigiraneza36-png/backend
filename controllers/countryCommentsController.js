@@ -2,6 +2,7 @@
  * Country Comments Controller
  */
 const { CountryComment, Country } = require("../models");
+const models = require("../models");
 const { Op } = require("sequelize");
 
 // Get all comments for a country
@@ -25,6 +26,9 @@ exports.getComments = async (req, res, next) => {
 
     if (approved !== undefined) {
       whereClause.isApproved = approved === "true";
+    } else {
+      // Public visitors only see comments currently approved by admins.
+      whereClause.isApproved = true;
     }
 
     const offset = (parseInt(page) - 1) * parseInt(limit);
@@ -128,7 +132,7 @@ exports.getComment = async (req, res, next) => {
 exports.createComment = async (req, res, next) => {
   try {
     const { countryId } = req.params;
-    const { userId } = req.user || {};
+    const userId = req.user?.userId ?? req.user?.id ?? req.user?.uid;
     const { content, parentId, authorName, authorEmail } = req.body;
 
     const country = await Country.findByPk(countryId);
@@ -144,6 +148,24 @@ exports.createComment = async (req, res, next) => {
         status: "error",
         message: "Comment content is required",
       });
+    }
+
+    if (!userId) {
+      return res.status(401).json({ status: "error", message: "Please sign in to comment." });
+    }
+
+    // Enforce one top-level country comment per signed-in account.
+    if (!parentId) {
+      const existingComment = await CountryComment.findOne({
+        where: { countryId: parseInt(countryId, 10), userId: Number(userId), parentId: null },
+      });
+      if (existingComment) {
+        return res.status(409).json({
+          status: "error",
+          code: "COMMENT_ALREADY_EXISTS",
+          message: "You have already shared a comment for this country.",
+        });
+      }
     }
 
     if (parentId) {
@@ -311,6 +333,87 @@ exports.approveComment = async (req, res, next) => {
     res.json({
       status: "success",
       message: `Comment ${isApproved ? "approved" : "unapproved"} successfully`,
+      data: comment,
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+
+/* Admin moderation: country comments appear in the same dashboard as destination comments. */
+exports.adminGetAllComments = async (req, res, next) => {
+  try {
+    const page = Math.max(1, Number.parseInt(req.query.page, 10) || 1);
+    const limit = Math.min(200, Math.max(1, Number.parseInt(req.query.limit, 10) || 50));
+    const where = { parentId: null };
+    if (req.query.approved !== undefined) where.isApproved = req.query.approved === "true";
+    const search = String(req.query.search || "").trim();
+    if (search) {
+      where[Op.or] = [
+        { content: { [Op.iLike]: "%" + search + "%" } },
+        { authorName: { [Op.iLike]: "%" + search + "%" } },
+        { authorEmail: { [Op.iLike]: "%" + search + "%" } },
+      ];
+    }
+
+    const { count, rows } = await CountryComment.findAndCountAll({
+      where,
+      include: [
+        { model: models.User, as: "user", attributes: ["id", "fullName", "email", "avatarUrl"], required: false },
+        { model: Country, as: "country", attributes: ["id", "name", "slug"], required: false },
+      ],
+      order: [["createdAt", "DESC"]],
+      offset: (page - 1) * limit,
+      limit,
+      distinct: true,
+    });
+
+    const comments = rows.map((item) => {
+      const row = item.toJSON();
+      return {
+        ...row,
+        resourceType: "country",
+        resourceId: row.countryId,
+        isApproved: Boolean(row.isApproved),
+        user: row.user
+          ? { id: row.user.id, name: row.user.fullName || row.authorName || "Traveller", email: row.user.email || null, avatar: row.user.avatarUrl || null }
+          : (row.authorName ? { id: null, name: row.authorName, email: row.authorEmail || null, avatar: null } : null),
+        country: row.country ? { id: row.country.id, name: row.country.name, slug: row.country.slug } : null,
+      };
+    });
+
+    res.json({
+      status: "success",
+      data: { comments, pagination: { total: count, page, limit, pages: Math.ceil(count / limit) } },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminDeleteComment = async (req, res, next) => {
+  try {
+    const comment = await CountryComment.findByPk(parseInt(req.params.commentId, 10));
+    if (!comment) return res.status(404).json({ status: "error", message: "Comment not found" });
+    await comment.destroy();
+    res.json({ status: "success", message: "Country comment deleted successfully" });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.adminApproveComment = async (req, res, next) => {
+  try {
+    const comment = await CountryComment.findByPk(parseInt(req.params.commentId, 10));
+    if (!comment) return res.status(404).json({ status: "error", message: "Comment not found" });
+    if (typeof req.body?.isApproved !== "boolean") {
+      return res.status(400).json({ status: "error", message: "isApproved must be a boolean" });
+    }
+    await comment.update({ isApproved: req.body.isApproved });
+    res.json({
+      status: "success",
+      message: req.body.isApproved ? "Country comment approved" : "Country comment hidden",
       data: comment,
     });
   } catch (error) {
