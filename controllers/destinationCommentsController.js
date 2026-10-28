@@ -179,10 +179,11 @@ exports.getComments = async (req, res, next) => {
     const params = [destinationId]
     let pi = 2
 
-    if (approved !== undefined) {
-      conds.push(`c.is_approved = $${pi++}`)
+    if (isAdminReq(req) && approved !== undefined) {
+      conds.push(`c.is_approved = ${pi++}`)
       params.push(approved === 'true')
     } else if (!isAdminReq(req)) {
+      // Public users cannot reveal hidden comments by supplying ?approved=false.
       conds.push(`c.is_approved = TRUE`)
     }
 
@@ -230,7 +231,7 @@ exports.getComments = async (req, res, next) => {
 
     /* Approval filter on replies for non-admins */
     let flatRows = allRes.rows
-    if (approved === undefined && !isAdminReq(req)) {
+    if (!isAdminReq(req)) {
       flatRows = flatRows.filter((r) => r.is_approved)
     }
 
