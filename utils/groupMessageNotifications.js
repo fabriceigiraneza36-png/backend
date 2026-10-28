@@ -30,7 +30,7 @@ async function notifyGroupMembersOfMessage({
     );
     if (!members.length) return;
 
-    const senderKind = String(senderType || message.senderType || message.sender_type || "user")
+      .trim().toLowerCase().replace(/[ -]+/g, "_");
       .trim().toLowerCase().replace(/[\\s-]+/g, "_");
     const isTravellerSender = ["user", "traveller", "traveler"].includes(senderKind);
     const actualSenderId = senderId ?? message.senderId ?? message.sender_id ?? null;
