@@ -54,6 +54,7 @@ const {
 const logger    = require('./utils/logger')
 const shutdown  = require('./utils/shutdown')
 const socketBus = require('./utils/socketBus')
+const notifyGroupMembersOfMessage = require('./utils/groupMessageNotifications')
 
 // -- Email helpers � safe imports ----------------------------------------------
 let verifyEmailConnection = null
@@ -1624,11 +1625,20 @@ io.on('connection', (socket) => {
 
       const currentConv = await resolveConversationForSocket({ conversationId: convId, sessionId: sid })
       if (currentConv?.group_id) {
+        const groupName = currentConv.group_name || currentConv.guest_name || currentConv.subject || 'Group'
         io.to(`group-${currentConv.group_id}`).emit('msg:group-message', {
           conversationId: convId,
           groupId: currentConv.group_id,
-          groupName: currentConv.guest_name || currentConv.subject || 'Group',
+          groupName,
           message: serialized,
+        })
+        await notifyGroupMembersOfMessage({
+          groupId: currentConv.group_id,
+          conversationId: convId,
+          groupName,
+          message: serialized,
+          senderId: socket.data.userId ?? serialized.senderId,
+          senderType: 'user',
         })
       }
 
@@ -1763,11 +1773,20 @@ io.on('connection', (socket) => {
         payload:        serialized,
       })
       if (conv.group_id) {
+        const groupName = conv.group_name || conv.guest_name || conv.subject || 'Group'
         io.to(`group-${conv.group_id}`).emit('msg:group-message', {
           conversationId: conv.id,
           groupId: conv.group_id,
-          groupName: conv.guest_name || conv.subject || 'Group',
+          groupName,
           message: serialized,
+        })
+        await notifyGroupMembersOfMessage({
+          groupId: conv.group_id,
+          conversationId: conv.id,
+          groupName,
+          message: serialized,
+          senderId: socket.data.userId ?? serialized.senderId,
+          senderType: 'admin',
         })
       }
       socket.to('admins').emit('msg:admin-sent', { conversationId: conv.id, message: serialized })
