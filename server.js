@@ -126,6 +126,7 @@ const seoRouter                 = require('./routes/seo')
 const bookingIdentityRouter     = require('./routes/bookingIdentity')
 const accountActivityRouter      = require('./routes/accountActivity')
 const { recordAccountActivity } = require('./utils/accountActivity')
+const resendWebhookHandler       = require('./routes/resendWebhook')
 
 // -------------------------------------------------------------------------------
 // CONSTANTS
@@ -642,6 +643,11 @@ app.options('*', (req, res) => {
 
 // -- Body / static -------------------------------------------------------------
 app.use(compression())
+
+// Resend signs the exact raw request bytes. This endpoint must run BEFORE the
+// global JSON parser so SDK verification is performed against the untouched body.
+app.post('/api/webhooks/resend', express.raw({ type: 'application/json', limit: '1mb' }), resendWebhookHandler)
+
 app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
