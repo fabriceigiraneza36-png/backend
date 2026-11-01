@@ -18,4 +18,5 @@ jobs:
           cache: npm
       - run: npm install --no-audit --no-fund
       - run: npm run verify:all
+      - run: npm run test:email-policy
       - run: npm run test:security
