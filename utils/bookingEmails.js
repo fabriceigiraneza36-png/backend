@@ -235,7 +235,7 @@ const buildBookingEmailHeader = ({ recipientName = "", recipientEmail = "", reci
     ? '<img src="' + esc(avatarUrl) + '" width="64" height="64" alt="' + esc(recipientName || "Traveller profile") + '" style="display:block;width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,.88);background:#ffffff;" />'
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="64" height="64" style="width:64px;height:64px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.88);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:17px;font-weight:800;color:#065f46;">' + esc(bookingAvatarInitials(recipientName, recipientEmail)) + '</td></tr></table>';
 
-  return '<table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;"><tr>' +
+  return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;"><tr>' +
     '<td align="left" valign="middle" width="76"><img src="' + esc(ENV.logoUrl) + '" width="64" height="64" alt="Altuvera Safaris logo" style="display:block;width:64px;height:64px;object-fit:contain;border-radius:14px;background:#ffffff;padding:5px;" /></td>' +
     '<td align="right" valign="middle" width="70">' + avatar + '</td></tr></table>';
 };
