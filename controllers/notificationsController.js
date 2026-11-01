@@ -53,7 +53,7 @@ const toInt = (v, fb = 0) => {
 };
 
 const ADMIN_ROLES = ["admin", "manager"];
-const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png";
+const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png";
 const profileInitials = (name, email) => {
   const words = String(name || "").trim().split(/\s+/).filter(Boolean);
   if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
@@ -71,7 +71,7 @@ const profileHeader = (name, email, avatarUrl) => {
     ? '<img src="' + safeAvatar + '" width="54" height="54" alt="Recipient profile" style="display:block;width:54px;height:54px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.85);" />'
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="54" height="54" style="width:54px;height:54px;border-radius:50%;background:#d1fae5;"><tr><td align="center" valign="middle" style="font-weight:800;color:#065f46;font-family:Arial,sans-serif;">' + initials + '</td></tr></table>';
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>' +
-    '<td width="64"><img src="' + escapeEmailAttribute(EMAIL_LOGO_URL) + '" width="54" height="54" alt="Altuvera Safaris logo" style="display:block;width:54px;height:54px;object-fit:contain;background:#fff;padding:4px;border-radius:12px;" /></td>' +
+    '<td width="124"><img src="' + escapeEmailAttribute(EMAIL_LOGO_URL) + '" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;background:#fff;padding:3px;border-radius:10px;" /></td>' +
     '<td style="padding:0 10px;color:#fff;font-family:Arial,sans-serif;"><p style="margin:0;font-size:18px;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-size:10px;letter-spacing:1px;">AFRICAN ADVENTURES</p></td>' +
     '<td align="right" width="58">' + avatar + '</td></tr></table>';
 };
