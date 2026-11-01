@@ -113,6 +113,22 @@ test("Posta 429 is a definitive transient rejection; 5xx and network errors rema
     },
   );
 
+  const requestTimeout = createClient({
+    baseUrl: "https://posta.example.test",
+    apiKey: "test-only-key",
+    fetchImpl: async () => response(408, { success: false, message: "Request timeout" }),
+  });
+  await assert.rejects(
+    requestTimeout.send({ to: "recipient@example.net", subject: "Test", text: "Hello" }),
+    (error) => {
+      assert.equal(error.statusCode, 408);
+      assert.equal(error.deliveryUnknown, true);
+      assert.equal(error.idempotentRetrySafe, false);
+      assert.equal(error.providerFailoverEligible, false);
+      return true;
+    },
+  );
+
   const networkFailure = createClient({
     baseUrl: "https://posta.example.test",
     apiKey: "test-only-key",
