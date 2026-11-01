@@ -23,7 +23,8 @@
     "rebuild": "node scripts/rebuild.js",
     "test:security": "node scripts/test-account-security.js",
     "check:email": "node scripts/email-readiness.js",
-    "test:email-policy": "node --test test/email-policy.test.js"
+    "test:email-policy": "node --test test/email-policy.test.js",
+    "test:posta-adapter": "node --test test/posta-adapter.test.js"
   },
   "nodemonConfig": {
     "watch": [
