@@ -117,7 +117,7 @@ const ENV = {
   year:         new Date().getFullYear(),
 
   logoUrl:      process.env.EMAIL_LOGO_URL ||
-    "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png",
+    "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png",
   heroImage:    process.env.EMAIL_HERO_URL ||
     "https://res.cloudinary.com/doijjawna/image/upload/v1781342220/ChatGPT_Image_Jun_13_2026_11_16_51_AM_oibwwb.png",
 
@@ -236,7 +236,7 @@ const buildBookingEmailHeader = ({ recipientName = "", recipientEmail = "", reci
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="64" height="64" style="width:64px;height:64px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.88);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:17px;font-weight:800;color:#065f46;">' + esc(bookingAvatarInitials(recipientName, recipientEmail)) + '</td></tr></table>';
 
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;"><tr>' +
-    '<td align="left" valign="middle" width="76"><img src="' + esc(ENV.logoUrl) + '" width="64" height="64" alt="Altuvera Safaris logo" style="display:block;width:64px;height:64px;object-fit:contain;border-radius:14px;background:#ffffff;padding:5px;" /></td>' +
+    '<td align="left" valign="middle" width="124"><img src="' + esc(ENV.logoUrl) + '" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" /></td>' +
     '<td align="right" valign="middle" width="70">' + avatar + '</td></tr></table>';
 };
 
