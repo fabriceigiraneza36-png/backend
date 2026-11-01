@@ -44,7 +44,7 @@ function getClient() {
  * @param {string} [opts.cc]
  * @returns {Promise<{delivered: boolean, messageId?: string}>}
  */
-async function send({ to, subject, html, text, from, replyTo, cc }) {
+async function send({ to, subject, html, text, from, replyTo, cc, idempotencyKey }) {
   const client = getClient();
   if (!client) {
     throw new Error('RESEND_API_KEY not configured');
@@ -67,7 +67,8 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
   };
 
   try {
-    const { data, error } = await client.emails.send(payload);
+    const sendOptions = idempotencyKey ? { idempotencyKey: String(idempotencyKey) } : undefined;
+    const { data, error } = await client.emails.send(payload, sendOptions);
 
     if (error) {
       logger.error('❌ Resend send failed', {
@@ -76,8 +77,15 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
         error: error.message,
         code: error.name,
       });
+      const statusCode = Number(error.statusCode || error.status || 0) || null;
       const err = new Error(error.message || 'Resend delivery failed');
       err.originalError = error;
+      err.statusCode = statusCode;
+      err.provider = "resend";
+      err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
+      err.retryable = statusCode === 408 || statusCode === 429 || Boolean(statusCode && statusCode >= 500);
+      err.deliveryUnknown = !err.definitiveRejected;
+      err.idempotentRetrySafe = Boolean(idempotencyKey);
       throw err;
     }
 
@@ -95,10 +103,15 @@ async function send({ to, subject, html, text, from, replyTo, cc }) {
   } catch (err) {
     if (err.originalError) throw err;
     logger.error('❌ Resend unexpected error', {
-      to,
       subject,
       error: err.message,
     });
+    err.provider = "resend";
+    if (!err.statusCode) {
+      err.deliveryUnknown = true;
+      err.retryable = true;
+      err.idempotentRetrySafe = Boolean(idempotencyKey);
+    }
     throw err;
   }
 }
