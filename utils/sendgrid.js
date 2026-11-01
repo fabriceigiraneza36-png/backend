@@ -6,6 +6,7 @@
 
 const sgMail = require('@sendgrid/mail');
 const logger = require('./logger');
+const { isSafeProviderFailover } = require('./emailPolicy');
 
 let initialized = false;
 
@@ -89,7 +90,7 @@ async function send({ to, subject, html, text, from }) {
     err.statusCode = statusCode;
     err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
     err.retryable = statusCode === 408 || statusCode === 429;
-    err.providerFailoverEligible = statusCode === 408 || statusCode === 429;
+    err.providerFailoverEligible = isSafeProviderFailover("sendgrid", statusCode);
     err.deliveryUnknown = !err.definitiveRejected;
     err.idempotentRetrySafe = false;
     throw err;
