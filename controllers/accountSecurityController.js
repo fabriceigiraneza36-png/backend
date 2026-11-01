@@ -147,11 +147,11 @@ exports.loginWithFactor = async (req,res) => {
     const email=String(req.body?.email||"").trim().toLowerCase();
     const method=String(req.body?.method||"");
     const code=String(req.body?.code||"").trim();
-    if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))
       return fail(res,400,"Enter the email address associated with your Altuvera account.");
     if(!["totp","recovery_code"].includes(method))
       return fail(res,400,"Choose an authenticator app or recovery code.");
-    if((method==="totp"&&!/^\\d{6}$/.test(code))||(method==="recovery_code"&&!/^\\d{5}$/.test(code)))
+    if((method==="totp"&&!/^\d{6}$/.test(code))||(method==="recovery_code"&&!/^\d{5}$/.test(code)))
       return fail(res,400,method==="totp"?"Enter the 6-digit authenticator code.":"Enter the 5-digit recovery code.");
 
     const found=await query(`SELECT u.*,s.totp_secret,s.totp_enabled,s.recovery_code_hashes
