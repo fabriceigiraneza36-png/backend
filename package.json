@@ -21,7 +21,8 @@
     "lint": "node scripts/lint-check.js",
     "health": "node scripts/health-check.js",
     "rebuild": "node scripts/rebuild.js",
-    "test:security": "node scripts/test-account-security.js"
+    "test:security": "node scripts/test-account-security.js",
+    "check:email": "node scripts/email-readiness.js"
   },
   "nodemonConfig": {
     "watch": [
