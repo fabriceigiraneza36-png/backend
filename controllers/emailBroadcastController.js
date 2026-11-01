@@ -54,9 +54,12 @@ if (!_sendEmail) {
  * utils/emailService.sendEmail => positional (to, subject, html)
  * others may accept an object; we always call positionally which utils supports.
  */
-const sendOne = async (to, subject, html) => {
+const sendOne = async (to, subject, html, recipient = {}) => {
   try {
-    const res = await _sendEmail(to, subject, html);
+    const res = await _sendEmail(to, subject, html, {
+      recipientName: recipient.name || "",
+      recipientAvatarUrl: recipient.avatar_url || "",
+    });
     if (res && res.success === false) {
       return { success: false, error: res.error || "Send failed" };
     }
@@ -135,36 +138,42 @@ const buildRecipientQuery = (audience, nationality) => {
     case "subscribers":
       return {
         sql: `
-          SELECT LOWER(email) AS email, name
-            FROM subscribers
-           WHERE is_active = true
-             AND email IS NOT NULL`,
+          SELECT LOWER(s.email) AS email, COALESCE(s.name, u.full_name) AS name, u.avatar_url
+            FROM subscribers s
+            LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+           WHERE s.is_active = true
+             AND s.email IS NOT NULL
+             AND s.email <> ''`,
         params: [],
       };
 
     case "bookers":
       return {
         sql: `
-          SELECT DISTINCT ON (LOWER(email)) LOWER(email) AS email, full_name AS name
-            FROM bookings
-           WHERE email IS NOT NULL
-             AND email <> ''
-             AND COALESCE(newsletter_opt_in, false) = true
-           ORDER BY LOWER(email), created_at DESC`,
+          SELECT DISTINCT ON (LOWER(b.email)) LOWER(b.email) AS email, b.full_name AS name, u.avatar_url
+            FROM bookings b
+            LEFT JOIN users u ON LOWER(u.email) = LOWER(b.email)
+           WHERE b.email IS NOT NULL
+             AND b.email <> ''
+             AND COALESCE(b.newsletter_opt_in, false) = true
+           ORDER BY LOWER(b.email), b.created_at DESC`,
         params: [],
       };
 
     case "nationality":
       return {
         sql: `
-          SELECT LOWER(email) AS email, name FROM (
-            SELECT email, full_name AS name, nationality FROM bookings
-             WHERE email IS NOT NULL AND email <> ''
-               AND COALESCE(newsletter_opt_in, false) = true
+          SELECT LOWER(email) AS email, name, avatar_url FROM (
+            SELECT b.email, b.full_name AS name, u.avatar_url, b.nationality
+              FROM bookings b
+              LEFT JOIN users u ON LOWER(u.email) = LOWER(b.email)
+             WHERE b.email IS NOT NULL AND b.email <> ''
+               AND COALESCE(b.newsletter_opt_in, false) = true
             UNION ALL
-            SELECT email, full_name AS name, nationality FROM users
-             WHERE email IS NOT NULL AND email <> ''
-               AND COALESCE(subscribed, false) = true
+            SELECT u.email, u.full_name AS name, u.avatar_url, u.nationality
+              FROM users u
+             WHERE u.email IS NOT NULL AND u.email <> ''
+               AND COALESCE(u.subscribed, false) = true
           ) t
            WHERE t.nationality IS NOT NULL
              AND LOWER(TRIM(t.nationality)) = LOWER(TRIM($1))`,
@@ -175,18 +184,22 @@ const buildRecipientQuery = (audience, nationality) => {
     default:
       return {
         sql: `
-          SELECT LOWER(email) AS email, name FROM (
-            SELECT email, full_name AS name FROM users
-             WHERE email IS NOT NULL AND email <> ''
-               AND COALESCE(is_active, true) = true
-               AND COALESCE(subscribed, false) = true
+          SELECT LOWER(email) AS email, name, avatar_url FROM (
+            SELECT u.email, u.full_name AS name, u.avatar_url FROM users u
+             WHERE u.email IS NOT NULL AND u.email <> ''
+               AND COALESCE(u.is_active, true) = true
+               AND COALESCE(u.subscribed, false) = true
             UNION ALL
-            SELECT email, name FROM subscribers
-             WHERE is_active = true AND email IS NOT NULL AND email <> ''
+            SELECT s.email, COALESCE(s.name, u.full_name) AS name, u.avatar_url
+              FROM subscribers s
+              LEFT JOIN users u ON LOWER(u.email) = LOWER(s.email)
+             WHERE s.is_active = true AND s.email IS NOT NULL AND s.email <> ''
             UNION ALL
-            SELECT email, full_name AS name FROM bookings
-             WHERE email IS NOT NULL AND email <> ''
-               AND COALESCE(newsletter_opt_in, false) = true
+            SELECT b.email, b.full_name AS name, u.avatar_url
+              FROM bookings b
+              LEFT JOIN users u ON LOWER(u.email) = LOWER(b.email)
+             WHERE b.email IS NOT NULL AND b.email <> ''
+               AND COALESCE(b.newsletter_opt_in, false) = true
           ) t`,
         params: [],
       };
@@ -205,9 +218,10 @@ const resolveRecipients = async (audience, nationality) => {
     const email = (r.email || "").trim().toLowerCase();
     if (!isValidEmail(email)) continue;
     if (!seen.has(email)) {
-      seen.set(email, { email, name: r.name || null });
-    } else if (!seen.get(email).name && r.name) {
-      seen.get(email).name = r.name;
+      seen.set(email, { email, name: r.name || null, avatar_url: r.avatar_url || null });
+    } else {
+      if (!seen.get(email).name && r.name) seen.get(email).name = r.name;
+      if (!seen.get(email).avatar_url && r.avatar_url) seen.get(email).avatar_url = r.avatar_url;
     }
   }
   return [...seen.values()];
@@ -430,7 +444,7 @@ exports.send = async (req, res, next) => {
             recipient,
             context: contextData
           });
-      const result = await sendOne(recipient.email, recipientSubject, html);
+      const result = await sendOne(recipient.email, recipientSubject, html, recipient);
       if (result.success) sent += 1;
       else {
         failed += 1;
