@@ -349,6 +349,7 @@ const sendEmail = async (toOrOpts, subjectArg, htmlArg, optsArg = {}) => {
     html, text, to: primaryRecipient, subject, recipientName, recipientAvatarUrl,
   });
   const plainText = text || htmlToText(html);
+  await emailOutbox.assertNotSuppressed([to, cc, bcc]);
   const provider = getPreferredProvider();
   const operationId = idempotencyKey || crypto.randomUUID();
   const payload = {
