@@ -276,17 +276,31 @@ async function sendEmailDirect(payload, options = {}) {
 
       if (provider === "smtp") {
         const transporter = await getTransporter();
-        const result = await transporter.sendMail({
-          from: FROM_ADDRESS,
-          to: payload.to,
-          subject: payload.subject,
-          text: payload.text,
-          html: payload.html,
-          ...(payload.cc ? { cc: payload.cc } : {}),
-          ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
-          ...(payload.bcc ? { bcc: payload.bcc } : {}),
-        });
-        return { success: true, delivered: true, messageId: result.messageId, provider: "smtp" };
+        let result;
+        try {
+          result = await transporter.sendMail({
+            from: FROM_ADDRESS,
+            to: payload.to,
+            subject: payload.subject,
+            text: payload.text,
+            html: payload.html,
+            ...(payload.cc ? { cc: payload.cc } : {}),
+            ...(payload.replyTo ? { replyTo: payload.replyTo } : {}),
+            ...(payload.bcc ? { bcc: payload.bcc } : {}),
+          });
+        } catch (err) {
+          const responseCode = Number(err && err.responseCode || 0);
+          err.provider = "smtp";
+          err.statusCode = responseCode || null;
+          err.definitiveRejected = responseCode >= 400;
+          err.retryable = responseCode >= 400 && responseCode < 500;
+          // No SMTP response can mean the remote server accepted DATA before the
+          // connection was interrupted. Pause instead of resending elsewhere.
+          err.deliveryUnknown = !err.definitiveRejected;
+          err.idempotentRetrySafe = false;
+          throw err;
+        }
+        return { success: true, accepted: true, messageId: result.messageId, provider: "smtp" };
       }
     } catch (err) {
       lastError = err;
