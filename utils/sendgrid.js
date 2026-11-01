@@ -78,13 +78,19 @@ async function send({ to, subject, html, text, from }) {
     });
     return { delivered: true, messageId };
   } catch (err) {
+    const statusCode = Number(err.statusCode || err.response?.statusCode || err.response?.status || 0) || null;
     logger.error('❌ SendGrid send failed', {
-      to,
       subject,
       error: err.message,
       code: err.code,
-      response: err.response?.body,
+      statusCode,
     });
+    err.provider = "sendgrid";
+    err.statusCode = statusCode;
+    err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
+    err.retryable = statusCode === 408 || statusCode === 429;
+    err.deliveryUnknown = !err.definitiveRejected;
+    err.idempotentRetrySafe = false;
     throw err;
   }
 }
