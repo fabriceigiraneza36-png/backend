@@ -6,9 +6,8 @@ const { isSafeProviderFailover } = require("../utils/emailPolicy");
 
 test("HTTP providers fail over only on explicit transient rejection", () => {
   for (const provider of ["resend", "sendgrid"]) {
-    assert.equal(isSafeProviderFailover(provider, 408), true, provider + " 408");
     assert.equal(isSafeProviderFailover(provider, 429), true, provider + " 429");
-    for (const status of [0, 400, 401, 403, 404, 422, 500, 502, 503]) {
+    for (const status of [0, 400, 401, 403, 404, 408, 422, 500, 502, 503]) {
       assert.equal(isSafeProviderFailover(provider, status), false, provider + " " + status);
     }
   }
