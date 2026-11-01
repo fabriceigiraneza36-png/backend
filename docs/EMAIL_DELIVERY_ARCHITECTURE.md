@@ -18,23 +18,29 @@ The canonical path is:
 ## Provider policy
 
 - The recent production-delivery log identified Resend as the active sender.
-- Keep `EMAIL_PROVIDER=resend` explicit in production until another provider completes a measured canary.
-- Keep `EMAIL_FAILOVER_ENABLED=false` by default.
+- Production is now explicitly pinned to `EMAIL_PROVIDER=resend`.
+- Production is explicitly set to `EMAIL_FAILOVER_ENABLED=false`; failover must remain disabled until every fallback has verified authentication and tested delivery semantics.
+- Shared policy lives in `utils/emailPolicy.js`: API transports may fail over only on explicit 408/429 rejection; SMTP only on 421/450/451/452/454 temporary rejection. Permanent 4xx, 5xx/unknown outcomes, and network ambiguity do not trigger provider switching.
+- The policy is unit-tested by `npm run test:email-policy` and is included in backend CI.
 - Resend idempotency keys are used for authentication codes. Booking event mail uses booking-number/status keys.
 - Resend supports idempotency keys on the single-email endpoint. The documented retention window is 24 hours; the stale-job recovery logic uses a 23-hour safety window.
-- Do not automatically fail over to a different provider after a timeout, connection reset, or 5xx response. The remote provider may already have accepted the message and a second provider could create a duplicate. A fallback is allowed only when the selected provider gives an explicit definitive rejection and the operator has deliberately enabled failover.
+- Do not automatically fail over to a different provider after a timeout, connection reset, permanent 4xx, or 5xx response. The remote provider may already have accepted the message and a second provider could create a duplicate. A fallback is eligible only for the narrow transient-rejection codes above, and only if the operator deliberately enables failover.
 
 ## Encrypted outbox
 
 The `email_outbox` table stores the message body encrypted using AES-256-GCM. The encryption key must be base64 encoding of exactly 32 random bytes.
 
 Required production secret:
-- `EMAIL_OUTBOX_ENCRYPTION_KEY`
+- `EMAIL_OUTBOX_ENCRYPTION_KEY` (base64 encoding of exactly 32 random bytes; do not rotate without preserving the existing key for queued ciphertext)
 
 Operational settings:
 - `EMAIL_PROVIDER=resend`
 - `EMAIL_FAILOVER_ENABLED=false`
 - `EMAIL_OUTBOX_POLL_MS=2000`
+
+Operator diagnostics:
+- `npm run check:email` checks provider/key/webhook readiness without sending a message or printing secret values.
+- `npm run test:email-policy` runs provider failover-policy tests.
 
 Never print, log, commit, or put the encryption key into issue descriptions. Do not overwrite an existing key casually: existing queued ciphertext depends on it. Before planned rotation, stop enqueuing, drain or safely re-encrypt queued items with a versioned key ring, back up the database, then rotate and verify.
 
@@ -70,6 +76,8 @@ Events are deduplicated by the signed `svix-id`. The event ledger stores a paylo
 3. Add provider health checks that do not send synthetic email to customers.
 4. Add integration tests for concurrent outbox claims, duplicate idempotency keys, worker restarts, provider timeouts, rate limits, and payload-key mismatch.
 5. Review the existing campaign sender and any one-off scripts before removing legacy provider dependencies.
+6. Run `npm run check:email` against the production environment through the service's controlled shell/operational workflow and confirm the encryption key format without exporting or printing the key.
+7. Confirm the current worker has no startup failures and monitor queued, failed and uncertain counts during a normal business cycle.
 
 ## Open-source options reviewed
 
