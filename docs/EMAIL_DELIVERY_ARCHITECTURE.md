@@ -46,9 +46,26 @@ Outbox states:
 - `uncertain`: the provider outcome cannot be proven; the system pauses rather than risking duplicate mail.
 - `expired`: message expired before it could be sent.
 
+## Resend delivery webhook setup
+
+The signed receiver is implemented at:
+
+`https://backend-jd8f.onrender.com/api/webhooks/resend`
+
+It is mounted before the global JSON body parser and verifies the original raw request body with the Resend SDK. It accepts the Svix `svix-id`, `svix-timestamp`, and `svix-signature` headers; an invalid signature gets HTTP 400, an unconfigured secret gets HTTP 503, and database processing errors get HTTP 500 so the provider can retry.
+
+To activate it in Resend:
+
+1. Open the Resend Webhooks dashboard and create an HTTPS endpoint using the URL above.
+2. Subscribe to `email.sent`, `email.delivered`, `email.delivery_delayed`, `email.bounced`, `email.complained`, `email.failed`, and `email.suppressed`.
+3. Copy the endpoint signing secret (`whsec_...`) into the Render backend environment as `RESEND_WEBHOOK_SECRET`. Do not put this secret in GitHub.
+4. Send Resend's built-in webhook test event. Confirm the request returns HTTP 200 and that a unique event row appears in `email_provider_events`. Do not send a synthetic customer email to validate the endpoint.
+
+Events are deduplicated by the signed `svix-id`. The event ledger stores a payload hash and metadata, not the full message. Delivery lifecycle state is separate from the outbox's provider-accepted state. Hard bounces, complaints and provider-suppressed addresses are added to `email_suppressions`; every new send and every queued retry checks this list before contacting a provider.
+
 ## Current gaps to close before calling the system fully production-hardened
 
-1. Add verified Resend webhooks for `email.delivered`, `email.bounced`, `email.complained`, and `email.failed`; validate webhook signatures, make event processing idempotent, and maintain a suppression list. Do not treat an HTTP API acceptance response as inbox delivery.
+1. Activate the Resend webhook by creating the endpoint and storing its signing secret in Render, then verify one built-in test event. Until this is done the endpoint intentionally responds HTTP 503 rather than accepting unverifiable events.
 2. Add an admin view/alerts for queued, failed, expired and uncertain messages, with a safe manual replay path that reuses the same provider idempotency key whenever still within the provider's retention window.
 3. Add provider health checks that do not send synthetic email to customers.
 4. Add integration tests for concurrent outbox claims, duplicate idempotency keys, worker restarts, provider timeouts, rate limits, and payload-key mismatch.
