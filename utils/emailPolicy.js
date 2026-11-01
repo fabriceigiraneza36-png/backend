@@ -9,7 +9,7 @@ function isSafeProviderFailover(provider, statusCode) {
   const status = Number(statusCode || 0);
   if (!Number.isInteger(status)) return false;
   if (provider === "smtp") return SMTP_TEMPORARY_REJECTIONS.has(status);
-  if (provider === "resend" || provider === "sendgrid") {
+  if (provider === "resend" || provider === "sendgrid" || provider === "posta") {
     return HTTP_TEMPORARY_REJECTIONS.has(status);
   }
   return false;
