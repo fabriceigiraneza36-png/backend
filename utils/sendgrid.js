@@ -61,7 +61,7 @@ async function send({ to, subject, html, text, from }) {
 
   const msg = {
     to,
-    from: fromEmail,
+    from: { email: fromEmail, name: process.env.EMAIL_FROM_NAME || "Altuvera Safaris" },
     subject,
     html,
     text: text || (html ? html.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim() : ''),
