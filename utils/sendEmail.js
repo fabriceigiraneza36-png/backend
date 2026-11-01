@@ -80,7 +80,7 @@ const escapeHtml = (str) =>
     .replace(/"/g,  "&quot;")
     .replace(/'/g,  "&#039;");
 
-const EMAIL_LOGO_URL = getEnvVar("EMAIL_LOGO_URL", "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png");
+const EMAIL_LOGO_URL = getEnvVar("EMAIL_LOGO_URL", "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png");
 const safeProfileImage = (value) => {
   try {
     const url = new URL(String(value || "").trim());
@@ -169,8 +169,8 @@ const buildBanner = (emoji, title, subtitle, recipientName = "", recipientEmail 
     <td style="background:${sharedStyles.bannerGradient};padding:36px 32px;text-align:center;">
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;">
         <tr>
-          <td align="left" valign="middle" width="66">
-            <img src="${EMAIL_LOGO_URL}" width="58" height="58" alt="Altuvera Safaris logo" style="display:block;width:58px;height:58px;object-fit:contain;border-radius:12px;background:#ffffff;padding:4px;" />
+          <td align="left" valign="middle" width="124">
+            <img src="${EMAIL_LOGO_URL}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
           </td>
           <td align="right" valign="middle" width="64">${avatar}</td>
         </tr>
