@@ -85,6 +85,7 @@ async function ensureSchema() {
       "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
     );
     await query("CREATE INDEX IF NOT EXISTS idx_email_outbox_expiry ON email_outbox(status, expires_at)");
+    await query("CREATE INDEX IF NOT EXISTS idx_email_outbox_provider_message ON email_outbox(provider, provider_message_id)");
   })().catch((err) => {
     schemaPromise = null;
     throw err;
@@ -183,6 +184,7 @@ async function attemptJob(id, deliver) {
 
 async function enqueueAndDeliver({ payload, idempotencyKey, provider, deliver, ttlSeconds }) {
   await ensureSchema();
+  await assertNotSuppressed([payload?.to, payload?.cc, payload?.bcc]);
   if (typeof deliver !== "function") throw new TypeError("Email delivery adapter is required");
   const key = String(idempotencyKey || crypto.randomUUID()).slice(0, 255);
   const serialized = JSON.stringify(payload);
