@@ -249,6 +249,11 @@ function getPreferredProvider() {
 }
 
 async function sendEmailDirect(payload, options = {}) {
+  // Re-check recipients for every first attempt and retry. A bounce/complaint
+  // received after enqueue must stop a message before it is sent again.
+  if (process.env.EMAIL_OUTBOX_ENCRYPTION_KEY) {
+    await emailOutbox.assertNotSuppressed([payload.to, payload.cc, payload.bcc]);
+  }
   const preferred = options.provider || getPreferredProvider();
   const failoverEnabled = process.env.EMAIL_FAILOVER_ENABLED === "true";
   const fallbackOrder = ["resend", "sendgrid", "smtp"].filter((name) => name !== preferred && isProviderConfigured(name));
