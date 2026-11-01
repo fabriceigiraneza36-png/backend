@@ -31,7 +31,7 @@ const RECOMMENDED = [
   { key: "FRONTEND_URL",   hint: "Your frontend origin for CORS" },
   { key: "BACKEND_URL",    hint: "Your backend public URL" },
   { key: "CORS_ORIGINS",   hint: "Comma-separated extra allowed origins" },
-  { key: "EMAIL_PROVIDER", hint: "auto, resend, sendgrid, or smtp; production is pinned to resend until a migration is approved" },
+  { key: "EMAIL_PROVIDER", hint: "auto, resend, sendgrid, smtp, or posta; keep production pinned to resend until a migration is approved" },
   { key: "EMAIL_OUTBOX_POLL_MS", hint: "Email outbox worker interval in milliseconds (default 2000)" },
 ];
 
@@ -44,6 +44,8 @@ const OPTIONAL = [
   { key: "SENDGRID_API_KEY", hint: "Optional secondary provider API key; never enable failover without review" },
   { key: "RESEND_API_KEY", hint: "Current production API provider key" },
   { key: "RESEND_WEBHOOK_SECRET", hint: "Svix signing secret used to verify Resend delivery webhooks" },
+  { key: "POSTA_BASE_URL", hint: "Opt-in self-hosted Posta API URL; staging only until migration approval" },
+  { key: "POSTA_API_KEY", hint: "Opt-in Posta API key; never print or log its value" },
   { key: "EMAIL_OUTBOX_ENCRYPTION_KEY", hint: "Base64-encoded 32-byte key required for encrypted production outbox" },
   { key: "EMAIL_FAILOVER_ENABLED", hint: "Keep false unless failover behavior has been explicitly tested" },
   { key: "CLOUDINARY_URL",   hint: "Cloudinary connection string" },
@@ -109,8 +111,12 @@ if (process.env.NODE_ENV === "production") {
       ? Boolean(process.env.SENDGRID_API_KEY)
       : selectedProvider === "smtp"
         ? Boolean(process.env.SMTP_USER && process.env.SMTP_PASS)
-        : Boolean(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY ||
-            (process.env.EMAIL_ENABLE_SMTP_FALLBACK === "true" && process.env.SMTP_USER && process.env.SMTP_PASS));
+        : selectedProvider === "posta"
+          ? Boolean(process.env.POSTA_BASE_URL && process.env.POSTA_API_KEY)
+          : selectedProvider === "auto"
+            ? Boolean(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY ||
+                (process.env.EMAIL_ENABLE_SMTP_FALLBACK === "true" && process.env.SMTP_USER && process.env.SMTP_PASS))
+            : false;
   if (!hasProvider) {
     missing.push({
       key: "EMAIL_PROVIDER",
@@ -140,7 +146,7 @@ console.log(`\n${BOLD}Optional:${RESET}`);
 for (const { key, hint } of OPTIONAL) {
   const val = process.env[key];
   if (val) {
-    const display = ["SMTP_PASS", "SENDGRID_API_KEY", "RESEND_API_KEY", "EMAIL_OUTBOX_ENCRYPTION_KEY", "CLOUDINARY_URL"].includes(key)
+    const display = ["SMTP_PASS", "SENDGRID_API_KEY", "RESEND_API_KEY", "POSTA_API_KEY", "EMAIL_OUTBOX_ENCRYPTION_KEY", "CLOUDINARY_URL"].includes(key)
       ? "***configured***"
       : val;
     console.log(`  ${GREEN}✓ SET${RESET}     ${key} = ${display}`);
