@@ -22,6 +22,7 @@ const cfg = {
   appName:      process.env.APP_NAME      || "Altuvera Safaris",
   appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   frontendUrl:  process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
+  logoUrl:      process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png",
   backendUrl:   process.env.BACKEND_URL   || "https://backend-jd8f.onrender.com",
   isDev:        process.env.NODE_ENV      !== "production",
 };
@@ -85,6 +86,33 @@ const esc = (s = "") =>
     .replace(/>/g, "&gt;")
     .replace(/"/g, "&quot;")
     .replace(/'/g, "&#39;");
+
+const getProfileAvatarUrl = (value) => {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+};
+const profileInitials = (name, email) => {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return String(email || "U").trim().slice(0, 1).toUpperCase() || "U";
+};
+const bookingRecipient = (booking = {}) => ({
+  recipientName: booking.full_name || booking.user_full_name || "",
+  recipientEmail: booking.email || booking.user_email || "",
+  recipientAvatarUrl: booking.user_avatar_url || booking.avatar_url || booking.user?.avatar_url || "",
+});
+const profileAvatarMarkup = (name, email, avatarValue) => {
+  const src = getProfileAvatarUrl(avatarValue);
+  if (src) {
+    return '<img src="' + esc(src) + '" width="58" height="58" alt="' + esc(name || "Your profile") + '" style="display:block;width:58px;height:58px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,.9);background:#fff;" />';
+  }
+  return '<table role="presentation" cellpadding="0" cellspacing="0" width="58" height="58" style="width:58px;height:58px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.9);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:16px;font-weight:800;color:#065f46;">' + esc(profileInitials(name, email)) + '</td></tr></table>';
+};
 
 const fmtDate = (d) => {
   if (!d) return "—";
@@ -313,7 +341,10 @@ a{color:#059669;text-decoration:none}
 /* ════════════════════════════════════════════════════════════════════════════════
     BASE HTML SHELL
 ════════════════════════════════════════════════════════════════════════════════ */
-function shell({ title, preheader = "", body, footer = "", extraCss = "" }) {
+function shell({
+  title, preheader = "", body, footer = "", extraCss = "",
+  recipientName = "", recipientEmail = "", recipientAvatarUrl = "",
+}) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -330,8 +361,20 @@ function shell({ title, preheader = "", body, footer = "", extraCss = "" }) {
 <div class="w"><div class="card">
   <div class="hdr">
     <div class="hdr-glow"></div>
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 16px;position:relative;">
+      <tr>
+        <td align="left" valign="middle" width="66">
+          <img src="${esc(cfg.logoUrl)}" width="58" height="58" alt="Altuvera Safaris logo" style="display:block;width:58px;height:58px;object-fit:contain;border-radius:12px;background:#ffffff;padding:4px;" />
+        </td>
+        <td align="center" valign="middle">
+          <div class="logo-txt"><em>Altuvera</em> Safaris</div>
+        </td>
+        <td align="right" valign="middle" width="66">
+          ${profileAvatarMarkup(recipientName, recipientEmail, recipientAvatarUrl)}
+        </td>
+      </tr>
+    </table>
     <div class="brand">Authentic African Experiences</div>
-    <div class="logo-txt">🌍 <em>Altuvera</em> Safaris</div>
     <div class="tagline">Where Africa's Soul Meets World-Class Adventure</div>
   </div>
   <div class="body-pad">${body}</div>
@@ -369,6 +412,7 @@ async function sendBookingReceivedEmail(booking) {
   const dest = tripName(booking);
 
   const html = shell({
+    ...bookingRecipient(booking),
     title:     `📬 Booking Received — #${booking_number}`,
     preheader: `We've received your booking request for ${dest}.`,
     body: `
@@ -423,7 +467,7 @@ async function sendDestinationAlertEmail(destination) {
 
   try {
     const { rows } = await query(
-      `SELECT s.email, s.name, u.preferences,
+      `SELECT s.email, s.name, u.preferences, u.avatar_url,
               ARRAY(
                 SELECT d.name
                   FROM destination_likes dl
@@ -467,6 +511,9 @@ async function sendDestinationAlertEmail(destination) {
           : "";
         const unsubscribeUrl = `${(process.env.BACKEND_URL || "https://backend-jd8f.onrender.com").replace(/\/$/, "")}/api/subscribers/unsubscribe/${encodeURIComponent(sub.email)}`;
         const html = shell({
+          recipientName: sub.name || "",
+          recipientEmail: sub.email,
+          recipientAvatarUrl: sub.avatar_url || "",
           title: `A new destination to explore: ${name}`,
           preheader: `Discover ${name} with Altuvera Safaris.`,
           footer: `You received this update because you subscribed to Altuvera Safaris emails. <a href="${esc(unsubscribeUrl)}" style="color:#047857;text-decoration:underline;">Unsubscribe</a> at any time.`,
