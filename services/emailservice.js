@@ -415,6 +415,7 @@ async function sendBookingReceivedEmail(booking) {
   return sendEmail({
     to: booking.email,
     subject: `📬 Booking Received — #${booking_number} | Altuvera Safaris`,
+    idempotencyKey: `booking-received/${String(booking_number)}`,
     html,
   });
 }
