@@ -5,7 +5,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   const interestNames = [...new Set((Array.isArray(interests) ? interests : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 3);
   const safeFirstName = name ? escapeHtml(name.split(" ")[0]) : "";
-  const logoUrl = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png";
+  const logoUrl = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png";
   const avatarUrl = /^https:\/\//i.test(String(recipientAvatarUrl || "")) ? String(recipientAvatarUrl) : "";
   const initialsSource = String(name || email || "U").trim().split(/\s+/).filter(Boolean);
   const avatarInitials = initialsSource.length > 1
@@ -42,8 +42,8 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
             <td style="background:linear-gradient(135deg,#022c22 0%,#047857 100%);padding:28px 30px;text-align:center;">
               <table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
-                  <td align="left" valign="middle" width="68">
-                    <img src="${escapeHtml(logoUrl)}" width="58" height="58" alt="Altuvera Safaris logo" style="display:block;width:58px;height:58px;object-fit:contain;border-radius:12px;background:#fff;padding:4px;" />
+                  <td align="left" valign="middle" width="124">
+                    <img src="${escapeHtml(logoUrl)}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#fff;padding:3px;" />
                   </td>
                   <td align="center" valign="middle">
                     <h1 style="margin:0 0 6px;font-size:25px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">Altuvera Safaris</h1>
