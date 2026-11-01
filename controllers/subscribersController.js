@@ -249,7 +249,7 @@ async function sendWelcomeEmail(subscriberId, email, name) {
 
     const [preferenceResult, likedResult] = await Promise.all([
       query(
-        "SELECT preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        "SELECT preferences, full_name, avatar_url FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
         [email],
       ).catch(() => ({ rows: [] })),
       query(
@@ -264,7 +264,8 @@ async function sendWelcomeEmail(subscriberId, email, name) {
         [email],
       ).catch(() => ({ rows: [] })),
     ]);
-    const preferences = preferenceResult.rows?.[0]?.preferences || {};
+    const subscriberProfile = preferenceResult.rows?.[0] || {};
+    const preferences = subscriberProfile.preferences || {};
     const savedInterestValues = [
       preferences.likedAttractions,
       preferences.favoriteAttractions,
@@ -279,7 +280,12 @@ async function sendWelcomeEmail(subscriberId, email, name) {
       .filter(Boolean);
     const likedDestinations = (likedResult.rows || []).map((row) => row.name).filter(Boolean);
     const interests = [...new Set([...savedInterests, ...likedDestinations])].slice(0, 3);
-    const htmlBody = welcomeSubscriberEmail(email, name, interests);
+    const htmlBody = welcomeSubscriberEmail(
+      email,
+      name || subscriberProfile.full_name || null,
+      interests,
+      subscriberProfile.avatar_url || "",
+    );
     const result   = await _sendEmail(
       email,
       'Welcome to Altuvera Safaris',
