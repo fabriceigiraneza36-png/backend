@@ -562,6 +562,7 @@ const sendBookingConfirmation = async (booking) => {
     await sendEmail({
       to:      booking.email,
       subject: `Booking Confirmed - Ref ${booking.booking_number} | ${APP_NAME}`,
+      idempotencyKey: `booking-confirmation/${String(booking.booking_number)}`,
       html:    baseTemplate({
         title:        "Booking Confirmed!",
         subtitle:     "Your adventure is booked.",
@@ -584,6 +585,7 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
     await sendEmail({
       to:      booking.email,
       subject: `Booking ${toStatus} - ${booking.booking_number} | ${APP_NAME}`,
+      idempotencyKey: `booking-status/${String(booking.booking_number)}/${String(fromStatus).toLowerCase()}/${String(toStatus).toLowerCase()}`,
       html:    baseTemplate({
         title:        `Booking ${toStatus}`,
         subtitle:     reason || `Your booking status has been updated.`,
@@ -608,6 +610,7 @@ const sendAdminBookingNotification = async (booking) => {
     await sendEmail({
       to:      ADMIN_EMAIL,
       subject: `New Booking ${booking.booking_number} - ${booking.full_name} | ${APP_NAME}`,
+      idempotencyKey: `admin-new-booking/${String(booking.booking_number)}`,
       html:    baseTemplate({
         title:        "New Booking Received",
         subtitle:     `From: ${booking.full_name} <${booking.email}>`,
