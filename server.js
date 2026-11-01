@@ -711,6 +711,12 @@ setInterval(() => {
 // Durable encrypted email outbox worker. Job claims use PostgreSQL row updates,
 // so multiple backend instances can safely run this pump without double-claiming.
 const { processPendingEmails } = require('./utils/email')
+const emailOutboxEncryptionReady = Boolean(process.env.EMAIL_OUTBOX_ENCRYPTION_KEY)
+if (emailOutboxEncryptionReady) {
+  logger.info('[EmailOutbox] Encrypted PostgreSQL delivery worker enabled')
+} else {
+  logger.error('[EmailOutbox] EMAIL_OUTBOX_ENCRYPTION_KEY is missing; production email sends will fail closed')
+}
 let emailOutboxWorkerBusy = false
 const emailOutboxWorker = setInterval(async () => {
   if (emailOutboxWorkerBusy || !process.env.EMAIL_OUTBOX_ENCRYPTION_KEY) return
