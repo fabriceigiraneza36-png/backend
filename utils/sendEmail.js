@@ -80,7 +80,7 @@ const escapeHtml = (str) =>
     .replace(/"/g,  "&quot;")
     .replace(/'/g,  "&#039;");
 
-const EMAIL_LOGO_URL = getEnvVar("EMAIL_LOGO_URL", "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png");
+const EMAIL_LOGO_URL = getEnvVar("EMAIL_LOGO_URL", "https://www.altuverasafaris.com/altuvera.png");
 const safeProfileImage = (value) => {
   try {
     const url = new URL(String(value || "").trim());
@@ -170,7 +170,7 @@ const buildBanner = (emoji, title, subtitle, recipientName = "", recipientEmail 
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;">
         <tr>
           <td align="left" valign="middle" width="124">
-            <img src="${EMAIL_LOGO_URL}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
+            <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
           </td>
           <td align="right" valign="middle" width="64">${avatar}</td>
         </tr>
@@ -288,6 +288,8 @@ const buildSectionLabel = (text) => `
 
 const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail = "", recipientAvatarUrl = "") => {
   const safeName = fullName || "Traveler";
+  const siteUrl = String(getEnvVar("SITE_URL", "https://www.altuverasafaris.com")).replace(/\/+$/, "");
+  const copyCodeUrl = `${siteUrl}/copy-code.html#${safeEncodeURI(code)}`;
 
   const content = `
     ${buildBanner("🔐", "Altuvera", "Secure Travel Platform", safeName, recipientEmail, recipientAvatarUrl)}
@@ -314,12 +316,14 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail
           <tr>
             <td style="background:linear-gradient(135deg,${sharedStyles.greenPale},${sharedStyles.greenMint});border-radius:20px;padding:28px 56px;border:2px solid ${sharedStyles.greenBorder};box-shadow:0 4px 20px rgba(22,163,74,0.08);">
               <p style="margin:0;font-family:'Courier New',monospace;font-size:44px;font-weight:800;color:${sharedStyles.greenMid};letter-spacing:10px;">
-                ${code}
+                ${escapeHtml(code)}
               </p>
-              <p style="margin:12px 0 0;font-size:13px;font-family:Arial,sans-serif;font-weight:800;color:${sharedStyles.greenDark};">Copy code: <strong>${escapeHtml(code)}</strong></p>
             </td>
           </tr>
         </table>
+
+        ${buildCtaButton(copyCodeUrl, "Copy code")}
+        <p style="margin:10px 0 0;font-size:12px;color:${sharedStyles.textMuted};line-height:1.5;text-align:center;">Opens a secure Altuvera page where you can copy your code.</p>
 
         <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
           <tr>
