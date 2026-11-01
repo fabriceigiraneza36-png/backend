@@ -143,19 +143,41 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
 
 const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
   try {
-    // Social identity proves control of the provider account, but Altuvera
-    // requires a fresh email OTP for every sign-in as the account's baseline
-    // verification step. No session token is issued from this function.
-    const otp = generateOTP();
-    const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
-    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-    await sendOtpEmail({
-      to: user.email,
-      recipientName: user.full_name || "",
-      otp,
-      purpose: isNew ? "verify" : "login",
-      expiryMinutes: OTP_EXPIRY_MINUTES,
-    });
+    if (!user || user.is_active === false) {
+      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+    }
+
+    // Social identity is not an Altuvera session. A fresh email OTP must be
+    // accepted before a token is issued. Reuse a still-live code so a retry
+    // after a redirect/modal refresh does not invalidate the first email.
+    let codeExpiresAt = user.code_expiry ? new Date(user.code_expiry) : null;
+    const hasActiveCode = Boolean(
+      user.verification_code &&
+      codeExpiresAt &&
+      codeExpiresAt.getTime() > Date.now()
+    );
+
+    if (!hasActiveCode) {
+      if (isRateLimited(user)) {
+        return res.status(429).json({
+          success: false,
+          message: `Wait ${getRemainingCooldown(user)} second(s) before requesting a new code.`,
+        });
+      }
+      const otp = generateOTP();
+      const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+      codeExpiresAt = otpResult.rows[0]?.code_expiry
+        ? new Date(otpResult.rows[0].code_expiry)
+        : new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+      await sendOtpEmail({
+        to: user.email,
+        recipientName: user.full_name || "",
+        otp,
+        purpose: isNew ? "verify" : "login",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
+    }
+
     return res.status(statusCode).json({
       success: true,
       requiresEmailVerification: true,
@@ -259,7 +281,6 @@ const upsertSocialUser = async ({
                          THEN EXCLUDED.auth_provider
                          ELSE users.auth_provider
                        END,
-       is_active     = true,
        last_login    = NOW()
      RETURNING *, (xmax = 0) AS is_new_row`,
     [e, n, avatar || null, pid, provider, phone || null, bio || null],
