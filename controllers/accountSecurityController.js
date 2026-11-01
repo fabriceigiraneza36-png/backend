@@ -194,13 +194,13 @@ exports.loginWithFactor = async (req,res) => {
       }
     }
     if(!valid){
-      const recorded=await query(`INSERT INTO user_security_login_attempts AS current
+      const recorded=await query(`INSERT INTO user_security_login_attempts AS prior_attempt
         (user_id,attempts,window_started_at,locked_until,updated_at)
         VALUES($1,1,NOW(),NULL,NOW())
         ON CONFLICT(user_id) DO UPDATE SET
-          attempts=CASE WHEN current.window_started_at<=NOW()-INTERVAL '15 minutes' THEN 1 ELSE current.attempts+1 END,
-          window_started_at=CASE WHEN current.window_started_at<=NOW()-INTERVAL '15 minutes' THEN NOW() ELSE current.window_started_at END,
-          locked_until=CASE WHEN (CASE WHEN current.window_started_at<=NOW()-INTERVAL '15 minutes' THEN 1 ELSE current.attempts+1 END)>=5 THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,
+          attempts=CASE WHEN prior_attempt.window_started_at<=NOW()-INTERVAL '15 minutes' THEN 1 ELSE prior_attempt.attempts+1 END,
+          window_started_at=CASE WHEN prior_attempt.window_started_at<=NOW()-INTERVAL '15 minutes' THEN NOW() ELSE prior_attempt.window_started_at END,
+          locked_until=CASE WHEN (CASE WHEN prior_attempt.window_started_at<=NOW()-INTERVAL '15 minutes' THEN 1 ELSE prior_attempt.attempts+1 END)>=5 THEN NOW()+INTERVAL '15 minutes' ELSE NULL END,
           updated_at=NOW()
         RETURNING attempts,locked_until`,[user.id]);
       return fail(res,401,recorded.rows[0]?.attempts>=5
