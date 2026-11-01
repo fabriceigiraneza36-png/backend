@@ -31,6 +31,8 @@ const RECOMMENDED = [
   { key: "FRONTEND_URL",   hint: "Your frontend origin for CORS" },
   { key: "BACKEND_URL",    hint: "Your backend public URL" },
   { key: "CORS_ORIGINS",   hint: "Comma-separated extra allowed origins" },
+  { key: "EMAIL_PROVIDER", hint: "auto, resend, sendgrid, or smtp; production is pinned to resend until a migration is approved" },
+  { key: "EMAIL_OUTBOX_POLL_MS", hint: "Email outbox worker interval in milliseconds (default 2000)" },
 ];
 
 const OPTIONAL = [
@@ -39,7 +41,10 @@ const OPTIONAL = [
   { key: "SMTP_USER",        hint: "SMTP username / from address" },
   { key: "SMTP_PASS",        hint: "SMTP password" },
   { key: "SMTP_FROM",        hint: "Default From address" },
-  { key: "SENDGRID_API_KEY", hint: "SendGrid API key (overrides SMTP)" },
+  { key: "SENDGRID_API_KEY", hint: "Optional secondary provider API key; never enable failover without review" },
+  { key: "RESEND_API_KEY", hint: "Current production API provider key" },
+  { key: "EMAIL_OUTBOX_ENCRYPTION_KEY", hint: "Base64-encoded 32-byte key required for encrypted production outbox" },
+  { key: "EMAIL_FAILOVER_ENABLED", hint: "Keep false unless failover behavior has been explicitly tested" },
   { key: "CLOUDINARY_URL",   hint: "Cloudinary connection string" },
   { key: "ADMIN_EMAIL",      hint: "Admin notification email" },
   { key: "DB_SSL",           hint: "Set to 'false' for local dev without SSL" },
@@ -83,6 +88,37 @@ if (jwtSecret && jwtSecret.length < 32) {
   console.log(`  ${YELLOW}⚠ SHORT${RESET}   JWT_SECRET is only ${jwtSecret.length} chars — use ≥32`);
 }
 
+
+// Production email safety validation. The application fails closed rather than
+// persisting OTPs or other message content unencrypted.
+if (process.env.NODE_ENV === "production") {
+  const outboxKey = Buffer.from(process.env.EMAIL_OUTBOX_ENCRYPTION_KEY || "", "base64");
+  if (outboxKey.length !== 32) {
+    missing.push({
+      key: "EMAIL_OUTBOX_ENCRYPTION_KEY",
+      hint: "Production requires a base64-encoded 32-byte AES-256-GCM key.",
+    });
+    console.log(`  ${RED}✗ INVALID${RESET}  EMAIL_OUTBOX_ENCRYPTION_KEY (must decode to 32 bytes)`);
+  }
+
+  const selectedProvider = String(process.env.EMAIL_PROVIDER || "auto").trim().toLowerCase();
+  const hasProvider = selectedProvider === "resend"
+    ? Boolean(process.env.RESEND_API_KEY)
+    : selectedProvider === "sendgrid"
+      ? Boolean(process.env.SENDGRID_API_KEY)
+      : selectedProvider === "smtp"
+        ? Boolean(process.env.SMTP_USER && process.env.SMTP_PASS)
+        : Boolean(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY ||
+            (process.env.EMAIL_ENABLE_SMTP_FALLBACK === "true" && process.env.SMTP_USER && process.env.SMTP_PASS));
+  if (!hasProvider) {
+    missing.push({
+      key: "EMAIL_PROVIDER",
+      hint: "Selected provider is not configured; verify credentials before deploying.",
+    });
+    console.log(`  ${RED}✗ INVALID${RESET}  EMAIL_PROVIDER / provider credentials`);
+  }
+}
+
 // ── Recommended ───────────────────────────────────────────────────────────────
 console.log(`\n${BOLD}Recommended:${RESET}`);
 
@@ -103,7 +139,7 @@ console.log(`\n${BOLD}Optional:${RESET}`);
 for (const { key, hint } of OPTIONAL) {
   const val = process.env[key];
   if (val) {
-    const display = ["SMTP_PASS", "SENDGRID_API_KEY", "CLOUDINARY_URL"].includes(key)
+    const display = ["SMTP_PASS", "SENDGRID_API_KEY", "RESEND_API_KEY", "EMAIL_OUTBOX_ENCRYPTION_KEY", "CLOUDINARY_URL"].includes(key)
       ? "***configured***"
       : val;
     console.log(`  ${GREEN}✓ SET${RESET}     ${key} = ${display}`);
