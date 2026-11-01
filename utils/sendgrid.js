@@ -88,8 +88,10 @@ async function send({ to, subject, html, text, from }) {
     });
     err.provider = "sendgrid";
     err.statusCode = statusCode;
-    err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
-    err.retryable = statusCode === 408 || statusCode === 429;
+    err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 408);
+    // SendGrid does not expose an idempotency contract in this adapter.
+    // A 408 has an ambiguous delivery outcome and must not be retried.
+    err.retryable = statusCode === 429;
     err.providerFailoverEligible = isSafeProviderFailover("sendgrid", statusCode);
     err.deliveryUnknown = !err.definitiveRejected;
     err.idempotentRetrySafe = false;
