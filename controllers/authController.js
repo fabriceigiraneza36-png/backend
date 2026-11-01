@@ -534,27 +534,9 @@ exports.verifyCode = async (req, res) => {
       });
     }
 
-    // If the account has an authenticator enrolled, email OTP is the first
-    // factor only. Do not issue a session until the second factor is verified.
-    const security = await query("SELECT totp_enabled,recovery_codes_remaining FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
-    // A missing passkey table must never suppress an already-enrolled TOTP factor.
-    const passkeyCount = await query("SELECT COUNT(*) AS count FROM user_passkeys WHERE user_id=$1", [user.id]).catch(() => ({rows:[{count:0}]}));
-    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(passkeyCount.rows[0]?.count || 0) > 0 ? ["passkey"] : [])];
-    if (factorMethods.length) {
-      // Consume the email OTP before issuing a one-time second-factor challenge.
-      // This prevents replaying the same email code to mint multiple challenges.
-      await query("UPDATE users SET verification_code=NULL,code_expiry=NULL,code_attempts=0 WHERE id=$1",[user.id]);
-      await query("DELETE FROM login_factor_challenges WHERE user_id=$1",[user.id]);
-      const challengeId = require("crypto").randomBytes(24).toString("hex");
-      await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
-        VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
-      return res.json({
-        success:true,
-        requiresSecondFactor:true,
-        message:"Email verified. Complete your additional account verification.",
-        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods,fullName:user.full_name||"",username:user.username||user.full_name||"",email:user.email}
-      });
-    }
+    // Email, Google and GitHub sign-in are completed by the verified email
+    // code itself. Enrolled passkeys/authenticator/recovery codes are separate
+    // standalone sign-in choices in the login screen, not a second prompt here.
 
     const isFirstVerification = !user.is_verified;
 
