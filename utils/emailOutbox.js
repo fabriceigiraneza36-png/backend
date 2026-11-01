@@ -233,7 +233,7 @@ async function processDueEmails(deliver, limit = 10) {
   // within Resend's documented 24-hour idempotency window.
   await query(
     "UPDATE email_outbox SET status = CASE " +
-    "WHEN provider = 'resend' AND expires_at > NOW() + INTERVAL '1 hour' THEN 'queued' ELSE 'uncertain' END, " +
+    "WHEN provider = 'resend' AND expires_at > NOW() AND created_at > NOW() - INTERVAL '23 hours' THEN 'queued' ELSE 'uncertain' END, " +
     "next_attempt_at = NOW(), locked_until = NULL, " +
     "last_error = 'Worker lease expired before completion; outcome reconciled conservatively', updated_at = NOW() " +
     "WHERE status = 'sending' AND locked_until < NOW()",
