@@ -7,6 +7,7 @@ const crypto     = require("crypto");
 const logger     = require("./logger");
 const { query }  = require("../config/db");
 const emailOutbox = require("./emailOutbox");
+const { isSafeProviderFailover } = require("./emailPolicy");
 const { send: sendGridSend } = require("./sendgrid");
 const { send: sendResendSend } = require("./resend");
 
@@ -299,7 +300,7 @@ async function sendEmailDirect(payload, options = {}) {
           err.statusCode = responseCode || null;
           err.definitiveRejected = responseCode >= 400;
           err.retryable = responseCode >= 400 && responseCode < 500;
-          err.providerFailoverEligible = [421, 450, 451, 452, 454].includes(responseCode);
+          err.providerFailoverEligible = isSafeProviderFailover("smtp", responseCode);
           // No SMTP response can mean the remote server accepted DATA before the
           // connection was interrupted. Pause instead of resending elsewhere.
           err.deliveryUnknown = !err.definitiveRejected;
