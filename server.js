@@ -708,6 +708,26 @@ setInterval(() => {
   })
 }, 2_000)
 
+// Durable encrypted email outbox worker. Job claims use PostgreSQL row updates,
+// so multiple backend instances can safely run this pump without double-claiming.
+const { processPendingEmails } = require('./utils/email')
+let emailOutboxWorkerBusy = false
+const emailOutboxWorker = setInterval(async () => {
+  if (emailOutboxWorkerBusy || !process.env.EMAIL_OUTBOX_ENCRYPTION_KEY) return
+  emailOutboxWorkerBusy = true
+  try {
+    const result = await processPendingEmails(10)
+    if (result && (result.sent || result.stopped || result.expired)) {
+      logger.info('[EmailOutbox] Worker batch completed', result)
+    }
+  } catch (err) {
+    logger.error('[EmailOutbox] Worker batch failed:', err.message)
+  } finally {
+    emailOutboxWorkerBusy = false
+  }
+}, Math.max(1_000, Number(process.env.EMAIL_OUTBOX_POLL_MS) || 2_000))
+emailOutboxWorker.unref()
+
 // -------------------------------------------------------------------------------
 // HEALTH & META ENDPOINTS
 // -------------------------------------------------------------------------------
