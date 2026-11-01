@@ -43,6 +43,7 @@ const OPTIONAL = [
   { key: "SMTP_FROM",        hint: "Default From address" },
   { key: "SENDGRID_API_KEY", hint: "Optional secondary provider API key; never enable failover without review" },
   { key: "RESEND_API_KEY", hint: "Current production API provider key" },
+  { key: "RESEND_WEBHOOK_SECRET", hint: "Svix signing secret used to verify Resend delivery webhooks" },
   { key: "EMAIL_OUTBOX_ENCRYPTION_KEY", hint: "Base64-encoded 32-byte key required for encrypted production outbox" },
   { key: "EMAIL_FAILOVER_ENABLED", hint: "Keep false unless failover behavior has been explicitly tested" },
   { key: "CLOUDINARY_URL",   hint: "Cloudinary connection string" },
