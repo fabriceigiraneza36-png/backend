@@ -20,7 +20,7 @@ The canonical path is:
 - The recent production-delivery log identified Resend as the active sender.
 - Production is now explicitly pinned to `EMAIL_PROVIDER=resend`.
 - Production is explicitly set to `EMAIL_FAILOVER_ENABLED=false`; failover must remain disabled until every fallback has verified authentication and tested delivery semantics.
-- Shared policy lives in `utils/emailPolicy.js`: API transports may fail over only on explicit 408/429 rejection; SMTP only on 421/450/451/452/454 temporary rejection. Permanent 4xx, 5xx/unknown outcomes, and network ambiguity do not trigger provider switching.
+- Shared policy lives in `utils/emailPolicy.js`: API transports may fail over only on explicit 429 rate-limit rejection; an HTTP 408 is treated as ambiguous. SMTP only on 421/450/451/452/454 temporary rejection. Permanent 4xx, 5xx/unknown outcomes, and network ambiguity do not trigger provider switching.
 - The policy is unit-tested by `npm run test:email-policy` and is included in backend CI.
 - Resend idempotency keys are used for authentication codes. Booking event mail uses booking-number/status keys.
 - Resend supports idempotency keys on the single-email endpoint. The documented retention window is 24 hours; the stale-job recovery logic uses a 23-hour safety window.
