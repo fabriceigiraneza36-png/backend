@@ -287,87 +287,101 @@ const buildSectionLabel = (text) => `
 // ============================================================
 
 const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail = "", recipientAvatarUrl = "") => {
-  const safeName = fullName || "Traveler";
+  const normalizedCode = String(code ?? "").trim();
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    throw new TypeError("Verification code must contain exactly six digits.");
+  }
+
+  const safeName = String(fullName || "Traveler").trim() || "Traveler";
+  const greeting = safeName !== "Traveler" ? `, ${escapeHtml(safeName)}` : "";
   const siteUrl = String(getEnvVar("SITE_URL", "https://www.altuverasafaris.com")).replace(/\/+$/, "");
-  const copyCodeUrl = `${siteUrl}/copy-code.html#${safeEncodeURI(code)}`;
+  const copyCodeUrl = `${siteUrl}/copy-code.html#${safeEncodeURI(normalizedCode)}`;
+  const safeSupportEmail = escapeHtml(supportEmail || "info@altuverasafaris.com");
 
+  // Keep one uninterrupted six-digit code near the beginning so mail clients
+  // can identify it as an OTP without searching through decorative text.
   const content = `
-    ${buildBanner("🔐", "Altuvera", "Secure Travel Platform", safeName, recipientEmail, recipientAvatarUrl)}
-
     <tr>
-      <td style="padding:48px 44px 36px;text-align:center;">
-        ${buildIconCircle("✉️", 80)}
-        <h2 style="margin:0 0 14px;font-size:26px;font-weight:700;color:${sharedStyles.textPrimary};line-height:1.3;">
-          Hello${safeName !== "Traveler" ? `, ${escapeHtml(safeName)}` : ""}!
-        </h2>
-        <p style="margin:0;font-size:16px;color:${sharedStyles.textSecondary};line-height:1.75;max-width:440px;display:inline-block;">
-          We received a request to access your account. Use the verification code below to continue securely.
-        </p>
-      </td>
-    </tr>
-
-    ${buildDivider()}
-
-    <tr>
-      <td style="padding:36px 44px;text-align:center;">
-        ${buildSectionLabel("Your Verification Code")}
-
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
+      <td style="padding:32px 36px 12px;text-align:left;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
           <tr>
-            <td style="background:linear-gradient(135deg,${sharedStyles.greenPale},${sharedStyles.greenMint});border-radius:20px;padding:28px 56px;border:2px solid ${sharedStyles.greenBorder};box-shadow:0 4px 20px rgba(22,163,74,0.08);">
-              <p style="margin:0;font-family:'Courier New',monospace;font-size:44px;font-weight:800;color:${sharedStyles.greenMid};letter-spacing:10px;">
-                ${escapeHtml(code)}
-              </p>
+            <td align="left" valign="middle">
+              <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="148" height="66" alt="Altuvera Safaris" style="display:block;width:148px;height:66px;object-fit:contain;" />
             </td>
           </tr>
         </table>
 
+        <p style="margin:28px 0 10px;font-size:17px;color:${sharedStyles.textPrimary};line-height:1.5;font-weight:600;">
+          Hi${greeting},
+        </p>
+        <h1 style="margin:0 0 12px;font-size:25px;font-weight:800;color:${sharedStyles.greenDark};line-height:1.25;letter-spacing:-0.3px;">
+          Your Altuvera login code
+        </h1>
+        <p style="margin:0;font-size:15px;color:${sharedStyles.textSecondary};line-height:1.7;">
+          Enter this one-time code to continue signing in to your Altuvera Safaris account.
+        </p>
+      </td>
+    </tr>
+
+    <tr>
+      <td style="padding:22px 36px 8px;text-align:left;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border:1px solid ${sharedStyles.greenBorder};border-radius:16px;background:${sharedStyles.greenPale};">
+          <tr>
+            <td align="center" style="padding:22px 16px 18px;">
+              <p style="margin:0 0 10px;font-size:11px;font-weight:800;color:${sharedStyles.textMuted};letter-spacing:1.8px;text-transform:uppercase;">
+                Verification code
+              </p>
+              <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:38px;font-weight:800;line-height:1.3;letter-spacing:7px;color:${sharedStyles.greenDark};white-space:nowrap;">
+                ${normalizedCode}
+              </p>
+              <p style="margin:12px 0 0;font-size:12px;color:${sharedStyles.textSecondary};line-height:1.5;">
+                Expires in 10 minutes
+              </p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+
+    <tr>
+      <td style="padding:18px 36px 8px;text-align:left;">
         ${buildCtaButton(copyCodeUrl, "Copy code")}
-        <p style="margin:10px 0 0;font-size:12px;color:${sharedStyles.textMuted};line-height:1.5;text-align:center;">Opens a secure Altuvera page where you can copy your code.</p>
-
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
-          <tr>
-            <td style="padding:12px 28px;background-color:${sharedStyles.warningBg};border-radius:28px;border:1px solid ${sharedStyles.warningBorder};">
-              <p style="margin:0;font-size:14px;color:${sharedStyles.warningText};font-weight:600;">
-                ⏱️ This code expires in 10 minutes
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-
-    <tr>
-      <td style="padding:0 44px 36px;">
-        ${buildInfoCard("🔒", "Security Reminder", "Never share this code with anyone. Altuvera will never ask for your code via phone, SMS, or email.")}
-      </td>
-    </tr>
-
-    <tr>
-      <td style="background:linear-gradient(135deg,${sharedStyles.greenPale},rgba(255,255,255,0.95));padding:32px 44px;text-align:center;">
-        <p style="margin:0 0 8px;font-size:15px;font-weight:700;color:${sharedStyles.greenDark};">
-          Didn't request this code?
-        </p>
-        <p style="margin:0;font-size:14px;color:${sharedStyles.textSecondary};line-height:1.65;">
-          If you didn't request this verification, simply ignore this email. The code will expire automatically.
+        <p style="margin:12px 0 0;font-size:12px;color:${sharedStyles.textMuted};line-height:1.6;text-align:center;">
+          Your email app may also offer its own Copy code shortcut. You can use that, or select the six digits above.
         </p>
       </td>
     </tr>
 
     <tr>
-      <td style="padding:32px 44px;">
-        ${buildInfoCard("💬", "Need Help?", `Contact our support team at <a href="mailto:${supportEmail}" style="color:${sharedStyles.greenMid};font-weight:700;text-decoration:none;">${supportEmail}</a>`)}
+      <td style="padding:24px 36px 12px;">
+        <div style="height:1px;background:${sharedStyles.greenBorder};"></div>
+        <p style="margin:18px 0 8px;font-size:14px;font-weight:700;color:${sharedStyles.greenDark};">
+          Keep your account safe
+        </p>
+        <p style="margin:0;font-size:13px;color:${sharedStyles.textSecondary};line-height:1.7;">
+          Never share this code with anyone. Altuvera Safaris will never ask you to read it out over the phone or send it in a message.
+        </p>
+      </td>
+    </tr>
+
+    <tr>
+      <td style="padding:12px 36px 28px;">
+        <p style="margin:0;font-size:13px;color:${sharedStyles.textSecondary};line-height:1.7;">
+          Didn't request this code? You can safely ignore this email. The code will expire automatically.
+        </p>
+        <p style="margin:16px 0 0;font-size:12px;color:${sharedStyles.textMuted};line-height:1.6;">
+          Need help? <a href="mailto:${safeSupportEmail}" style="color:${sharedStyles.greenMid};font-weight:700;text-decoration:none;">${safeSupportEmail}</a>
+        </p>
       </td>
     </tr>
 
     ${buildFooter([
-      "This verification code was requested for your Altuvera account.",
-      "This is an automated message — please do not reply.",
+      "This one-time code was requested for your Altuvera Safaris account.",
+      "This is an automated security message — please do not reply.",
     ])}`;
 
   return buildOuterWrapper(content);
 };
-
 const buildWelcomeSubscriberEmailHtml = (email) => {
   const validatedEmail = validateEmail(email);
   const siteUrl        = getEnvVar("SITE_URL", "https://www.altuverasafaris.com");
@@ -632,32 +646,36 @@ async function sendEmail(mailOptions, logMessage) {
 // ============================================================
 
 async function sendVerificationCode(email, code, fullName, recipientAvatarUrl = "") {
-  const config       = getEmailConfig();
+  const config = getEmailConfig();
   const supportEmail = "info@altuverasafaris.com";
+  const normalizedCode = String(code ?? "").trim();
+
+  if (!/^\d{6}$/.test(normalizedCode)) {
+    throw new TypeError("Verification code must contain exactly six digits.");
+  }
 
   if (!config.isConfigured && config.devFallback) {
     console.warn(
-      `[DEV FALLBACK] Resend not configured. Code for ${email}: ${code}`
+      `[DEV FALLBACK] Resend not configured. Verification code generated for ${email}.`
     );
-    return { delivered: false, fallback: "console", code };
+    return { delivered: false, fallback: "console", code: normalizedCode };
   }
 
   const result = await sendEmail(
     {
-      to:      email,
-      subject: `${code} - Your Altuvera verification code`,
-      html:    buildVerificationEmailHtml(code, fullName, supportEmail, email, recipientAvatarUrl),
-      text:    `Copy code: ${code}\n\nYour Altuvera verification code is: ${code}\n\nValid for 10 minutes. Do not share this code.`,
+      to: email,
+      subject: `${normalizedCode} - Your Altuvera login code`,
+      html: buildVerificationEmailHtml(normalizedCode, fullName, supportEmail, email, recipientAvatarUrl),
+      text: `Your Altuvera Safaris login code is:\n\n${normalizedCode}\n\nEnter this code to sign in. It expires in 10 minutes. Never share this code.`,
     },
     `✅ Verification code sent to ${email}`
   );
 
   if (!result.delivered && result.fallback) {
-    result.code = code;
+    result.code = normalizedCode;
   }
   return result;
 }
-
 async function sendWelcomeEmail(email) {
   const validatedEmail = validateEmail(email);
 
