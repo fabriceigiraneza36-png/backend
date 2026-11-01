@@ -1,7 +1,7 @@
 "use strict";
 
 const crypto = require("crypto");
-const { query } = require("../config/db");
+const { query, pool } = require("../config/db");
 const logger = require("./logger");
 
 let schemaPromise = null;
@@ -61,9 +61,29 @@ async function ensureSchema() {
       "last_error TEXT, " +
       "created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
       "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
-      "sent_at TIMESTAMPTZ)"
+      "sent_at TIMESTAMPTZ, " +
+      "delivery_status VARCHAR(24) NOT NULL DEFAULT 'accepted', " +
+      "delivery_event_at TIMESTAMPTZ)"
     );
+    await query("ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS delivery_status VARCHAR(24) NOT NULL DEFAULT 'accepted'");
+    await query("ALTER TABLE email_outbox ADD COLUMN IF NOT EXISTS delivery_event_at TIMESTAMPTZ");
     await query("CREATE INDEX IF NOT EXISTS idx_email_outbox_due ON email_outbox(status, next_attempt_at)");
+    await query(
+      "CREATE TABLE IF NOT EXISTS email_provider_events (" +
+      "event_id VARCHAR(255) PRIMARY KEY, provider VARCHAR(24) NOT NULL, " +
+      "event_type VARCHAR(64) NOT NULL, provider_message_id TEXT, " +
+      "recipient_email TEXT, event_created_at TIMESTAMPTZ, payload_hash CHAR(64) NOT NULL, " +
+      "received_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+    );
+    await query(
+      "CREATE INDEX IF NOT EXISTS idx_email_provider_events_message ON email_provider_events(provider, provider_message_id)"
+    );
+    await query(
+      "CREATE TABLE IF NOT EXISTS email_suppressions (" +
+      "email TEXT PRIMARY KEY, reason VARCHAR(40) NOT NULL, provider VARCHAR(24) NOT NULL, " +
+      "provider_event_id VARCHAR(255), created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), " +
+      "updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW())"
+    );
     await query("CREATE INDEX IF NOT EXISTS idx_email_outbox_expiry ON email_outbox(status, expires_at)");
   })().catch((err) => {
     schemaPromise = null;
@@ -264,4 +284,104 @@ async function processDueEmails(deliver, limit = 10) {
   return { processed: (result.rows || []).length, sent, queued, stopped, expired: expired.rowCount || 0 };
 }
 
-module.exports = { ensureSchema, enqueueAndDeliver, processDueEmails };
+
+function normalizeRecipient(value) {
+  const raw = String(value || "").trim();
+  const angle = raw.match(/<([^<>]+)>/);
+  const email = (angle ? angle[1] : raw).trim().toLowerCase();
+  return /^[^\s@<>]+@[^\s@<>]+\.[^\s@<>]+$/.test(email) ? email : null;
+}
+
+async function assertNotSuppressed(recipients) {
+  await ensureSchema();
+  const input = Array.isArray(recipients) ? recipients : [recipients];
+  const addresses = [...new Set(input.flatMap((item) => {
+    if (Array.isArray(item)) return item.map(normalizeRecipient).filter(Boolean);
+    return [normalizeRecipient(item)].filter(Boolean);
+  }))];
+  if (!addresses.length) return;
+  const result = await query(
+    "SELECT email, reason FROM email_suppressions WHERE email = ANY($1::text[]) LIMIT 1",
+    [addresses],
+  );
+  if (result.rows && result.rows.length) {
+    const error = new Error("Email recipient is suppressed due to a previous bounce or complaint");
+    error.code = "EMAIL_RECIPIENT_SUPPRESSED";
+    error.statusCode = 422;
+    error.definitiveRejected = true;
+    error.retryable = false;
+    throw error;
+  }
+}
+
+async function recordProviderEvent({
+  eventId, eventType, providerMessageId = null, recipients = [],
+  eventCreatedAt = null, payloadHash, deliveryStatus = null, suppressReason = null,
+}) {
+  await ensureSchema();
+  if (!eventId || !eventType || !payloadHash) throw new Error("Provider event metadata is incomplete");
+
+  const normalizedRecipients = [...new Set(
+    (Array.isArray(recipients) ? recipients : [recipients])
+      .map(normalizeRecipient).filter(Boolean)
+  )];
+  const eventAt = eventCreatedAt && !Number.isNaN(Date.parse(eventCreatedAt))
+    ? new Date(eventCreatedAt).toISOString()
+    : new Date().toISOString();
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const inserted = await client.query(
+      "INSERT INTO email_provider_events " +
+      "(event_id, provider, event_type, provider_message_id, recipient_email, event_created_at, payload_hash) " +
+      "VALUES ($1, 'resend', $2, $3, $4, $5, $6) ON CONFLICT (event_id) DO NOTHING RETURNING event_id",
+      [String(eventId), String(eventType), providerMessageId, normalizedRecipients[0] || null, eventAt, payloadHash],
+    );
+    if (!inserted.rowCount) {
+      await client.query("COMMIT");
+      return { duplicate: true, matchedOutboxRows: 0, suppressedRecipients: 0 };
+    }
+
+    let matchedOutboxRows = 0;
+    if (providerMessageId && deliveryStatus) {
+      const updated = await client.query(
+        "UPDATE email_outbox SET delivery_status = $2, delivery_event_at = $3, updated_at = NOW() " +
+        "WHERE provider = 'resend' AND provider_message_id = $1 " +
+        "AND (delivery_event_at IS NULL OR delivery_event_at <= $3)",
+        [String(providerMessageId), String(deliveryStatus), eventAt],
+      );
+      matchedOutboxRows = updated.rowCount || 0;
+    }
+
+    let suppressedRecipients = 0;
+    if (suppressReason && normalizedRecipients.length) {
+      for (const address of normalizedRecipients) {
+        const suppression = await client.query(
+          "INSERT INTO email_suppressions (email, reason, provider, provider_event_id) " +
+          "VALUES ($1, $2, 'resend', $3) " +
+          "ON CONFLICT (email) DO UPDATE SET reason = EXCLUDED.reason, provider = EXCLUDED.provider, " +
+          "provider_event_id = EXCLUDED.provider_event_id, updated_at = NOW() RETURNING email",
+          [address, String(suppressReason), String(eventId)],
+        );
+        if (suppression.rowCount) suppressedRecipients += 1;
+      }
+    }
+
+    await client.query("COMMIT");
+    return { duplicate: false, matchedOutboxRows, suppressedRecipients };
+  } catch (err) {
+    try { await client.query("ROLLBACK"); } catch (_) {}
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+module.exports = {
+  ensureSchema,
+  enqueueAndDeliver,
+  processDueEmails,
+  assertNotSuppressed,
+  recordProviderEvent,
+};
