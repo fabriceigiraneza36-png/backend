@@ -172,6 +172,8 @@ const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
       await sendOtpEmail({
         to: user.email,
         recipientName: user.full_name || "",
+        recipientEmail: user.email,
+        recipientAvatarUrl: user.avatar_url || "",
         otp,
         purpose: isNew ? "verify" : "login",
         expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -368,6 +370,8 @@ exports.register = async (req, res) => {
       await sendOtpEmail({
         to:            nEmail,
         recipientName: name || user.full_name || "",
+        recipientEmail: nEmail,
+        recipientAvatarUrl: avatar || user.avatar_url || "",
         otp,
         purpose:       "verify",
         expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -395,6 +399,8 @@ exports.register = async (req, res) => {
     await sendOtpEmail({
       to:            nEmail,
       recipientName: name || "",
+      recipientEmail: nEmail,
+      recipientAvatarUrl: created.rows[0].avatar_url || avatar || "",
       otp,
       purpose:       "verify",
       expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -461,6 +467,8 @@ exports.login = async (req, res) => {
     await sendOtpEmail({
       to:            nEmail,
       recipientName: user.full_name || name || "",
+      recipientEmail: nEmail,
+      recipientAvatarUrl: user.avatar_url || "",
       otp,
       purpose,
       expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -558,6 +566,7 @@ exports.verifyCode = async (req, res) => {
       sendWelcomeEmail({
         to:            user.email,
         recipientName: user.full_name || "",
+        recipientAvatarUrl: freshUser.avatar_url || user.avatar_url || "",
       }).catch(() => {});
       notifyUserRegistered({
         id:    user.id,
@@ -697,7 +706,7 @@ exports.resendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Email is required." });
 
     const result = await query(
-      `SELECT id, email, full_name, last_code_sent_at, is_active
+`SELECT id, email, full_name, avatar_url, last_code_sent_at, is_active
          FROM users WHERE email = $1`,
       [nEmail],
     );
@@ -728,6 +737,8 @@ exports.resendCode = async (req, res) => {
     await sendOtpEmail({
       to:            user.email,
       recipientName: user.full_name || "",
+      recipientEmail: user.email,
+      recipientAvatarUrl: user.avatar_url || "",
       otp,
       purpose:       "resend",
       expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -789,7 +800,7 @@ exports.forgotUsernameSendCode = async (req, res) => {
       return res.status(400).json({ success: false, message: "Invalid email address." });
 
     const result = await query(
-      `SELECT id, email, full_name, last_code_sent_at, is_active
+`SELECT id, email, full_name, avatar_url, last_code_sent_at, is_active
          FROM users WHERE email = $1`,
       [nEmail],
     );
@@ -824,6 +835,8 @@ exports.forgotUsernameSendCode = async (req, res) => {
     await sendOtpEmail({
       to:            user.email,
       recipientName: user.full_name || "",
+      recipientEmail: user.email,
+      recipientAvatarUrl: user.avatar_url || "",
       otp,
       purpose:       "forgot_username",
       expiryMinutes: OTP_EXPIRY_MINUTES,
@@ -1188,6 +1201,8 @@ exports.githubCallback = async (req, res) => {
       await sendOtpEmail({
         to: user.email,
         recipientName: user.full_name || gh.name || gh.login || "",
+        recipientEmail: user.email,
+        recipientAvatarUrl: user.avatar_url || gh.avatar_url || "",
         otp,
         purpose: isNew ? "verify" : "login",
         expiryMinutes: OTP_EXPIRY_MINUTES,
