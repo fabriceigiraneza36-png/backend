@@ -136,6 +136,84 @@ exports.verifyFactor = async (req,res) => {
   } catch(e) { return fail(res,500,"Could not verify this factor."); }
 };
 
+
+/**
+ * Authenticate directly with an enrolled authenticator or one-time recovery code.
+ * This endpoint intentionally does not send an email OTP: possession of the
+ * registered factor is the sign-in proof selected by the user.
+ */
+exports.loginWithFactor = async (req,res) => {
+  try {
+    const email=String(req.body?.email||"").trim().toLowerCase();
+    const method=String(req.body?.method||"");
+    const code=String(req.body?.code||"").trim();
+    if(!/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email))
+      return fail(res,400,"Enter the email address associated with your Altuvera account.");
+    if(!["totp","recovery_code"].includes(method))
+      return fail(res,400,"Choose an authenticator app or recovery code.");
+    if((method==="totp"&&!/^\\d{6}$/.test(code))||(method==="recovery_code"&&!/^\\d{5}$/.test(code)))
+      return fail(res,400,method==="totp"?"Enter the 6-digit authenticator code.":"Enter the 5-digit recovery code.");
+
+    const found=await query(`SELECT u.*,s.totp_secret,s.totp_enabled,s.recovery_code_hashes
+      FROM users u LEFT JOIN user_security s ON s.user_id=u.id
+      WHERE u.email=$1 LIMIT 1`,[email]);
+    const user=found.rows[0];
+    if(!user||user.is_active===false)
+      return fail(res,401,"We couldn't verify that sign-in. Check your account details and security code.");
+
+    let valid=false;
+    if(method==="totp"&&user.totp_enabled&&user.totp_secret){
+      try{valid=verifyTotp(decryptSecret(user.totp_secret),code);}catch{valid=false;}
+    }else if(method==="recovery_code"&&Array.isArray(user.recovery_code_hashes)){
+      const candidate=hash(code);
+      if(user.recovery_code_hashes.includes(candidate)){
+        const consumed=await query(`UPDATE user_security
+          SET recovery_code_hashes=recovery_code_hashes - (
+            SELECT ordinality - 1
+              FROM jsonb_array_elements_text(recovery_code_hashes) WITH ORDINALITY
+             WHERE value=$1 LIMIT 1
+          ),
+          recovery_codes_remaining=GREATEST(0,recovery_codes_remaining-1),
+          updated_at=NOW()
+          WHERE user_id=$2 AND recovery_code_hashes @> jsonb_build_array($1)
+          RETURNING recovery_codes_remaining`,[candidate,user.id]);
+        valid=consumed.rows.length===1;
+      }
+    }
+    if(!valid)
+      return fail(res,401,"That security code is invalid, expired, or already used. Try another enrolled method.");
+
+    const updated=await query(`UPDATE users SET is_verified=true,last_login=NOW(),
+      login_counter=COALESCE(login_counter,0)+1 WHERE id=$1 AND is_active=true RETURNING *`,[user.id]);
+    const fresh=updated.rows[0];
+    if(!fresh)return fail(res,401,"Account is inactive.");
+
+    const helpers=require("../controllers/authController")._securityTokenHelpers;
+    if(!helpers)return fail(res,500,"A secure sign-in session could not be created.");
+    const token=helpers.token(fresh),refreshToken=helpers.refreshToken(fresh);
+    const decoded=jwt.decode(token);
+    const sessionExpiresAt=decoded?.exp?new Date(decoded.exp*1000).toISOString():null;
+    await ensureRecoveryReviewSchema();
+    await query("INSERT INTO account_security_audit(actor_user_id,subject_user_id,event_type,details) VALUES($1,$1,'security_method_login',$2::jsonb)",
+      [fresh.id,JSON.stringify({method})]).catch(()=>{});
+    try{
+      const {notifyUserLogin}=require("./notificationsController");
+      notifyUserLogin({id:fresh.id,email:fresh.email,name:fresh.full_name||fresh.email,full_name:fresh.full_name},sessionExpiresAt).catch(()=>{});
+    }catch{}
+    try{
+      require("../utils/accountActivity").recordAccountActivity({
+        userId:fresh.id,eventType:"login_success",title:"Successful secure sign-in",
+        description:"Your Altuvera account was signed in using an enrolled security method.",
+        metadata:{authProvider:fresh.auth_provider||"email",securityMethod:method,sessionExpiresAt}
+      }).catch(()=>{});
+    }catch{}
+    return res.json({success:true,message:"Signed in securely.",data:{
+      token,refreshToken,user:helpers.sanitizeUser(fresh),isNewUser:false,
+      loginCounter:Number(fresh.login_counter),sessionExpiresAt
+    }});
+  }catch(e){return fail(res,e.status||500,e.status?e.message:"Secure sign-in could not be completed.");}
+};
+
 // Recovery requests never disclose whether an email is registered. A recovery request
 // opens a manual support review; it does not grant access or bypass enrolled factors.
 exports.requestRecovery = async (req,res) => {
