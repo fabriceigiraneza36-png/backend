@@ -930,6 +930,7 @@ const sendBookingConfirmation = async (booking) => {
           color:${T.g700};letter-spacing:6px;">
           ${esc(booking.confirmation_code)}
         </p>
+        <p style="margin:8px 0 0;font-family:'Inter',sans-serif;font-size:12px;font-weight:800;color:${T.g700};">Copy code: <strong>${esc(booking.confirmation_code)}</strong></p>
       </div>` : ""}
       <p style="margin:24px 0 12px;font-family:'Inter',sans-serif;font-size:11px;
         font-weight:700;color:${T.g700};text-transform:uppercase;letter-spacing:.12em;">
