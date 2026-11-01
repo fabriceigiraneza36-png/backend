@@ -2,6 +2,7 @@
 
 const { query } = require("../config/db");
 const logger    = require("../utils/logger");
+const { sendEmail: sendThroughCore } = require("../utils/email");
 
 const cfg = {
   resendApiKey: process.env.RESEND_API_KEY || "",
@@ -200,49 +201,22 @@ function safe(value, fallback = "—") {
 /* ════════════════════════════════════════════════════════════════════════════════
     CORE sendEmail
 ═══════════════════════════════════════════════════════════════════════════════ */
-async function sendEmail({ to, subject, html, text, replyTo }) {
-  if (!to || !subject || (!html && !text))
-    throw new Error("sendEmail: to, subject, html/text required");
-
-  const plain = text || stripHtml(html);
-
-  if (cfg.resendApiKey) {
-    const body = {
-      from:     `${cfg.from.name} <${cfg.from.address}>`,
-      to:       Array.isArray(to) ? to : [to],
-      subject,
-      html:     html || `<pre>${plain}</pre>`,
-      text:     plain,
-      reply_to: replyTo || cfg.replyTo,
-    };
-    const res = await fetch("https://api.resend.com/emails", {
-      method:  "POST",
-      headers: {
-        Authorization:  `Bearer ${cfg.resendApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(body),
-    });
-    const json = await res.json().catch(() => ({}));
-    if (!res.ok)
-      throw new Error(`Resend ${res.status}: ${json?.message || JSON.stringify(json)}`);
-    logger.info(`[Email] Resend ✅ → ${to} | id:${json.id}`);
-    return { success: true, provider: "resend", messageId: json.id };
+async function sendEmail({ to, subject, html, text, replyTo, cc, bcc, idempotencyKey }) {
+  if (!to || !subject || (!html && !text)) {
+    throw new Error("sendEmail: to, subject and html/text are required");
   }
 
-  const smtp = getSmtp();
-  if (smtp) {
-    const info = await smtp.sendMail({
-      from:    `"${cfg.from.name}" <${cfg.from.address}>`,
-      to, subject, html, text: plain,
-      replyTo: replyTo || cfg.replyTo,
-    });
-    logger.info(`[Email] SMTP ✅ → ${to} | msgId:${info.messageId}`);
-    return { success: true, provider: "smtp", messageId: info.messageId };
-  }
+  return sendThroughCore({
+    to,
+    subject,
+    html,
+    text,
+    replyTo: replyTo || cfg.replyTo,
+    ...(cc ? { cc } : {}),
+    ...(bcc ? { bcc } : {}),
+    ...(idempotencyKey ? { idempotencyKey } : {}),
+  });
 
-  logger.info(`[Email] CONSOLE FALLBACK → ${to} | Subject: ${subject}`);
-  return { success: true, provider: "console", messageId: `console-${Date.now()}` };
 }
 
 /* ════════════════════════════════════════════════════════════════════════════════
