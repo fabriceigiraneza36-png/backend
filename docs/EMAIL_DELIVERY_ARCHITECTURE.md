@@ -1,0 +1,85 @@
+# Altuvera Safaris — Email delivery architecture and migration plan
+
+Last reviewed: 2026-11-01
+
+## Production architecture
+
+All application send paths should use `utils/email.js` as the canonical boundary. Legacy entry points (`utils/emailService.js` and `services/emailservice.js`) are compatibility adapters and must not create their own provider clients or retry loops.
+
+The canonical path is:
+
+1. Render API service receives an email request.
+2. `utils/email.js` normalizes the HTML/text payload, selects one provider, and writes an encrypted record to PostgreSQL `email_outbox`.
+3. The request attempts delivery immediately after the durable insert.
+4. The server outbox worker polls every 2 seconds and processes up to 10 due records per batch.
+5. PostgreSQL row updates claim jobs atomically. Multiple instances can share the queue without claiming the same row.
+6. Retry-safe errors are rescheduled with exponential backoff and jitter. Ambiguous outcomes are held in `uncertain`, not blindly resent through another provider.
+
+## Provider policy
+
+- The recent production-delivery log identified Resend as the active sender.
+- Keep `EMAIL_PROVIDER=resend` explicit in production until another provider completes a measured canary.
+- Keep `EMAIL_FAILOVER_ENABLED=false` by default.
+- Resend idempotency keys are used for authentication codes. Booking event mail uses booking-number/status keys.
+- Resend supports idempotency keys on the single-email endpoint. The documented retention window is 24 hours; the stale-job recovery logic uses a 23-hour safety window.
+- Do not automatically fail over to a different provider after a timeout, connection reset, or 5xx response. The remote provider may already have accepted the message and a second provider could create a duplicate. A fallback is allowed only when the selected provider gives an explicit definitive rejection and the operator has deliberately enabled failover.
+
+## Encrypted outbox
+
+The `email_outbox` table stores the message body encrypted using AES-256-GCM. The encryption key must be base64 encoding of exactly 32 random bytes.
+
+Required production secret:
+- `EMAIL_OUTBOX_ENCRYPTION_KEY`
+
+Operational settings:
+- `EMAIL_PROVIDER=resend`
+- `EMAIL_FAILOVER_ENABLED=false`
+- `EMAIL_OUTBOX_POLL_MS=2000`
+
+Never print, log, commit, or put the encryption key into issue descriptions. Do not overwrite an existing key casually: existing queued ciphertext depends on it. Before planned rotation, stop enqueuing, drain or safely re-encrypt queued items with a versioned key ring, back up the database, then rotate and verify.
+
+Outbox states:
+- `queued`: stored and waiting for delivery or safe retry.
+- `sending`: currently leased by a worker.
+- `sent`: accepted by the selected email provider (this is **not** proof it reached the recipient's inbox).
+- `failed`: provider definitively rejected the message or a non-retryable error occurred.
+- `uncertain`: the provider outcome cannot be proven; the system pauses rather than risking duplicate mail.
+- `expired`: message expired before it could be sent.
+
+## Current gaps to close before calling the system fully production-hardened
+
+1. Add verified Resend webhooks for `email.delivered`, `email.bounced`, `email.complained`, and `email.failed`; validate webhook signatures, make event processing idempotent, and maintain a suppression list. Do not treat an HTTP API acceptance response as inbox delivery.
+2. Add an admin view/alerts for queued, failed, expired and uncertain messages, with a safe manual replay path that reuses the same provider idempotency key whenever still within the provider's retention window.
+3. Add provider health checks that do not send synthetic email to customers.
+4. Add integration tests for concurrent outbox claims, duplicate idempotency keys, worker restarts, provider timeouts, rate limits, and payload-key mismatch.
+5. Review the existing campaign sender and any one-off scripts before removing legacy provider dependencies.
+
+## Open-source options reviewed
+
+### Postal — preferred self-hosted candidate for a controlled pilot
+
+Postal is a maintained, open-source mail-delivery platform with an HTTP API and SMTP interface, queue/monitoring UI, webhooks, message logs, IP pools and delivery retries. The official release list showed v3.3.7 on 2026-06-03 at the time of review.
+
+Postal is **not** a drop-in way to get better inbox placement for free. Its documentation recommends a dedicated server with at least 4 GB RAM, 2 CPU cores and 25 GB disk, plus Docker. The hosting provider must permit outbound TCP port 25; Postal's documentation warns that new VPS addresses may already be blocklisted. We must operate IP reputation, rDNS/PTR, SPF, DKIM, DMARC, bounce/complaint processing, abuse controls, rate limits, backups and patching.
+
+Pilot design:
+- Run Postal on a dedicated host, not inside the existing Render backend process.
+- Use a separate sending subdomain such as `mail.altuverasafaris.com` after DNS and deliverability design is approved.
+- Start in a staging/test domain with only internal test mailboxes (never route tests to a customer's address).
+- Compare Gmail, Outlook and Yahoo acceptance, inbox placement, deferrals, bounce/complaint rates and latency against Resend for at least two weeks.
+- Start with low-volume canary traffic only after the pilot meets the same authentication, suppression, observability and rollback requirements.
+- Keep Resend available as the rollback route until the self-hosted sender proves stable over multiple sending cycles.
+
+### Posta — watchlist, not production choice yet
+
+Posta documents a modern self-hosted HTTP API, PostgreSQL/Redis-backed jobs, retries, webhooks and suppression features. It is a promising newer project, but it has a shorter operational track record than Postal. Evaluate its release cadence, security process, upgrade and backup procedures, issue response, migration tooling and real inbox placement before relying on it for account-security OTPs.
+
+### What not to mistake for a complete sender
+
+- Nodemailer is a Node.js transport library, not a sending network or a deliverability service.
+- Postfix is a mature MTA, but operating it still requires infrastructure, IP reputation, feedback loops and abuse controls.
+- A self-hosted open-source server does not automatically outperform a managed transactional ESP.
+
+## Recommendation
+
+Keep Resend as the single production provider now, behind the shared encrypted outbox. It currently has the known authenticated sending path and supports provider-side idempotency. Run Postal as a separate, opt-in pilot before any migration. Do not remove Resend or SendGrid dependencies until the new route demonstrates better real-world deliverability and the application has verified webhook/bounce handling and a tested rollback plan.
