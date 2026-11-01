@@ -259,7 +259,6 @@ const upsertSocialUser = async ({
                          THEN EXCLUDED.auth_provider
                          ELSE users.auth_provider
                        END,
-       is_verified   = true,
        is_active     = true,
        last_login    = NOW()
      RETURNING *, (xmax = 0) AS is_new_row`,
