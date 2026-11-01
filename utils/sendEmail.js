@@ -80,6 +80,22 @@ const escapeHtml = (str) =>
     .replace(/"/g,  "&quot;")
     .replace(/'/g,  "&#039;");
 
+const EMAIL_LOGO_URL = getEnvVar("EMAIL_LOGO_URL", "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png");
+const safeProfileImage = (value) => {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+};
+const profileInitials = (name, email) => {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return String(email || "U").trim().slice(0, 1).toUpperCase() || "U";
+};
+
 const getCurrentYear = () => {
   try {
     return new Date().getFullYear();
@@ -142,10 +158,24 @@ const buildOuterWrapper = (content) => `
 </body>
 </html>`;
 
-const buildBanner = (emoji, title, subtitle) => `
+const buildBanner = (emoji, title, subtitle, recipientName = "", recipientEmail = "", recipientAvatarUrl = "") => {
+  const avatarUrl = safeProfileImage(recipientAvatarUrl);
+  const avatar = avatarUrl
+    ? '<img src="' + escapeHtml(avatarUrl) + '" width="58" height="58" alt="' + escapeHtml(recipientName || "Your profile") + '" style="display:block;width:58px;height:58px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,.9);" />'
+    : '<table role="presentation" cellpadding="0" cellspacing="0" width="58" height="58" style="width:58px;height:58px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.9);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:16px;font-weight:800;color:#065f46;">' + escapeHtml(profileInitials(recipientName, recipientEmail)) + '</td></tr></table>';
+
+  return `
   <tr>
-    <td style="background:${sharedStyles.bannerGradient};padding:52px 44px;text-align:center;">
-      <div style="width:72px;height:72px;margin:0 auto 20px;border-radius:20px;background:rgba(255,255,255,0.15);line-height:72px;font-size:36px;backdrop-filter:blur(10px);">
+    <td style="background:${sharedStyles.bannerGradient};padding:36px 32px;text-align:center;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;">
+        <tr>
+          <td align="left" valign="middle" width="66">
+            <img src="${EMAIL_LOGO_URL}" width="58" height="58" alt="Altuvera Safaris logo" style="display:block;width:58px;height:58px;object-fit:contain;border-radius:12px;background:#ffffff;padding:4px;" />
+          </td>
+          <td align="right" valign="middle" width="64">${avatar}</td>
+        </tr>
+      </table>
+      <div style="width:64px;height:64px;margin:0 auto 16px;border-radius:18px;background:rgba(255,255,255,0.15);line-height:64px;font-size:32px;">
         ${emoji}
       </div>
       <h1 style="margin:0 0 8px;font-size:30px;font-weight:800;color:${sharedStyles.white};letter-spacing:-0.5px;line-height:1.2;">
@@ -156,6 +186,7 @@ const buildBanner = (emoji, title, subtitle) => `
       </p>
     </td>
   </tr>`;
+};
 
 const buildIconCircle = (emoji, size = 80) => `
   <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
@@ -255,11 +286,11 @@ const buildSectionLabel = (text) => `
 // EMAIL TEMPLATES
 // ============================================================
 
-const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
+const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail = "", recipientAvatarUrl = "") => {
   const safeName = fullName || "Traveler";
 
   const content = `
-    ${buildBanner("🔐", "Altuvera", "Secure Travel Platform")}
+    ${buildBanner("🔐", "Altuvera", "Secure Travel Platform", safeName, recipientEmail, recipientAvatarUrl)}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -285,6 +316,7 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
               <p style="margin:0;font-family:'Courier New',monospace;font-size:44px;font-weight:800;color:${sharedStyles.greenMid};letter-spacing:10px;">
                 ${code}
               </p>
+              <p style="margin:12px 0 0;font-size:13px;font-family:Arial,sans-serif;font-weight:800;color:${sharedStyles.greenDark};">Copy code: <strong>${escapeHtml(code)}</strong></p>
             </td>
           </tr>
         </table>
@@ -339,7 +371,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
   const exploreUrl     = `${siteUrl}/explore`;
 
   const content = `
-    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures")}
+    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures", "", validatedEmail)}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -418,7 +450,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const supportEmail   = "info@altuverasafaris.com";
 
   const content = `
-    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures")}
+    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures", "", validatedEmail)}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -595,7 +627,7 @@ async function sendEmail(mailOptions, logMessage) {
 // PUBLIC SENDING FUNCTIONS
 // ============================================================
 
-async function sendVerificationCode(email, code, fullName) {
+async function sendVerificationCode(email, code, fullName, recipientAvatarUrl = "") {
   const config       = getEmailConfig();
   const supportEmail = "info@altuverasafaris.com";
 
@@ -609,9 +641,9 @@ async function sendVerificationCode(email, code, fullName) {
   const result = await sendEmail(
     {
       to:      email,
-      subject: "🔐 Your Altuvera Verification Code",
-      html:    buildVerificationEmailHtml(code, fullName, supportEmail),
-      text:    `Your Altuvera verification code is: ${code}\n\nValid for 10 minutes. Do not share this code.`,
+      subject: `${code} - Your Altuvera verification code`,
+      html:    buildVerificationEmailHtml(code, fullName, supportEmail, email, recipientAvatarUrl),
+      text:    `Copy code: ${code}\n\nYour Altuvera verification code is: ${code}\n\nValid for 10 minutes. Do not share this code.`,
     },
     `✅ Verification code sent to ${email}`
   );
