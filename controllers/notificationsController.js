@@ -53,11 +53,28 @@ const toInt = (v, fb = 0) => {
 };
 
 const ADMIN_ROLES = ["admin", "manager"];
+const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png";
+const profileInitials = (name, email) => {
+  const words = String(name || "").trim().split(/\s+/).filter(Boolean);
+  if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
+  if (words.length) return words[0].slice(0, 2).toUpperCase();
+  return String(email || "U").trim().slice(0, 1).toUpperCase() || "U";
+};
+const profileHeader = (name, email, avatarUrl) => {
+  const safeAvatar = /^https:\/\//i.test(String(avatarUrl || "")) ? String(avatarUrl) : "";
+  const avatar = safeAvatar
+    ? '<img src="' + safeAvatar + '" width="54" height="54" alt="Recipient profile" style="display:block;width:54px;height:54px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.85);" />'
+    : '<table role="presentation" cellpadding="0" cellspacing="0" width="54" height="54" style="width:54px;height:54px;border-radius:50%;background:#d1fae5;"><tr><td align="center" valign="middle" style="font-weight:800;color:#065f46;font-family:Arial,sans-serif;">' + profileInitials(name, email) + '</td></tr></table>';
+  return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>' +
+    '<td width="64"><img src="' + EMAIL_LOGO_URL + '" width="54" height="54" alt="Altuvera Safaris logo" style="display:block;width:54px;height:54px;object-fit:contain;background:#fff;padding:4px;border-radius:12px;" /></td>' +
+    '<td style="padding:0 10px;color:#fff;font-family:Arial,sans-serif;"><p style="margin:0;font-size:18px;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-size:10px;letter-spacing:1px;">AFRICAN ADVENTURES</p></td>' +
+    '<td align="right" width="58">' + avatar + '</td></tr></table>';
+};
 
 const getAdminRecipients = async () => {
   try {
     const res = await query(
-      `SELECT id, email, full_name
+`SELECT id, email, full_name, avatar_url
          FROM users
         WHERE role = ANY($1)
           AND email IS NOT NULL AND email <> ''
@@ -95,7 +112,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
 
   try {
     const prefResult = await query(
-      "SELECT full_name, preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+      "SELECT full_name, avatar_url, preferences FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
       [recipientEmail],
     ).catch(() => ({ rows: [] }));
     const recipient = prefResult.rows?.[0] || {};
@@ -152,9 +169,11 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
       to: recipientEmail,
       subject: notif.title || "A message from Altuvera Safaris",
       replyTo: "info@altuverasafaris.com",
+      recipientName: recipient.full_name || recipientName || "",
+      recipientAvatarUrl: recipient.avatar_url || "",
       html: `<!doctype html><html lang="en"><body style="margin:0;background:#f8fafc;font-family:Arial,sans-serif;color:#0f172a;padding:24px 12px">
         <main style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden">
-          <header style="background:#064e3b;padding:22px 26px;color:#fff"><p style="margin:0;font-size:12px;letter-spacing:.12em;text-transform:uppercase;color:#a7f3d0">Altuvera Safaris</p><h1 style="margin:10px 0 0;font-size:22px">${title}</h1></header>
+          <header style="background:#064e3b;padding:18px 22px;color:#fff">${profileHeader(recipient.full_name || recipientName, recipientEmail, recipient.avatar_url)}<h1 style="margin:16px 0 0;font-size:22px">${title}</h1></header>
           <section style="padding:26px;line-height:1.7;font-size:15px"><p style="margin-top:0">${recipient.full_name ? `Hello ${escapeHtml(recipient.full_name)},` : "Hello,"}</p><p>${message}</p>${personalization}${action}</section>
           <footer style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6">This is an important account or travel message from Altuvera Safaris. Manage email preferences in your account settings.<br><a href="mailto:info@altuverasafaris.com" style="color:#047857">info@altuverasafaris.com</a></footer>
         </main></body></html>`,
@@ -185,6 +204,8 @@ const sendAdminEmail = async (subject, html) => {
       to:      a.email,
       subject,
       html: html.replace("{{name}}", a.full_name || "Admin"),
+      recipientName: a.full_name || "Admin",
+      recipientAvatarUrl: a.avatar_url || "",
     }).catch((e) => logger.warn("[Notifications] admin email failed:", e.message)),
   ));
 };
