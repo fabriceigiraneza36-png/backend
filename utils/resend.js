@@ -7,6 +7,7 @@
 
 const { Resend } = require('resend');
 const logger = require('./logger');
+const { isSafeProviderFailover } = require('./emailPolicy');
 
 let _client = null;
 
@@ -84,7 +85,7 @@ async function send({ to, subject, html, text, from, replyTo, cc, idempotencyKey
       err.provider = "resend";
       err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
       err.retryable = statusCode === 408 || statusCode === 429 || Boolean(statusCode && statusCode >= 500);
-      err.providerFailoverEligible = statusCode === 408 || statusCode === 429;
+      err.providerFailoverEligible = isSafeProviderFailover("resend", statusCode);
       err.deliveryUnknown = !err.definitiveRejected;
       err.idempotentRetrySafe = Boolean(idempotencyKey);
       throw err;
