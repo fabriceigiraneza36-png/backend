@@ -286,7 +286,7 @@ const buildSectionLabel = (text) => `
 // EMAIL TEMPLATES
 // ============================================================
 
-const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail = "", recipientAvatarUrl = "") => {
+const buildVerificationEmailHtml = (code, fullName, supportEmail) => {
   const normalizedCode = String(code ?? "").trim();
   if (!/^\d{6}$/.test(normalizedCode)) {
     throw new TypeError("Verification code must contain exactly six digits.");
@@ -645,7 +645,7 @@ async function sendEmail(mailOptions, logMessage) {
 // PUBLIC SENDING FUNCTIONS
 // ============================================================
 
-async function sendVerificationCode(email, code, fullName, recipientAvatarUrl = "") {
+async function sendVerificationCode(email, code, fullName) {
   const config = getEmailConfig();
   const supportEmail = "info@altuverasafaris.com";
   const normalizedCode = String(code ?? "").trim();
@@ -665,7 +665,7 @@ async function sendVerificationCode(email, code, fullName, recipientAvatarUrl = 
     {
       to: email,
       subject: `${normalizedCode} - Your Altuvera login code`,
-      html: buildVerificationEmailHtml(normalizedCode, fullName, supportEmail, email, recipientAvatarUrl),
+      html: buildVerificationEmailHtml(normalizedCode, fullName, supportEmail),
       text: `Your Altuvera Safaris login code is:\n\n${normalizedCode}\n\nEnter this code to sign in. It expires in 10 minutes. Never share this code.`,
     },
     `✅ Verification code sent to ${email}`
