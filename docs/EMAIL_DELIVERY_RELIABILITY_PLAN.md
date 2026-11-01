@@ -36,6 +36,17 @@ Recommended near-term:
 - Trade-off: Altuvera would own IP reputation, DNS, reverse DNS, feedback loops, abuse prevention, blocklist monitoring, TLS, server patching, and delivery operations. It may be less reliable than a managed relay until those are staffed and measured.
 - Decision: pilot in staging on a separate sending subdomain and dedicated IP only if the hosting provider permits outbound mail and supplies static IP plus PTR/rDNS. Do not route production OTPs through it until it beats the current baseline over a sustained test.
 
+### Posta — opt-in staging adapter only (not approved for production)
+
+- Upstream: https://github.com/goposta/posta
+- API docs: https://docs.goposta.dev/
+- The repository advertises a self-hosted Go API, PostgreSQL/Redis-backed async delivery, webhooks, suppression and campaign features.
+- Altuvera now has a guarded adapter in `utils/posta.js`, selected only with explicit `EMAIL_PROVIDER=posta` and both `POSTA_BASE_URL` and `POSTA_API_KEY`. It is deliberately excluded from automatic provider selection.
+- The adapter requires HTTPS outside localhost, refuses CC/BCC until the API contract supports them safely, and treats network/5xx delivery outcomes as uncertain because the public API does not document a send-idempotency key. It only marks a 429 response as a safe transient rejection.
+- Upstream API docs describe queued IDs but do not document a client-provided idempotency key; do not assume retries are duplicate-safe.
+- **License review required:** the GitHub repository's `LICENSE` file declares AGPL-3.0-or-later, while the hosted documentation site says Apache 2.0. This inconsistency must be resolved with the maintainer/legal review before adoption.
+- **Decision:** staging adapter only. Do not provision or configure production Posta, change production sender, or publish DNS until license, authentication, webhook signing, suppression, rate limiting, delivery events, and canary performance have all been verified. Current production remains Resend with failover disabled.
+
 ### Haraka — SMTP/MTA building block, not a complete replacement by itself
 - Project: https://github.com/haraka/Haraka
 - Documentation: https://haraka.github.io/
