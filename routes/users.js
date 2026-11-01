@@ -50,6 +50,7 @@ router.post("/register",    authLimiter,   auth.register);
 router.post("/login",       authLimiter,   auth.login);
 router.post("/verify-code", verifyLimiter, auth.verifyCode);
 router.post("/login/verify-factor", verifyLimiter, auth.completeLoginFactor);
+router.post("/login/factor", verifyLimiter, accountSecurity.loginWithFactor);
 router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
