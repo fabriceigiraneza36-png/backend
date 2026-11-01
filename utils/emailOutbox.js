@@ -125,7 +125,7 @@ async function attemptJob(id, deliver) {
       "sent_at = NOW(), updated_at = NOW() WHERE id = $1",
       [id, result && result.provider ? result.provider : job.provider, result && result.messageId ? result.messageId : null],
     );
-    logger.info("[EmailOutbox] Email delivered", { outboxId: id, provider: result && result.provider ? result.provider : job.provider });
+    logger.info("[EmailOutbox] Provider accepted email", { outboxId: id, provider: result && result.provider ? result.provider : job.provider });
     return { status: "sent", result };
   } catch (err) {
     const attempt = Number(job.attempts || 1);
