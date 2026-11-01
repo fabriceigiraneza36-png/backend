@@ -83,10 +83,12 @@ async function send({ to, subject, html, text, from, replyTo, cc, idempotencyKey
       err.originalError = error;
       err.statusCode = statusCode;
       err.provider = "resend";
-      err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500);
+      err.definitiveRejected = Boolean(statusCode && statusCode >= 400 && statusCode < 500 && statusCode !== 408);
+      // Resend retries are safe with the same provider idempotency key, even
+      // when a request timeout or 5xx leaves delivery status uncertain.
       err.retryable = statusCode === 408 || statusCode === 429 || Boolean(statusCode && statusCode >= 500);
       err.providerFailoverEligible = isSafeProviderFailover("resend", statusCode);
-      err.deliveryUnknown = !err.definitiveRejected;
+      err.deliveryUnknown = statusCode === 408 || !err.definitiveRejected;
       err.idempotentRetrySafe = Boolean(idempotencyKey);
       throw err;
     }
