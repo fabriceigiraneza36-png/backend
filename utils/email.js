@@ -507,36 +507,49 @@ const OTP_TITLES = {
 const buildOtpHtml = ({
   otp, recipientName = "", recipientEmail = "", recipientAvatarUrl = "",
   purpose = "verify", expiryMinutes = 10,
-}) =>
-  baseTemplate({
-    preheader:    `${String(otp)} — Your Altuvera Safaris ${purpose === "login" ? "sign-in" : "verification"} code. Expires in ${expiryMinutes} minutes.`,
-    title:        OTP_TITLES[purpose] || OTP_TITLES.verify,
-    subtitle:     "Enter the code below to continue. Keep it private.",
+}) => {
+  const code = String(otp ?? "").trim();
+  if (!/^\d{6}$/.test(code)) {
+    throw new TypeError("Altuvera email OTP must contain exactly six digits.");
+  }
+
+  const copyCodeUrl = FRONTEND_URL.replace(/\/+$/, "") + "/copy-code.html#" + encodeURIComponent(code);
+  const title = purpose === "login" ? "Your Altuvera Login Code" : (OTP_TITLES[purpose] || OTP_TITLES.verify);
+  const minutes = Number(expiryMinutes) || 10;
+  const body = [
+    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 18px;">',
+      '<tr><td align="center">',
+        '<div class="otp-box" style="background:#f0fdf4;border:2px solid #6ee7b7;border-radius:16px;padding:24px 18px;display:block;width:100%;max-width:360px;box-sizing:border-box;">',
+          '<p style="margin:0 0 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#6b7280;text-align:center;">Your verification code</p>',
+          '<span class="otp-code" aria-label="Six-digit verification code" style="font-family:Courier New,monospace;font-size:38px;font-weight:900;letter-spacing:8px;color:#047857;display:block;text-align:center;user-select:all;-webkit-user-select:all;white-space:nowrap;">' + esc(code) + '</span>',
+          '<p style="margin:12px 0 0;font-size:12.5px;color:#6b7280;text-align:center;">Expires in <strong style="color:#374151;">' + minutes + ' minutes</strong></p>',
+        '</div>',
+      '</td></tr>',
+    '</table>',
+    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:20px auto 8px;">',
+      '<tr><td align="center" bgcolor="#047857" style="border-radius:999px;background:#047857;">',
+        '<a href="' + esc(copyCodeUrl) + '" target="_blank" rel="noopener noreferrer" class="cta-btn" style="display:inline-block;padding:14px 36px;background:#047857;color:#ffffff!important;text-decoration:none;border-radius:999px;font-size:15px;font-weight:700;">Copy code</a>',
+      '</td></tr>',
+    '</table>',
+    '<p style="margin:8px 0 20px;font-size:12px;color:#6b7280;line-height:1.6;text-align:center;">Opens Altuvera’s secure copy page. Your email app may also provide its own Copy code shortcut.</p>',
+    '<div class="warn" style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;padding:14px 18px;margin:20px 0 0;">',
+      '<p style="margin:0;font-size:13px;color:#92400e;line-height:1.55;"><strong>Security reminder: Never share this code.</strong> ' + esc(APP_NAME) + ' staff will never ask for it.</p>',
+    '</div>',
+  ].join("");
+
+  return baseTemplate({
+    // Do not repeat the digits in hidden preheader text; keep one clear code
+    // in the subject, the visible HTML code block, and the plain-text code line.
+    preheader: "Your Altuvera Safaris one-time code. Expires in " + minutes + " minutes.",
+    title,
+    subtitle: "Enter the one-time code below to continue. Keep it private.",
     recipientName,
     recipientEmail,
     recipientAvatarUrl,
-    body: `
-      <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 24px;">
-        <tr><td align="center">
-          <div class="otp-box">
-            <p style="margin:0 0 12px;font-size:11px;font-weight:700;text-transform:uppercase;
-                        letter-spacing:2px;color:#6b7280;text-align:center;">Verification Code</p>
-            <span class="otp-code" aria-label="Verification code">${esc(String(otp))}</span>
-            <p style="margin:14px 0 0;font-size:12.5px;color:#9ca3af;text-align:center;">
-              Expires in <strong style="color:#374151;">${expiryMinutes} minutes</strong>
-            </p>
-          </div>
-        </td></tr>
-      </table>
-      <div class="warn">
-        <p style="margin:0;font-size:13px;color:#92400e;line-height:1.55;">
-          <strong>Security reminder: Never share this code.</strong> ${esc(APP_NAME)} staff will never ask for it.
-        </p>
-      </div>
-    `,
-    footerNote: `This code is valid for ${expiryMinutes} minutes. Need help? <a href="mailto:${SUPPORT_EMAIL}" style="color:#059669;">${SUPPORT_EMAIL}</a>`,
+    body,
+    footerNote: 'This code is valid for ' + minutes + ' minutes. Need help? <a href="mailto:' + esc(SUPPORT_EMAIL) + '" style="color:#059669;">' + esc(SUPPORT_EMAIL) + '</a>',
   });
-
+};
 const buildOtpText = ({ otp, purpose = "verify", expiryMinutes = 10 }) =>
   [
     String(otp),
@@ -551,23 +564,33 @@ const sendOtpEmail = async ({
   to, otp, recipientName = "", recipientEmail = "", recipientAvatarUrl = "",
   purpose = "verify", expiryMinutes = 10,
 }) => {
-  if (!to)  throw new Error("sendOtpEmail: 'to' is required");
-  if (!otp) throw new Error("sendOtpEmail: 'otp' is required");
+  if (!to) throw new Error("sendOtpEmail: 'to' is required");
+  const normalizedOtp = String(otp ?? "").trim();
+  if (!/^\d{6}$/.test(normalizedOtp)) {
+    throw new TypeError("sendOtpEmail: OTP must contain exactly six digits");
+  }
 
   const subjectFn = OTP_SUBJECTS[purpose] || OTP_SUBJECTS.verify;
   const idempotencyKey = crypto.createHash("sha256")
-    .update(["altuvera-otp", String(to).toLowerCase(), purpose, String(otp)].join("|"))
+    .update(["altuvera-otp", String(to).toLowerCase(), purpose, normalizedOtp].join("|"))
     .digest("hex");
+
   return sendEmail({
     to,
-    subject: subjectFn(otp),
-    html:    buildOtpHtml({ otp, recipientName, recipientEmail: recipientEmail || to, recipientAvatarUrl, purpose, expiryMinutes }),
-    text:    buildOtpText({ otp, recipientName, purpose, expiryMinutes }),
+    subject: subjectFn(normalizedOtp),
+    html: buildOtpHtml({
+      otp: normalizedOtp,
+      recipientName,
+      recipientEmail: recipientEmail || to,
+      recipientAvatarUrl,
+      purpose,
+      expiryMinutes,
+    }),
+    text: buildOtpText({ otp: normalizedOtp, recipientName, purpose, expiryMinutes }),
     idempotencyKey,
     ttlSeconds: Math.max(60, Number(expiryMinutes) * 60),
   });
 };
-
 const sendWelcomeEmail = async ({ to, recipientName = "", recipientAvatarUrl = "" }) => {
   if (!to) return;
   try {
