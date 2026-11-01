@@ -1,10 +1,19 @@
 /**
  * Welcome subscriber email — Altuvera Safaris branded
  */
-const welcomeSubscriberEmail = (email, name = null, interests = []) => {
+const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAvatarUrl = "") => {
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   const interestNames = [...new Set((Array.isArray(interests) ? interests : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 3);
   const safeFirstName = name ? escapeHtml(name.split(" ")[0]) : "";
+  const logoUrl = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/v1784310147/Copilot_20260711_113926_uxs6xi.png";
+  const avatarUrl = /^https:\/\//i.test(String(recipientAvatarUrl || "")) ? String(recipientAvatarUrl) : "";
+  const initialsSource = String(name || email || "U").trim().split(/\s+/).filter(Boolean);
+  const avatarInitials = initialsSource.length > 1
+    ? (initialsSource[0][0] + initialsSource[initialsSource.length - 1][0]).toUpperCase()
+    : (initialsSource[0] || "U").slice(0, 2).toUpperCase();
+  const avatarMarkup = avatarUrl
+    ? '<img src="' + escapeHtml(avatarUrl) + '" width="58" height="58" alt="Your profile" style="display:block;width:58px;height:58px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,.9);" />'
+    : '<table role="presentation" cellpadding="0" cellspacing="0" width="58" height="58" style="width:58px;height:58px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.9);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-weight:800;font-size:16px;color:#065f46;">' + escapeHtml(avatarInitials) + '</td></tr></table>';
   // Use BACKEND_URL for the unsubscribe API link
   const backendUrl     = process.env.BACKEND_URL    || 'https://backend-jd8f.onrender.com';
   const frontendUrl    = process.env.FRONTEND_URL   || 'https://www.altuverasafaris.com';
@@ -30,14 +39,19 @@ const welcomeSubscriberEmail = (email, name = null, interests = []) => {
 
           <!-- HEADER -->
           <tr>
-            <td style="background:linear-gradient(135deg,#15803D 0%,#16A34A 50%,#22C55E 100%);padding:48px 40px;text-align:center;">
-              <div style="font-size:48px;margin-bottom:16px;">🌿</div>
-              <h1 style="margin:0 0 8px;font-size:28px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">
-                Altuvera Safaris
-              </h1>
-              <p style="margin:0;font-size:13px;color:rgba(255,255,255,0.8);letter-spacing:1.5px;text-transform:uppercase;font-weight:600;">
-                True Adventures In High Places &amp; Deep Culture
-              </p>
+            <td style="background:linear-gradient(135deg,#022c22 0%,#047857 100%);padding:28px 30px;text-align:center;">
+              <table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%">
+                <tr>
+                  <td align="left" valign="middle" width="68">
+                    <img src="${escapeHtml(logoUrl)}" width="58" height="58" alt="Altuvera Safaris logo" style="display:block;width:58px;height:58px;object-fit:contain;border-radius:12px;background:#fff;padding:4px;" />
+                  </td>
+                  <td align="center" valign="middle">
+                    <h1 style="margin:0 0 6px;font-size:25px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">Altuvera Safaris</h1>
+                    <p style="margin:0;font-size:11px;color:#a7f3d0;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;">True Adventures In High Places &amp; Deep Culture</p>
+                  </td>
+                  <td align="right" valign="middle" width="66">${avatarMarkup}</td>
+                </tr>
+              </table>
             </td>
           </tr>
 
