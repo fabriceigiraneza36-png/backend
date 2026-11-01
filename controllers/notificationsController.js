@@ -60,13 +60,18 @@ const profileInitials = (name, email) => {
   if (words.length) return words[0].slice(0, 2).toUpperCase();
   return String(email || "U").trim().slice(0, 1).toUpperCase() || "U";
 };
+const escapeEmailAttribute = (value) => String(value || "").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[char]));
 const profileHeader = (name, email, avatarUrl) => {
-  const safeAvatar = /^https:\/\//i.test(String(avatarUrl || "")) ? String(avatarUrl) : "";
+  const rawAvatar = String(avatarUrl || "");
+  const safeAvatar = /^https:\/\//i.test(rawAvatar) ? escapeEmailAttribute(rawAvatar) : "";
+  const initials = escapeEmailAttribute(profileInitials(name, email).replace(/[^a-z0-9]/gi, "") || "U");
   const avatar = safeAvatar
     ? '<img src="' + safeAvatar + '" width="54" height="54" alt="Recipient profile" style="display:block;width:54px;height:54px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.85);" />'
-    : '<table role="presentation" cellpadding="0" cellspacing="0" width="54" height="54" style="width:54px;height:54px;border-radius:50%;background:#d1fae5;"><tr><td align="center" valign="middle" style="font-weight:800;color:#065f46;font-family:Arial,sans-serif;">' + profileInitials(name, email) + '</td></tr></table>';
+    : '<table role="presentation" cellpadding="0" cellspacing="0" width="54" height="54" style="width:54px;height:54px;border-radius:50%;background:#d1fae5;"><tr><td align="center" valign="middle" style="font-weight:800;color:#065f46;font-family:Arial,sans-serif;">' + initials + '</td></tr></table>';
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>' +
-    '<td width="64"><img src="' + EMAIL_LOGO_URL + '" width="54" height="54" alt="Altuvera Safaris logo" style="display:block;width:54px;height:54px;object-fit:contain;background:#fff;padding:4px;border-radius:12px;" /></td>' +
+    '<td width="64"><img src="' + escapeEmailAttribute(EMAIL_LOGO_URL) + '" width="54" height="54" alt="Altuvera Safaris logo" style="display:block;width:54px;height:54px;object-fit:contain;background:#fff;padding:4px;border-radius:12px;" /></td>' +
     '<td style="padding:0 10px;color:#fff;font-family:Arial,sans-serif;"><p style="margin:0;font-size:18px;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-size:10px;letter-spacing:1px;">AFRICAN ADVENTURES</p></td>' +
     '<td align="right" width="58">' + avatar + '</td></tr></table>';
 };
