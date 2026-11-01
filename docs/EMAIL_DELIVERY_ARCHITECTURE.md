@@ -26,6 +26,17 @@ The canonical path is:
 - Resend supports idempotency keys on the single-email endpoint. The documented retention window is 24 hours; the stale-job recovery logic uses a 23-hour safety window.
 - Do not automatically fail over to a different provider after a timeout, connection reset, permanent 4xx, or 5xx response. The remote provider may already have accepted the message and a second provider could create a duplicate. A fallback is eligible only for the narrow transient-rejection codes above, and only if the operator deliberately enables failover.
 
+## Optional Posta staging adapter
+
+- An opt-in adapter lives in `utils/posta.js`.
+- It is selected only when `EMAIL_PROVIDER=posta` is explicitly configured with `POSTA_BASE_URL` and `POSTA_API_KEY`; automatic selection intentionally remains Resend, then SendGrid, then approved SMTP.
+- Production must remain `EMAIL_PROVIDER=resend` with `EMAIL_FAILOVER_ENABLED=false` during evaluation.
+- The adapter uses Posta's documented `POST /api/v1/emails/send` endpoint and accepts the returned queue ID as provider acceptance, not inbox delivery.
+- Posta's public send endpoint does not document client idempotency keys or CC/BCC envelope support. The adapter therefore rejects CC/BCC explicitly and treats network/5xx outcomes as uncertain. Do not retry those through another provider.
+- The adapter has isolated unit tests (`npm run test:posta-adapter`) but has not been connected to a Posta instance or tested against live DNS/sending infrastructure.
+- The upstream repository declares AGPL-3.0-or-later in its `LICENSE`, while its hosted documentation describes Apache 2.0. Resolve this licensing discrepancy before any deployment or distribution.
+- No Posta server has been provisioned and no Posta environment variables have been added to Render.
+
 ## Encrypted outbox
 
 The `email_outbox` table stores the message body encrypted using AES-256-GCM. The encryption key must be base64 encoding of exactly 32 random bytes.
