@@ -299,6 +299,7 @@ async function sendEmailDirect(payload, options = {}) {
           err.statusCode = responseCode || null;
           err.definitiveRejected = responseCode >= 400;
           err.retryable = responseCode >= 400 && responseCode < 500;
+          err.providerFailoverEligible = [421, 450, 451, 452, 454].includes(responseCode);
           // No SMTP response can mean the remote server accepted DATA before the
           // connection was interrupted. Pause instead of resending elsewhere.
           err.deliveryUnknown = !err.definitiveRejected;
@@ -309,10 +310,10 @@ async function sendEmailDirect(payload, options = {}) {
       }
     } catch (err) {
       lastError = err;
-      // Only fail over when the provider explicitly rejected the request.
-      // Network errors and 5xx responses are ambiguous and may already have
-      // been accepted; blindly switching providers can duplicate OTPs.
-      if (!failoverEnabled || err.definitiveRejected !== true) {
+      // Fail over only for known transient rejection responses. Authentication,
+      // malformed-message and permanent 4xx errors must not hide a broken
+      // provider configuration. Network/5xx outcomes can be ambiguous.
+      if (!failoverEnabled || err.providerFailoverEligible !== true || err.deliveryUnknown === true) {
         throw err;
       }
       logger.warn("[Email] Provider rejected request; trying configured fallback", {
