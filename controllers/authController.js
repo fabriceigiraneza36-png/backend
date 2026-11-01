@@ -143,19 +143,41 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
 
 const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
   try {
-    // Social identity proves control of the provider account, but Altuvera
-    // requires a fresh email OTP for every sign-in as the account's baseline
-    // verification step. No session token is issued from this function.
-    const otp = generateOTP();
-    const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
-    const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
-    await sendOtpEmail({
-      to: user.email,
-      recipientName: user.full_name || "",
-      otp,
-      purpose: isNew ? "verify" : "login",
-      expiryMinutes: OTP_EXPIRY_MINUTES,
-    });
+    if (!user || user.is_active === false) {
+      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+    }
+
+    // Social identity is not an Altuvera session. A fresh email OTP must be
+    // accepted before a token is issued. Reuse a still-live code so a retry
+    // after a redirect/modal refresh does not invalidate the first email.
+    let codeExpiresAt = user.code_expiry ? new Date(user.code_expiry) : null;
+    const hasActiveCode = Boolean(
+      user.verification_code &&
+      codeExpiresAt &&
+      codeExpiresAt.getTime() > Date.now()
+    );
+
+    if (!hasActiveCode) {
+      if (isRateLimited(user)) {
+        return res.status(429).json({
+          success: false,
+          message: `Wait ${getRemainingCooldown(user)} second(s) before requesting a new code.`,
+        });
+      }
+      const otp = generateOTP();
+      const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+      codeExpiresAt = otpResult.rows[0]?.code_expiry
+        ? new Date(otpResult.rows[0].code_expiry)
+        : new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+      await sendOtpEmail({
+        to: user.email,
+        recipientName: user.full_name || "",
+        otp,
+        purpose: isNew ? "verify" : "login",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
+    }
+
     return res.status(statusCode).json({
       success: true,
       requiresEmailVerification: true,
@@ -259,8 +281,6 @@ const upsertSocialUser = async ({
                          THEN EXCLUDED.auth_provider
                          ELSE users.auth_provider
                        END,
-       is_verified   = true,
-       is_active     = true,
        last_login    = NOW()
      RETURNING *, (xmax = 0) AS is_new_row`,
     [e, n, avatar || null, pid, provider, phone || null, bio || null],
@@ -514,27 +534,9 @@ exports.verifyCode = async (req, res) => {
       });
     }
 
-    // If the account has an authenticator enrolled, email OTP is the first
-    // factor only. Do not issue a session until the second factor is verified.
-    const security = await query("SELECT totp_enabled,recovery_codes_remaining FROM user_security WHERE user_id=$1", [user.id]).catch(() => ({rows:[]}));
-    // A missing passkey table must never suppress an already-enrolled TOTP factor.
-    const passkeyCount = await query("SELECT COUNT(*) AS count FROM user_passkeys WHERE user_id=$1", [user.id]).catch(() => ({rows:[{count:0}]}));
-    const factorMethods = [...(security.rows[0]?.totp_enabled ? ["totp"] : []), ...(Number(security.rows[0]?.recovery_codes_remaining || 0) > 0 ? ["recovery_code"] : []), ...(Number(passkeyCount.rows[0]?.count || 0) > 0 ? ["passkey"] : [])];
-    if (factorMethods.length) {
-      // Consume the email OTP before issuing a one-time second-factor challenge.
-      // This prevents replaying the same email code to mint multiple challenges.
-      await query("UPDATE users SET verification_code=NULL,code_expiry=NULL,code_attempts=0 WHERE id=$1",[user.id]);
-      await query("DELETE FROM login_factor_challenges WHERE user_id=$1",[user.id]);
-      const challengeId = require("crypto").randomBytes(24).toString("hex");
-      await query(`INSERT INTO login_factor_challenges(user_id,challenge_hash,expires_at)
-        VALUES($1,$2,NOW()+INTERVAL '5 minutes')`, [user.id, require("crypto").createHash("sha256").update(challengeId).digest("hex")]);
-      return res.json({
-        success:true,
-        requiresSecondFactor:true,
-        message:"Email verified. Complete your additional account verification.",
-        data:{challengeToken:require("jsonwebtoken").sign({id:user.id,type:"login_factor",jti:challengeId},process.env.JWT_SECRET,{expiresIn:"5m"}),methods:factorMethods,fullName:user.full_name||"",username:user.username||user.full_name||"",email:user.email}
-      });
-    }
+    // Email, Google and GitHub sign-in are completed by the verified email
+    // code itself. Enrolled passkeys/authenticator/recovery codes are separate
+    // standalone sign-in choices in the login screen, not a second prompt here.
 
     const isFirstVerification = !user.is_verified;
 
