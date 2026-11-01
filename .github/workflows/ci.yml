@@ -19,4 +19,5 @@ jobs:
       - run: npm install --no-audit --no-fund
       - run: npm run verify:all
       - run: npm run test:email-policy
+      - run: npm run test:posta-adapter
       - run: npm run test:security
