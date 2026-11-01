@@ -18,12 +18,12 @@ function makeProviderError(message, statusCode = null, responseBody = null) {
   const error = new Error(String(message || "Posta delivery failed").slice(0, 500));
   error.provider = "posta";
   error.statusCode = Number(statusCode) || null;
-  error.definitiveRejected = Boolean(error.statusCode && error.statusCode >= 400 && error.statusCode < 500);
+  error.definitiveRejected = Boolean(error.statusCode && error.statusCode >= 400 && error.statusCode < 500 && error.statusCode !== 408);
   error.retryable = error.statusCode === 429;
   error.providerFailoverEligible = isSafeProviderFailover("posta", error.statusCode);
   // Posta's public send API does not document an idempotency-key contract.
   // A missing response or 5xx may mean the remote queue accepted the email.
-  error.deliveryUnknown = !error.definitiveRejected;
+  error.deliveryUnknown = error.statusCode === 408 || !error.definitiveRejected;
   error.idempotentRetrySafe = false;
   if (responseBody && typeof responseBody === "object") {
     error.providerErrorCode = String(responseBody.code || responseBody.error_code || "").slice(0, 100);
