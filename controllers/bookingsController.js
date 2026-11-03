@@ -1254,11 +1254,12 @@ exports.getAll = async (req, res, next) => {
       const t = `%${String(search).trim()}%`;
       conds.push(
         `(b.full_name ILIKE $${pi}
-          OR b.email ILIKE $${pi}
-          OR b.booking_number ILIKE $${pi}
-          OR b.phone ILIKE $${pi}
-          OR b.destination_name ILIKE $${pi}
-          OR b.country_name ILIKE $${pi})`,
+  OR b.email ILIKE $${pi}
+  OR b.booking_number ILIKE $${pi}
+  OR b.id::text ILIKE $${pi}
+  OR b.phone ILIKE $${pi}
+  OR b.destination_name ILIKE $${pi}
+  OR b.country_name ILIKE $${pi}`,
       );
       params.push(t);
       pi++;
