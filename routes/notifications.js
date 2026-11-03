@@ -412,7 +412,8 @@ router.get(
           if (id != null && String(id).trim()) profileIds.add(String(id));
           if (email && String(email).trim()) profileEmails.add(String(email).trim().toLowerCase());
         }
-        const metadataId = metadata.userId || metadata.user_id || metadata.senderId || metadata.sender_id || row.user_id;
+        const metadataId = metadata.userId || metadata.user_id || metadata.senderId || metadata.sender_id
+          || row.user_id || (String(row.sender_type || '').toLowerCase() === 'user' ? row.sender_id : null);
         const metadataEmail = metadata.userEmail || metadata.user_email || metadata.email || row.user_email;
         if (metadataId != null && String(metadataId).trim()) profileIds.add(String(metadataId));
         if (metadataEmail && String(metadataEmail).trim()) profileEmails.add(String(metadataEmail).trim().toLowerCase());
@@ -436,7 +437,10 @@ router.get(
 
       const findProfile = (candidate, metadata, row) => {
         const id = candidate?.id ?? candidate?.userId ?? candidate?.user_id
-          ?? (!candidate?.email ? (metadata.userId ?? metadata.user_id ?? metadata.senderId ?? metadata.sender_id ?? row.user_id) : null);
+          ?? (!candidate?.email
+            ? (metadata.userId ?? metadata.user_id ?? metadata.senderId ?? metadata.sender_id
+              ?? row.user_id ?? (String(row.sender_type || '').toLowerCase() === 'user' ? row.sender_id : null))
+            : null);
         const email = candidate?.email ?? metadata.userEmail ?? metadata.user_email
           ?? metadata.email ?? row.user_email;
         return (id != null ? profilesById.get(String(id)) : null)
