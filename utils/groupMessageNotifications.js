@@ -34,12 +34,12 @@ async function notifyGroupMembersOfMessage({
       .trim().toLowerCase().replace(/[ -]+/g, "_");
     const isTravellerSender = ["user", "traveller", "traveler"].includes(senderKind);
     const actualSenderId = senderId ?? message.senderId ?? message.sender_id ?? null;
-    const senderName = String(
-      message.senderName || message.sender_name ||
-      (senderKind === "admin" ? "Altuvera Team" : "A group member"),
-    ).trim() || "A group member";
+    const rawSenderName = String(message.senderName || message.sender_name || "").trim();
     const senderAvatar = message.senderAvatar || message.sender_avatar || message.avatarUrl || null;
     const senderUsername = message.senderUsername || message.sender_username || null;
+    const genericSenderName = /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|registered\s+travell?er|user|unknown\s+member)$/i.test(rawSenderName);
+    const senderName = (genericSenderName ? senderUsername : rawSenderName) ||
+      (senderKind === "admin" ? "Altuvera Team" : "A group member");
     const body = String(message.body || message.message || "").trim();
     const cleanGroupName = String(groupName || "Group conversation").trim();
     const groupConversationId = String(conversationId);
