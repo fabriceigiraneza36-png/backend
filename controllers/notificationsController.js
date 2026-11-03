@@ -22,11 +22,8 @@
 const { query }  = require("../config/db");
 const logger     = require("../utils/logger");
 
-/* ── Push (optional) ──────────────────────────────────────────────────────── */
-let pushUtility = null
-try {
-  pushUtility = require("../utils/push")
-} catch { /* web-push not installed */ }
+/* ── Browser push delivery ────────────────────────────────────────────────── */
+const { deliverNotificationPush } = require("../utils/pushDelivery");
 
 /* ── Email (optional) ──────────────────────────────────────────────────────── */
 let sendEmail = null;
@@ -552,6 +549,8 @@ const notifyAdminsImmediately = async ({
   });
 
   emitNotification(null, { ...notif, target_scope: "admin" });
+  deliverNotificationPush(notif, { targetScope: "admin", actionUrl, title, message, priority })
+    .catch((err) => logger.warn("[Notifications] Admin browser push failed:", err.message));
 
   const adminPanelUrl =
     process.env.ADMIN_PANEL_URL ||
@@ -693,6 +692,10 @@ const notif = await insertNotification({
      });
 
     emitNotification(null, { ...notif, target_scope: "admin" });
+    deliverNotificationPush(notif, {
+      targetScope: "role", targetRole: "admin",
+      actionUrl: "/notifications", title, message, priority: "high",
+    }).catch((err) => logger.warn("[Notifications] Aggregated admin browser push failed:", err.message));
 
     await sendAdminEmail(
       title,
@@ -793,54 +796,12 @@ const createNotificationInternal = async ({
   // 2) Realtime
   emitNotification(req, notif);
 
-  // 2b) Web Push for the same audience as the in-app notification.
-  // Each browser subscription is scoped to the authenticated account in admin_id.
-  if (pushUtility && (
-    targetScope === "individual" ||
-    targetScope === "all" ||
-    targetScope === "admin" ||
-    (targetScope === "role" && targetRole)
-  )) {
-    ;(async () => {
-      try {
-        let sql = "SELECT ps.endpoint, ps.p256dh, ps.auth FROM push_subscriptions ps"
-        const params = []
-        if (targetScope === "individual") {
-          if (userId) {
-            params.push(userId)
-            sql += ` WHERE ps.admin_id = $1`
-          } else if (userEmail) {
-            params.push(userEmail)
-            sql += ` WHERE LOWER(ps.admin_email) = LOWER($1)`
-          } else {
-            return
-          }
-        } else if (targetScope === "admin") {
-          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = ANY($1)"
-          params.push(["admin", "manager"])
-        } else if (targetScope === "role" && targetRole) {
-          sql += " JOIN users u ON u.id = ps.admin_id WHERE u.role = $1"
-          params.push(targetRole)
-        }
-        const { rows } = await query(sql, params)
-        if (!rows.length) return
-        const isAdminNotice = targetScope === "admin" || (targetScope === "role" && ["admin", "manager"].includes(targetRole))
-        const frontendBase = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/$/, "")
-        const requestedUrl = actionUrl || (isAdminNotice ? "/notifications" : "/notifications")
-        const url = /^https?:\/\//i.test(requestedUrl) ? requestedUrl : `${frontendBase}${requestedUrl.startsWith("/") ? requestedUrl : `/${requestedUrl}`}`
-        await pushUtility.sendPushToSubscriptions(rows, {
-          title: title || "Altuvera Safaris",
-          body: message || "",
-          icon: "/favicon.ico",
-          badge: "/favicon.ico",
-          data: { url, id: notif.id },
-          requireInteraction: priority === "high",
-        })
-      } catch (err) {
-        logger.warn("[Notifications] Web Push delivery failed:", err.message)
-      }
-    })()
-  }
+  // 2b) Deliver the durable notification to subscribed browsers, even when
+  // the recipient is away from the website. The server-side user delivery
+  // preference never disables admin/manager browser alerts.
+  deliverNotificationPush(notif, {
+    targetScope, targetRole, userId, userEmail, actionUrl, title, message, priority,
+  }).catch((err) => logger.warn("[Notifications] Web Push delivery failed:", err.message));
 
   // 3) Email the user (only for individual user notifications)
   if (!skipUserEmail && targetScope === "individual" && userEmail) {
@@ -1116,25 +1077,9 @@ const broadcastNotification = async ({
   });
   emitNotification(null, notif);
 
-  if (pushUtility && (targetScope === "admin" || (targetScope === "role" && targetRole === "admin"))) {
-    ;(async () => {
-      try {
-        const { rows } = await query(
-          `SELECT endpoint, p256dh, auth FROM push_subscriptions`
-        )
-        if (rows.length) {
-          await pushUtility.sendPushToSubscriptions(rows, {
-            title: title || "Altuvera Admin",
-            body: message || "",
-            icon: "/favicon.ico",
-            data: { url: actionUrl || "/notifications", id: notif.id },
-          })
-        }
-      } catch {
-        /* non-fatal */
-      }
-    })()
-  }
+  deliverNotificationPush(notif, {
+    targetScope, targetRole, actionUrl, title, message, priority,
+  }).catch((err) => logger.warn("[Notifications] Broadcast browser push failed:", err.message));
 
   return notif;
 };

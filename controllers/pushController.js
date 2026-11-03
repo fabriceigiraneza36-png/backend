@@ -7,6 +7,7 @@ const crypto = require('crypto')
 const { query } = require('../config/db')
 const pushUtil  = require('../utils/push')
 const logger    = require('../utils/logger')
+const { getUserBrowserPushEnabled, setUserBrowserPushEnabled } = require('../utils/pushSettings')
 
 /* ─────────────────────────────────────────────────────────────────────────────
    POST /api/push/subscribe
@@ -111,6 +112,52 @@ exports.mySubscriptions = async (req, res) => {
   } catch (err) {
     logger.error('[Push] mySubscriptions failed:', err.message)
     return res.status(500).json({ success: false, message: 'Failed to load subscriptions.' })
+  }
+}
+
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Admin-managed end-user browser push delivery.
+   Admin/manager notifications are always delivered when subscribed; this
+   switch only controls browser pushes to regular Altuvera users.
+   ───────────────────────────────────────────────────────────────────────────── */
+exports.userDeliveryStatus = async (_req, res) => {
+  try {
+    return res.json({ success: true, enabled: await getUserBrowserPushEnabled() })
+  } catch (err) {
+    logger.error('[Push] user delivery status failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Could not load browser notification delivery status.' })
+  }
+}
+
+exports.getUserDeliverySettings = async (_req, res) => {
+  try {
+    return res.json({
+      success: true,
+      enabled: await getUserBrowserPushEnabled(),
+      adminAlwaysEnabled: true,
+    })
+  } catch (err) {
+    logger.error('[Push] admin settings read failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Could not load user browser notification settings.' })
+  }
+}
+
+exports.updateUserDeliverySettings = async (req, res) => {
+  try {
+    if (typeof req.body?.enabled !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'enabled must be a boolean.' })
+    }
+    const updated = await setUserBrowserPushEnabled(req.body.enabled, req.admin?.id || req.user?.id || null)
+    return res.json({
+      success: true,
+      enabled: Boolean(updated.enabled),
+      updatedAt: updated.updated_at,
+      adminAlwaysEnabled: true,
+    })
+  } catch (err) {
+    logger.error('[Push] admin settings update failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Could not update user browser notification settings.' })
   }
 }
 
