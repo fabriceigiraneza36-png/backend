@@ -1074,14 +1074,7 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
         "    SELECT 1",
         "    FROM bookings b",
         "    WHERE b.package_id = pb.package_id",
-        "      AND (",
-        "        (NULLIF(pb.booking_ref, '') IS NOT NULL AND b.booking_number = pb.booking_ref)",
-        "        OR (",
-        "          COALESCE(b.user_id, 0) = COALESCE(pb.user_id, 0)",
-        "          AND LOWER(COALESCE(b.email, '')) = LOWER(COALESCE(pb.guest_email, ''))",
-        "          AND ABS(EXTRACT(EPOCH FROM (COALESCE(b.created_at, NOW()) - COALESCE(pb.created_at, NOW())))) < 60",
-        "        )",
-        "      )",
+        "      AND b.booking_number = COALESCE(NULLIF(pb.booking_ref, ''), 'LEGACY-PKG-' || pb.id::text)",
         "  )",
         "ON CONFLICT DO NOTHING"
       ].join('\n')
