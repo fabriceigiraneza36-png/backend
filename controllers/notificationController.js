@@ -575,7 +575,20 @@ const adminCreateNotification = async (req, res) => {
       ],
     );
 
-    return res.status(201).json({ success: true, data: result.rows[0] });
+    const notification = result.rows[0];
+    deliverNotificationPush(notification, {
+      targetScope: target_scope,
+      targetRole: target_role || null,
+      userId: user_id || null,
+      userEmail: user_email || null,
+      actionUrl: action_url || null,
+      title: title.trim(),
+      message: message.trim(),
+      priority,
+    }).catch((pushError) => {
+      logger.warn("[Admin Notifications] Web Push delivery failed:", pushError.message);
+    });
+    return res.status(201).json({ success: true, data: notification });
   } catch (err) {
     logger.error("[Admin Notifications] create error:", err.message);
     return res.status(500).json({ success: false, message: "Server error" });
