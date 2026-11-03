@@ -2657,7 +2657,10 @@ function setupMessageSockets(io) {
         // are not actionable in the registered-user messaging portal.
         await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
         const convCheck = await query(
-          `SELECT c.id, c.user_id, c.group_id, u.deleted_at AS user_deleted_at
+          `SELECT c.id, c.user_id, c.group_id,
+                  u.full_name AS user_full_name,
+                  u.email AS user_email,
+                  u.deleted_at AS user_deleted_at
              FROM conversations c
              LEFT JOIN users u ON u.id = c.user_id
             WHERE c.id = $1 AND c.deleted_at IS NULL`,
@@ -2696,8 +2699,24 @@ function setupMessageSockets(io) {
             message: shaped,
           });
 
-          // The live message event is sufficient here; no separate email or
-          // notification is generated for an admin reply.
+          // Persist an in-app notification and dispatch browser push so the
+          // traveller can receive the reply while away from Altuvera. This helper
+          // deliberately skips email and does not create an admin-side alert.
+          try {
+            const { notifyAdminMessage } = require("../controllers/notificationsController");
+            await notifyAdminMessage(
+              conversationId,
+              {
+                id: userId,
+                full_name: currentConversation.user_full_name || "",
+                email: currentConversation.user_email || "",
+              },
+              adminUser,
+              String(body).trim(),
+            );
+          } catch (notificationError) {
+            logger.warn("[Socket] Admin reply traveller notification failed:", notificationError.message);
+          }
         }
 
         // Acknowledge to sender
