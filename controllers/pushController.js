@@ -227,6 +227,25 @@ exports.test = async (req, res) => {
       let providerStatus = null
       let providerError = null
 
+      // Remove legacy/incomplete records before attempting Web Push. These were
+      // observed in production logs and cannot be sent without both encryption keys.
+      if (!subscription.p256dh || !subscription.auth) {
+        providerFailed += 1
+        providerError = 'Stored browser subscription is incomplete; this browser must sync a fresh subscription.'
+        await query(
+          'DELETE FROM push_subscriptions WHERE id=$1 AND admin_id=$2',
+          [subscription.id, adminId],
+        ).catch((deleteErr) => logger.warn('[Push] Could not remove incomplete subscription:', deleteErr.message))
+        await query(
+          'UPDATE push_test_deliveries SET provider_accepted=FALSE, provider_status=NULL, provider_error=$1, updated_at=NOW() ' +
+          'WHERE test_id=$2 AND admin_id=$3 AND subscription_id=$4',
+          [providerError, testId, adminId, subscription.id],
+        )
+        continue
+      }
+      let providerStatus = null
+      let providerError = null
+
       try {
         const payload = {
           title: 'Altuvera Admin — Browser Test',
@@ -292,7 +311,7 @@ exports.testStatus = async (req, res) => {
     if (!Number.isSafeInteger(adminId) || adminId <= 0) {
       return res.status(401).json({ success: false, message: 'Admin authentication is required.' })
     }
-    if (!/^[0-9a-f-]{36}$/i.test(testId)) {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(testId)) {
       return res.status(400).json({ success: false, message: 'Invalid test identifier.' })
     }
 
@@ -343,7 +362,7 @@ exports.testReceipt = async (req, res) => {
     const normalizedSubscriptionId = Number(subscriptionId)
 
     if (
-      !/^[0-9a-f-]{36}$/i.test(String(testId || '')) ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(testId || '')) ||
       !Number.isSafeInteger(normalizedAdminId) ||
       normalizedAdminId <= 0 ||
       !Number.isSafeInteger(normalizedSubscriptionId) ||
