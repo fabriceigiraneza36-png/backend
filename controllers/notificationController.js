@@ -3,6 +3,7 @@
 
 const { query } = require("../config/db");
 const logger    = require("../utils/logger");
+const { deliverNotificationPush } = require("../utils/pushDelivery");
 
 /* ═══════════════════════════════════════════════════════════════
    HELPERS
@@ -750,7 +751,7 @@ const createNotification = async ({
        $10,$11,$12,
        $13,$14,$15,$16,
        $17,$18
-     ) RETURNING id`,
+     ) RETURNING *`,
     [
       userId, userEmail, senderType, senderId, senderName,
       type, category, title, message,
@@ -759,8 +760,18 @@ const createNotification = async ({
       JSON.stringify(metadata), expiresAt,
     ],
   );
+  const notification = result.rows[0];
 
-  return result.rows[0];
+  // Legacy callers use this controller too. Route every newly-created alert
+  // through the same browser push dispatcher so no notification path silently
+  // skips external delivery. Admin preferences never disable admin delivery.
+  deliverNotificationPush(notification, {
+    targetScope, targetRole, userId, userEmail, actionUrl, title, message, priority,
+  }).catch((error) => {
+    logger.warn("[Notifications] Legacy browser push delivery failed:", error.message);
+  });
+
+  return notification;
 };
 
 /**
