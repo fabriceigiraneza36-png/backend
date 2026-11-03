@@ -1327,10 +1327,11 @@ router.post('/:id/info-requests', requireAdmin, async (req, res) => {
       const found = await db('SELECT id, email, full_name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [targetEmail]);
       recipient = found.rows[0] || null;
     }
-    const userId = recipient?.id || null;
-    const email = recipient?.email || targetEmail;
-    const name = String(body.target_name || recipient?.full_name || '').trim().slice(0, 255);
-    if (!email) return res.status(400).json({ success: false, error: 'The selected traveller has no email address.' });
+    if (!recipient) return res.status(404).json({ success: false, error: 'No traveller account matches this email or user ID. Information forms can only be sent to registered travellers.' });
+    const userId = recipient.id;
+    const email = recipient.email || targetEmail;
+    const name = String(body.target_name || recipient.full_name || '').trim().slice(0, 255);
+    if (!email) return res.status(400).json({ success: false, error: 'The selected traveller account has no email address.' });
 
     const allowedTypes = new Set(['text','email','tel','number','textarea','select','radio','checkbox','date','file']);
     const safeFields = fields.map((field, index) => ({
