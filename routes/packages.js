@@ -441,14 +441,18 @@ router.get('/stats', requireAdmin, async (req, res) => {
       SELECT COUNT(*)::INTEGER AS total,
              COUNT(*) FILTER (WHERE is_published = true)::INTEGER AS published,
              COUNT(*) FILTER (WHERE is_featured = true)::INTEGER AS featured,
-             COALESCE(SUM(booking_count), 0)::INTEGER AS bookings
+             (
+               (SELECT COUNT(*) FROM bookings b INNER JOIN packages p ON p.id = b.package_id)
+               +
+               (SELECT COUNT(*) FROM package_bookings pb INNER JOIN packages p ON p.id = pb.package_id)
+             )::INTEGER AS bookings
       FROM packages
     `)
     const pendingResult = await db(`
       SELECT (
-        (SELECT COUNT(*) FROM bookings WHERE booking_type = 'package' AND status = 'pending')
+        (SELECT COUNT(*) FROM bookings b INNER JOIN packages p ON p.id = b.package_id WHERE b.status = 'pending')
         +
-        (SELECT COUNT(*) FROM package_bookings WHERE status = 'pending')
+        (SELECT COUNT(*) FROM package_bookings pb INNER JOIN packages p ON p.id = pb.package_id WHERE pb.status = 'pending')
       )::INTEGER AS pending
     `).catch(() => ({ rows: [{ pending: 0 }] }))
     const row = result.rows[0]
