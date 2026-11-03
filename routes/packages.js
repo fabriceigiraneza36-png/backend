@@ -439,10 +439,11 @@ router.get('/stats', requireAdmin, async (req, res) => {
       FROM packages
     `)
     const pendingResult = await db(`
-      SELECT COUNT(*)::INTEGER AS pending
-      FROM bookings
-      WHERE booking_type = 'package'
-        AND status = 'pending'
+      SELECT (
+        (SELECT COUNT(*) FROM bookings WHERE booking_type = 'package' AND status = 'pending')
+        +
+        (SELECT COUNT(*) FROM package_bookings WHERE status = 'pending')
+      )::INTEGER AS pending
     `).catch(() => ({ rows: [{ pending: 0 }] }))
     const row = result.rows[0]
     const pending = Number(pendingResult.rows?.[0]?.pending || 0)
@@ -920,6 +921,8 @@ router.post('/:id/book', authenticate, async (req, res) => {
       `UPDATE packages p
           SET booking_count = (
             SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id
+          ) + (
+            SELECT COUNT(*)::INTEGER FROM package_bookings pb WHERE pb.package_id = p.id
           )
         WHERE p.id = $1`,
       [p.id],
@@ -1224,6 +1227,10 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
     ])
 
     const total = Number(countRes.rows[0]?.total || 0)
+    await db(
+      'UPDATE packages SET booking_count = $1 WHERE id = $2 AND COALESCE(booking_count, 0) <> $1',
+      [total, pkgId],
+    ).catch((countErr) => logger.warn('[Packages] Package booking count sync skipped:', countErr.message))
     return res.json({
       success: true,
       data: dataRes.rows,
