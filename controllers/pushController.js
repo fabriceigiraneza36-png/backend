@@ -24,12 +24,19 @@ exports.subscribe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'endpoint, p256dh, and auth are required.' })
     }
 
+    // A browser endpoint belongs to the currently signed-in admin only.
+    // Reassign it on account changes rather than leaving a previous admin subscribed.
+    await query(
+      `DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id<>$2`,
+      [endpoint, accountId],
+    )
+
     const existing = await query(
       `UPDATE push_subscriptions
-         SET p256dh=$1, auth=$2, user_agent=$3, updated_at=NOW()
-       WHERE endpoint=$4 AND admin_id=$5
+         SET admin_email=$1, p256dh=$2, auth=$3, user_agent=$4, updated_at=NOW()
+       WHERE endpoint=$5 AND admin_id=$6
        RETURNING id`,
-      [p256dh, auth, userAgent || null, endpoint, accountId],
+      [accountEmail, p256dh, auth, userAgent || null, endpoint, accountId],
     )
 
     let subId
@@ -353,9 +360,6 @@ exports.testReceipt = async (req, res) => {
     const delivery = rows[0]
     if (!delivery || Number(delivery.admin_id) !== normalizedAdminId) {
       return res.status(404).json({ success: false, message: 'Push test delivery was not found.' })
-    }
-    if (!delivery.provider_accepted) {
-      return res.status(409).json({ success: false, message: 'This push was not accepted by the push provider.' })
     }
     if (Date.now() - new Date(delivery.created_at).getTime() > 10 * 60 * 1000) {
       return res.status(410).json({ success: false, message: 'The browser receipt window has expired.' })
