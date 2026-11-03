@@ -17,8 +17,5 @@ router.get('/user-delivery-status', asyncHandler(ctrl.userDeliveryStatus))
 router.get('/user-delivery-settings', protect, adminOnly, asyncHandler(ctrl.getUserDeliverySettings))
 router.patch('/user-delivery-settings', protect, adminOnly, asyncHandler(ctrl.updateUserDeliverySettings))
 router.get('/my-subscriptions', protect, asyncHandler(ctrl.mySubscriptions))
-router.post('/test-receipt',   asyncHandler(ctrl.testReceipt))
-router.post('/test',            protect, adminOnly, asyncHandler(ctrl.test))
-router.get('/test/:testId',      protect, adminOnly, asyncHandler(ctrl.testStatus))
 
 module.exports = router
