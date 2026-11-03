@@ -25,8 +25,8 @@ exports.subscribe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'endpoint, p256dh, and auth are required.' })
     }
 
-    // A browser endpoint belongs to the currently signed-in admin only.
-    // Reassign it on account changes rather than leaving a previous admin subscribed.
+    // Each signed-in Altuvera account owns its browser endpoint. Reassign it on
+    // account changes so a previous account cannot receive alerts for this user.
     await query(
       `DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id<>$2`,
       [endpoint, accountId],
