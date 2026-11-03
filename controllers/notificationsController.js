@@ -469,10 +469,15 @@ const normalizeNotificationUser = (user) => {
   if (!user || typeof user !== "object") return null;
   const id = user.id ?? user.userId ?? user.user_id ?? null;
   const email = user.email ?? null;
-  const name = user.full_name || user.fullName || user.name || email || "Traveller";
+  const username = user.username || user.user_name || null;
+  const suppliedName = user.full_name || user.fullName || user.name || null;
+  const isGenericName = /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|registered\s+travell?er|user|unknown\s+member)$/i.test(String(suppliedName || "").trim());
+  const name = (!suppliedName || isGenericName)
+    ? (username || email || suppliedName || "Traveller")
+    : suppliedName;
   const avatarUrl = user.avatar_url || user.avatarUrl || user.profile_image_url || user.picture || null;
   if (!id && !email && !avatarUrl) return null;
-  return { id, email, name, avatarUrl };
+  return { id, email, name, username, avatarUrl };
 };
 
 const resolveNotificationUser = async (user, metadata = {}) => {
@@ -483,10 +488,11 @@ const resolveNotificationUser = async (user, metadata = {}) => {
   // against the first user's metadata.userId.
   const userId = identity?.id || (!identity?.email ? (metadata.userId || metadata.user_id || null) : null);
   const email = identity?.email || metadata.userEmail || metadata.user_email || metadata.email || null;
-  if ((!identity || !identity.avatarUrl || !identity.name || identity.name === identity.email) && (userId || email)) {
+  const genericName = identity && /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|registered\s+travell?er|user|unknown\s+member)$/i.test(String(identity.name || "").trim());
+  if ((!identity || !identity.avatarUrl || !identity.name || identity.name === identity.email || genericName) && (userId || email)) {
     try {
       const result = await query(
-        `SELECT id, email, full_name, avatar_url FROM users
+        `SELECT id, email, full_name, username, avatar_url FROM users
           WHERE ${userId ? "id = $1" : "LOWER(email) = LOWER($1)"}
           LIMIT 1`,
         [userId || email],
