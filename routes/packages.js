@@ -1080,6 +1080,16 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
       ].join('\n')
       await db(legacyBackfillSql, [pkgId])
     }
+    // Keep package list cards and dashboard counters aligned with imported requests.
+    await db(
+      `UPDATE packages p
+          SET booking_count = (
+            SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id
+          )
+        WHERE p.id = $1`,
+      [pkgId],
+    ).catch((countError) => logger.warn('[Packages] Legacy booking count reconciliation skipped:', countError.message))
+
     const where = ['b.package_id = $1']
     const vals  = [pkgId]
 
