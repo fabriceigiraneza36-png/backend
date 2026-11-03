@@ -364,7 +364,7 @@ router.get(
 
       const [dataRes, countRes, unreadRes] = await Promise.all([
         query(
-          `SELECT id, user_id, user_email, sender_type, sender_name,
+          `SELECT id, user_id, user_email, sender_type, sender_id, sender_name,
                   type, category, title, message,
                   action_url, action_label, priority, image_url, metadata,
                   is_read, read_at, reaction, reply_text, admin_reply,
