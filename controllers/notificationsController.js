@@ -887,7 +887,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
   const traveller = booking?.full_name || booking?.email || "A traveller";
   const packageTitle = pkg?.title || "a package";
   const hasSpecialRequests = Boolean(booking?.special_requests);
-  const actionPath = `/bookings?bookingId=${encodeURIComponent(booking?.id || "")}&bookingType=package`;
+  const actionPath = `/packages?packageId=${encodeURIComponent(booking?.package_id || booking?.packageId || pkg?.id || "")}&requestId=${encodeURIComponent(booking?.id || "")}`;
 
   // Package requests must also create a traveller-facing notification. The
   // booking route already sends the receipt email, but previously this helper
