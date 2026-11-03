@@ -2657,12 +2657,13 @@ function setupMessageSockets(io) {
         // are not actionable in the registered-user messaging portal.
         await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
         const convCheck = await query(
-          `SELECT c.id, c.user_id, c.group_id,
+          `SELECT c.id, c.user_id, c.group_id, g.name AS group_name,
                   u.full_name AS user_full_name,
                   u.email AS user_email,
                   u.deleted_at AS user_deleted_at
              FROM conversations c
              LEFT JOIN users u ON u.id = c.user_id
+             LEFT JOIN message_groups g ON g.id = c.group_id
             WHERE c.id = $1 AND c.deleted_at IS NULL`,
           [conversationId]
         );
@@ -2717,6 +2718,17 @@ function setupMessageSockets(io) {
           } catch (notificationError) {
             logger.warn("[Socket] Admin reply traveller notification failed:", notificationError.message);
           }
+        } else if (currentConversation.group_id) {
+          // Group conversations have multiple traveller recipients; notify each
+          // member through the same persisted in-app + browser-push pipeline.
+          await notifyGroupMembersOfMessage({
+            groupId: currentConversation.group_id,
+            conversationId,
+            groupName: currentConversation.group_name || "Group conversation",
+            message: shaped,
+            senderId: adminUser.id || null,
+            senderType: "admin",
+          });
         }
 
         // Acknowledge to sender
