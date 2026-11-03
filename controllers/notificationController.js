@@ -3,6 +3,7 @@
 
 const { query } = require("../config/db");
 const logger    = require("../utils/logger");
+const { deliverNotificationPush } = require("../utils/pushDelivery");
 
 /* ═══════════════════════════════════════════════════════════════
    HELPERS
@@ -574,7 +575,18 @@ const adminCreateNotification = async (req, res) => {
       ],
     );
 
-    return res.status(201).json({ success: true, data: result.rows[0] });
+    const notification = result.rows[0];
+    deliverNotificationPush(notification, {
+      targetScope: target_scope,
+      targetRole: target_role || null,
+      userId: user_id || null,
+      userEmail: user_email || null,
+      actionUrl: action_url || null,
+      title: title.trim(),
+      message: message.trim(),
+      priority,
+    }).catch((pushError) => logger.warn("[Admin Notifications] Web Push delivery failed:", pushError.message));
+    return res.status(201).json({ success: true, data: notification });
   } catch (err) {
     logger.error("[Admin Notifications] create error:", err.message);
     return res.status(500).json({ success: false, message: "Server error" });
@@ -750,7 +762,7 @@ const createNotification = async ({
        $10,$11,$12,
        $13,$14,$15,$16,
        $17,$18
-     ) RETURNING id`,
+     ) RETURNING *`,
     [
       userId, userEmail, senderType, senderId, senderName,
       type, category, title, message,
@@ -760,7 +772,18 @@ const createNotification = async ({
     ],
   );
 
-  return result.rows[0];
+  const notification = result.rows[0];
+  deliverNotificationPush(notification, {
+    targetScope,
+    targetRole,
+    userId,
+    userEmail,
+    actionUrl,
+    title,
+    message,
+    priority,
+  }).catch((pushError) => logger.warn("[Notifications] Web Push delivery failed:", pushError.message));
+  return notification;
 };
 
 /**
