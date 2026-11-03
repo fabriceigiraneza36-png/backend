@@ -243,8 +243,6 @@ exports.test = async (req, res) => {
         )
         continue
       }
-      let providerStatus = null
-      let providerError = null
 
       try {
         const payload = {
