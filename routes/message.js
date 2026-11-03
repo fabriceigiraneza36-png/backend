@@ -608,11 +608,17 @@ async function getActiveRegisteredUser(userId) {
   if (userId == null || userId === "") return null;
   await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   const result = await query(
-    "SELECT id, full_name, email, avatar_url FROM users " +
+    "SELECT id, full_name, username, email, avatar_url FROM users " +
     "WHERE id::text = $1::text AND is_active = TRUE AND deleted_at IS NULL LIMIT 1",
     [userId],
   );
   return result.rows[0] || null;
+}
+
+const displayUserName = (...values) => {
+  const candidates = values.map(value => String(value || "").trim()).filter(Boolean);
+  const generic = /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|registered\s+travell?er|user|unknown\s+member)$/i;
+  return candidates.find(value => !generic.test(value)) || candidates[0] || "Traveller";
 }
 
 async function ensureTravelerChannels(userId) {
@@ -1338,7 +1344,7 @@ router.post("/conversations", protect, async (req, res) => {
          RETURNING *`,
         [
           userId,
-          accountProfile.full_name || null,
+          displayUserName(accountProfile.full_name, accountProfile.username),
           accountProfile.email || null,
           channel || "live_chat",
           conversationSubject,
@@ -1381,7 +1387,7 @@ router.post("/conversations", protect, async (req, res) => {
         senderId: req.user.id,
         senderName: callerIsAdmin
           ? (req.user.full_name || req.user.name || "Altuvera Support")
-          : (accountProfile.full_name || "Registered traveler"),
+          : displayUserName(accountProfile.full_name, accountProfile.username, "Registered traveler"),
         senderEmail: callerIsAdmin ? (req.user.email || null) : accountProfile.email,
         senderAvatar: callerIsAdmin ? (req.user.avatar_url || null) : accountProfile.avatar_url,
         body: initialMessage,
@@ -1390,10 +1396,19 @@ router.post("/conversations", protect, async (req, res) => {
     }
 
     // The admin inbox needs both a durable notification and a live conversation event.
+    if (callerIsAdmin && savedMessage && conv.user_id) {
+      try {
+        const { notifyAdminMessage } = require("../controllers/notificationsController");
+        await notifyAdminMessage(conv.id, accountProfile, req.user, initialMessage);
+      } catch (notificationError) {
+        logger.warn("[Messages] Initial admin message notification failed:", notificationError.message);
+      }
+    }
+
     if (!callerIsAdmin && savedMessage) {
       const io = req.app.get("io");
       const shapedMessage = reshapeMessage(savedMessage);
-      const senderName = savedMessage.sender_name || req.user.full_name || req.user.name || "Traveler";
+      const senderName = displayUserName(savedMessage.sender_name, accountProfile.full_name, accountProfile.username, req.user.full_name, req.user.username, req.user.name, "Traveler");
       const senderEmail = req.user.email || "";
       if (io) {
         io.to("admins").to("admin-room").emit("msg:new-from-user", {
@@ -1431,7 +1446,8 @@ router.post("/conversations", protect, async (req, res) => {
           priority: "high",
           targetScope: "role",
           targetRole: "admin",
-          metadata: { conversationId: conv.id, messageId: savedMessage.id, senderName, senderEmail, destinationName: destination || null },
+          actor: accountProfile,
+          metadata: { conversationId: conv.id, messageId: savedMessage.id, senderName, senderEmail, senderUsername: accountProfile.username || null, destinationName: destination || null },
         });
       } catch (notifyError) {
         logger.warn("[Messages] Admin message notification failed:", notifyError.message);
@@ -2049,7 +2065,9 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     const convCheck = await query(
       `SELECT c.id, c.user_id, c.group_id, c.session_id, c.guest_name, c.guest_email, c.subject, c.status,
               c.conversation_type, c.channel, c.booking_id, c.booking_number,
-              u.deleted_at AS user_deleted_at
+              u.deleted_at AS user_deleted_at,
+              u.full_name AS user_full_name, u.username AS user_username,
+              u.email AS user_email, u.avatar_url AS user_avatar
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
         WHERE c.id = $1 AND c.deleted_at IS NULL`,
@@ -2172,7 +2190,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
         }
 
         if (!isAdminReq) {
-          const senderName = msg.sender_name || req.user.full_name || req.user.name || "Traveler";
+          const senderName = displayUserName(msg.sender_name, senderProfile.full_name, senderProfile.username, req.user.full_name, req.user.username, req.user.name, "Traveler");
           const senderEmail = req.user.email || "";
           io.to("admins").to("admin-room").emit("msg:new-from-user", {
           senderType: "user",
@@ -2186,7 +2204,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
             guestAvatar: msg.sender_avatar || req.user.avatar_url || null,
           });
           const current = await query(
-            `SELECT c.*, u.full_name AS user_full_name, u.email AS user_email, u.avatar_url AS user_avatar
+            `SELECT c.*, u.full_name AS user_full_name, u.username AS user_username, u.email AS user_email, u.avatar_url AS user_avatar
                FROM conversations c LEFT JOIN users u ON u.id = c.user_id
               WHERE c.id = $1 LIMIT 1`,
             [id],
@@ -2218,11 +2236,11 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
       if (!isAdminReq) {
         const { createNotificationInternal } = require("../controllers/notificationsController");
         const profileResult = await query(
-          `SELECT id, full_name, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1`,
+          `SELECT id, full_name, username, email, avatar_url FROM users WHERE id::text = $1::text LIMIT 1`,
           [req.user.id],
         );
         const profile = profileResult.rows[0] || {};
-        const senderName = profile.full_name || req.user.full_name || req.user.name || msg.sender_name || "Registered traveler";
+        const senderName = displayUserName(profile.full_name, profile.username, req.user.full_name, req.user.username, req.user.name, msg.sender_name, "Registered traveler");
         const senderEmail = profile.email || req.user.email || "";
         await createNotificationInternal({
           userId: null,
@@ -2238,18 +2256,37 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
           priority: "high",
           targetScope: "role",
           targetRole: "admin",
+          actor: profile,
           metadata: {
             conversationId: Number(id),
             messageId: msg.id,
             userId: profile.id || req.user.id,
             senderName,
             senderEmail,
+            senderUsername: profile.username || req.user.username || null,
             senderAvatar: profile.avatar_url || null,
           },
         });
       }
     } catch (notificationError) {
       logger.warn("[Messages] Incoming-message admin notification failed:", notificationError.message);
+    }
+
+    // Deliver a durable notification to the traveller for admin replies too.
+    // This allows subscribed browsers to receive the message while Altuvera is closed.
+    if (isAdminReq && conv.user_id) {
+      try {
+        const { notifyAdminMessage } = require("../controllers/notificationsController");
+        await notifyAdminMessage(id, {
+          id: conv.user_id,
+          full_name: conv.user_full_name,
+          username: conv.user_username,
+          email: conv.user_email,
+          avatar_url: conv.user_avatar,
+        }, senderProfile || req.user, String(body).trim());
+      } catch (notificationError) {
+        logger.warn("[Messages] Outgoing-message user notification failed:", notificationError.message);
+      }
     }
 
     if (conv.group_id) {
@@ -2725,7 +2762,7 @@ function setupMessageSockets(io) {
         if (!profile) {
           return ack?.({ success: false, error: "This account is no longer available. Please sign in again." });
         }
-        const senderName = profile.full_name || socketUser.full_name || socketUser.name || "Registered traveler";
+        const senderName = displayUserName(profile.full_name, profile.username, socketUser.full_name, socketUser.username, socketUser.name, "Registered traveler");
         const senderEmail = profile.email || socketUser.email || "";
 
         const msg = await insertMessage({
