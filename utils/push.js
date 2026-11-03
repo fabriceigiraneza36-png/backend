@@ -45,9 +45,29 @@ function getVapidPublicKey () {
 
 async function sendPushToSubscription (subscription, payload) {
   if (!pushReady) throw new Error('Web Push is not initialized. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on the backend.')
-  if (!subscription) throw new Error('Push subscription is missing.')
+  if (!subscription?.endpoint) throw new Error('Push subscription endpoint is missing.')
+
+  // PostgreSQL stores p256dh/auth as columns, while web-push requires them
+  // under subscription.keys. Accept either shape so every caller uses the
+  // same safe normalization before encrypting and sending a payload.
+  const keys = subscription.keys || {
+    p256dh: subscription.p256dh,
+    auth: subscription.auth,
+  }
+  if (!keys?.p256dh || !keys?.auth) {
+    throw new Error('Push subscription is incomplete. Sync this browser again to store its encryption keys.')
+  }
+  const normalizedSubscription = {
+    endpoint: subscription.endpoint,
+    expirationTime: subscription.expirationTime ?? null,
+    keys: {
+      p256dh: keys.p256dh,
+      auth: keys.auth,
+    },
+  }
+
   try {
-    const result = await webpush.sendNotification(subscription, JSON.stringify(payload))
+    const result = await webpush.sendNotification(normalizedSubscription, JSON.stringify(payload))
     return result
   } catch (err) {
     if (err.statusCode === 410 || err.statusCode === 404) {

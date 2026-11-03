@@ -1081,7 +1081,7 @@ exports.verifyEmail = async (req, res) => {
           actionUrl: `/bookings/${verified.id}`,
           actionLabel: "Review booking",
           priority: "high",
-          metadata: { bookingId: verified.id, bookingNumber: detail?.booking_number || verified.booking_number, destinationName: detail?.destination_name, travellerName: detail?.full_name, email: detail?.email, emailVerifiedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
+          metadata: { bookingId: verified.id, bookingNumber: detail?.booking_number || verified.booking_number, destinationName: detail?.destination_name, travellerName: detail?.full_name, email: detail?.email, userId: detail?.user_id || detail?.userId || null, emailVerifiedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
         });
       } catch (notificationError) {
         logger.warn("[Bookings] verified-email admin notification failed:", notificationError.message);
@@ -1979,7 +1979,7 @@ exports.updateStatus = async (req, res, next) => {
           actionUrl: `/bookings/${id}`,
           actionLabel: "Prepare itinerary",
           priority: "high",
-          metadata: { bookingId: id, bookingNumber: full?.booking_number, destinationName: full?.destination_name, travellerName: full?.full_name, email: full?.email, confirmedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
+          metadata: { bookingId: id, bookingNumber: full?.booking_number, destinationName: full?.destination_name, travellerName: full?.full_name, email: full?.email, userId: full?.user_id || full?.userId || null, confirmedAt: new Date().toISOString(), nextAction: "prepare_itinerary" },
         });
       } catch (notificationError) {
         logger.warn("[Bookings] itinerary preparation notification failed:", notificationError.message);

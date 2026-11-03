@@ -482,7 +482,7 @@ const resolveNotificationUser = async (user, metadata = {}) => {
   const source = user || metadata.user || metadata.actor || null;
   let identity = normalizeNotificationUser(source);
   const userId = identity?.id || metadata.userId || metadata.user_id || null;
-  const email = identity?.email || metadata.userEmail || metadata.user_email || null;
+  const email = identity?.email || metadata.userEmail || metadata.user_email || metadata.email || null;
   if ((!identity || !identity.avatarUrl || !identity.name || identity.name === identity.email) && (userId || email)) {
     try {
       const result = await query(
@@ -491,7 +491,7 @@ const resolveNotificationUser = async (user, metadata = {}) => {
           LIMIT 1`,
         [userId || email],
       );
-      if (result.rows[0]) identity = normalizeNotificationUser({ ...result.rows[0], ...source });
+      if (result.rows[0]) identity = normalizeNotificationUser({ ...(source || {}), ...result.rows[0] });
     } catch (err) {
       logger.warn("[Notifications] Could not resolve notification user profile:", err.message);
     }
