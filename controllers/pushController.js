@@ -3,6 +3,7 @@
 // Push Notifications Controller
 // ═══════════════════════════════════════════════════════════════════════════════
 
+const crypto = require('crypto')
 const { query } = require('../config/db')
 const pushUtil  = require('../utils/push')
 const logger    = require('../utils/logger')
@@ -110,50 +111,270 @@ exports.mySubscriptions = async (req, res) => {
    POST /api/push/test
    Sends a test push notification to all of current admin's subscriptions.
    ───────────────────────────────────────────────────────────────────────────── */
+// Browser receipts prove that the service worker received the push and that
+// showNotification() resolved. Push-provider acceptance alone is not delivery.
+let testDeliverySchemaPromise = null
+
+async function ensureTestDeliverySchema () {
+  if (!testDeliverySchemaPromise) {
+    testDeliverySchemaPromise = (async () => {
+      await query('CREATE TABLE IF NOT EXISTS push_test_deliveries (\n' +
+        'id BIGSERIAL PRIMARY KEY,\n' +
+        'test_id UUID NOT NULL,\n' +
+        'admin_id INTEGER NOT NULL,\n' +
+        'subscription_id INTEGER NOT NULL,\n' +
+        'provider_accepted BOOLEAN NOT NULL DEFAULT FALSE,\n' +
+        'provider_status INTEGER,\n' +
+        'provider_error TEXT,\n' +
+        'browser_received_at TIMESTAMPTZ,\n' +
+        'created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n' +
+        'updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),\n' +
+        'UNIQUE (test_id, subscription_id)\n' +
+        ')')
+      await query('CREATE INDEX IF NOT EXISTS idx_push_test_deliveries_admin_test ' +
+        'ON push_test_deliveries (admin_id, test_id)')
+      await query("DELETE FROM push_test_deliveries WHERE created_at < NOW() - INTERVAL '30 days'").catch(() => {})
+    })().catch((err) => {
+      testDeliverySchemaPromise = null
+      throw err
+    })
+  }
+  return testDeliverySchemaPromise
+}
+
+function receiptTokenFor (testId, subscriptionId, adminId) {
+  const secret = process.env.PUSH_RECEIPT_SECRET || process.env.JWT_SECRET
+  if (!secret) throw new Error('Push receipt signing secret is not configured.')
+  return crypto.createHmac('sha256', String(secret))
+    .update(String(testId) + ':' + String(subscriptionId) + ':' + String(adminId))
+    .digest('hex')
+}
+
+function safeReceiptTokenMatch (supplied, expected) {
+  if (!/^[a-f0-9]{64}$/i.test(String(supplied || ''))) return false
+  const left = Buffer.from(String(supplied), 'hex')
+  const right = Buffer.from(expected, 'hex')
+  return left.length === right.length && crypto.timingSafeEqual(left, right)
+}
+
+/* POST /api/push/test — send a real push and track browser receipts. */
 exports.test = async (req, res) => {
   try {
-    const adminId = req.admin?.id || req.user?.id || 0
+    const adminId = Number(req.admin?.id || req.user?.id)
+    if (!Number.isSafeInteger(adminId) || adminId <= 0) {
+      return res.status(401).json({ success: false, message: 'Admin authentication is required.' })
+    }
+
+    await ensureTestDeliverySchema()
     const { rows } = await query(
-      `SELECT endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1`,
+      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1 ORDER BY updated_at DESC',
       [adminId],
     )
+
     if (!rows.length) {
-      return res.status(400).json({ success: false, message: 'No push subscriptions found for your account. Enable push notifications first.', sent: 0, total: 0 })
+      return res.status(400).json({
+        success: false,
+        message: 'No browser subscriptions are registered for this admin. Re-enable or sync push notifications in this browser first.',
+        total: 0,
+        providerAccepted: 0,
+        browserReceived: 0,
+      })
     }
 
-    const publicKey = pushUtil.getVapidPublicKey()
-    if (!publicKey) {
-      return res.status(503).json({ success: false, message: 'Web Push is not configured on the backend. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY environment variables, then redeploy the backend.', sent: 0, total: rows.length })
+    if (!pushUtil.getVapidPublicKey()) {
+      return res.status(503).json({
+        success: false,
+        message: 'Web Push is not configured on the backend. Stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY values are required.',
+        total: rows.length,
+        providerAccepted: 0,
+        browserReceived: 0,
+      })
     }
 
-    const payload = {
-      title: 'Altuvera Admin — Test Push',
-      body: 'This is a test notification. Push is working!',
-      icon: '/favicon.ico',
-      data: { url: '/notifications' },
+    if (!(process.env.PUSH_RECEIPT_SECRET || process.env.JWT_SECRET)) {
+      return res.status(503).json({
+        success: false,
+        message: 'Browser receipt verification is not configured on the backend.',
+        total: rows.length,
+        providerAccepted: 0,
+        browserReceived: 0,
+      })
     }
 
-    const results = await pushUtil.sendPushToSubscriptions(rows, payload)
-    const success = results.filter(r => r.success).length
+    const testId = crypto.randomUUID()
+    await Promise.all(rows.map((subscription) => query(
+      'INSERT INTO push_test_deliveries (test_id, admin_id, subscription_id) VALUES ($1, $2, $3)',
+      [testId, adminId, subscription.id],
+    )))
 
-    const failed = results.filter(r => !r.success).length
-    logger.info(`[Push] Test push result for admin ${adminId}: ${success}/${rows.length} accepted by push services`)
-    return res.status(success === rows.length ? 200 : success > 0 ? 207 : 502).json({
-      success: success === rows.length,
-      sent: success,
+    const backendBase = String(process.env.BACKEND_URL || 'https://backend-jd8f.onrender.com')
+      .replace(/\/+$/, '')
+      .replace(/\/api$/, '')
+    const receiptUrl = backendBase + '/api/push/test-receipt'
+
+    let providerAccepted = 0
+    let providerFailed = 0
+
+    for (const subscription of rows) {
+      let accepted = false
+      let providerStatus = null
+      let providerError = null
+
+      try {
+        const payload = {
+          title: 'Altuvera Admin — Browser Test',
+          body: 'This is a real push test. Your browser received the notification request.',
+          icon: '/favicon.ico',
+          badge: '/favicon.ico',
+          tag: 'altuvera-admin-test-' + testId + '-' + subscription.id,
+          data: {
+            url: '/notifications',
+            testId,
+            subscriptionId: subscription.id,
+            adminId,
+            receiptToken: receiptTokenFor(testId, subscription.id, adminId),
+            receiptUrl,
+          },
+        }
+
+        const result = await pushUtil.sendPushToSubscription(subscription, payload)
+        accepted = true
+        providerStatus = Number(result && result.statusCode) || 201
+        providerAccepted += 1
+      } catch (err) {
+        providerError = String((err && err.message) || 'Push provider rejected the subscription.')
+        providerStatus = Number(err && err.statusCode) || null
+        providerFailed += 1
+
+        if (providerStatus === 404 || providerStatus === 410) {
+          await query('DELETE FROM push_subscriptions WHERE id=$1 AND admin_id=$2', [subscription.id, adminId])
+            .catch((deleteErr) => logger.warn('[Push] Could not remove expired subscription:', deleteErr.message))
+        }
+      }
+
+      await query(
+        'UPDATE push_test_deliveries SET provider_accepted=$1, provider_status=$2, provider_error=$3, updated_at=NOW() ' +
+        'WHERE test_id=$4 AND admin_id=$5 AND subscription_id=$6',
+        [accepted, providerStatus, providerError, testId, adminId, subscription.id],
+      )
+    }
+
+    logger.info('[Push] Browser test ' + testId + ' for admin ' + adminId +
+      ': provider accepted ' + providerAccepted + '/' + rows.length + '; browser receipts pending.')
+
+    return res.status(200).json({
+      success: true,
+      testId,
       total: rows.length,
-      failed,
-      message: success === rows.length
-        ? `Push service accepted ${success}/${rows.length} notifications. This confirms provider acceptance, not guaranteed OS display.`
-        : `Push delivery failed for ${failed}/${rows.length} subscriptions. Check backend logs for VAPID mismatch, expired subscription (404/410), or provider errors.`,
-      results: results.map(r => ({
-        success: r.success,
-        statusCode: r.statusCode || r.result?.statusCode || null,
-        error: r.success ? undefined : (r.error || 'Push provider rejected the subscription; inspect backend logs for the specific cause.'),
-      })),
+      providerAccepted,
+      providerFailed,
+      browserReceived: 0,
+      message: 'Push requests have been processed. Waiting for each browser service worker to confirm receipt.',
     })
   } catch (err) {
     logger.error('[Push] test failed:', err.message)
-    return res.status(500).json({ success: false, message: 'Test push failed.' })
+    return res.status(500).json({ success: false, message: err.message || 'Test push failed.' })
+  }
+}
+
+/* GET /api/push/test/:testId — authenticated browser receipt status. */
+exports.testStatus = async (req, res) => {
+  try {
+    const adminId = Number(req.admin?.id || req.user?.id)
+    const testId = String(req.params.testId || '')
+    if (!Number.isSafeInteger(adminId) || adminId <= 0) {
+      return res.status(401).json({ success: false, message: 'Admin authentication is required.' })
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(testId)) {
+      return res.status(400).json({ success: false, message: 'Invalid test identifier.' })
+    }
+
+    await ensureTestDeliverySchema()
+    const { rows } = await query(
+      'SELECT COUNT(*)::int AS total, ' +
+      'COUNT(*) FILTER (WHERE provider_accepted)::int AS provider_accepted, ' +
+      'COUNT(*) FILTER (WHERE NOT provider_accepted)::int AS provider_failed, ' +
+      'COUNT(*) FILTER (WHERE browser_received_at IS NOT NULL)::int AS browser_received, ' +
+      'COUNT(*) FILTER (WHERE provider_accepted AND browser_received_at IS NULL)::int AS awaiting_browser_receipt ' +
+      'FROM push_test_deliveries WHERE test_id=$1 AND admin_id=$2',
+      [testId, adminId],
+    )
+
+    const summary = rows[0] || {}
+    const total = Number(summary.total || 0)
+    if (!total) {
+      return res.status(404).json({ success: false, message: 'This test was not found for the signed-in admin.' })
+    }
+
+    const providerAccepted = Number(summary.provider_accepted || 0)
+    const providerFailed = Number(summary.provider_failed || 0)
+    const browserReceived = Number(summary.browser_received || 0)
+    const awaitingBrowserReceipt = Number(summary.awaiting_browser_receipt || 0)
+
+    return res.json({
+      success: true,
+      testId,
+      total,
+      providerAccepted,
+      providerFailed,
+      browserReceived,
+      awaitingBrowserReceipt,
+      status: browserReceived === total ? 'browser_confirmed' : providerAccepted > 0 ? 'awaiting_browser_receipt' : 'failed',
+      message: browserReceived + ' of ' + total + ' browser(s) confirmed the notification display request.',
+    })
+  } catch (err) {
+    logger.error('[Push] test status failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Could not verify browser delivery.' })
+  }
+}
+
+/* POST /api/push/test-receipt — HMAC-signed callback from the service worker. */
+exports.testReceipt = async (req, res) => {
+  try {
+    const { testId, subscriptionId, adminId, receiptToken } = req.body || {}
+    const normalizedAdminId = Number(adminId)
+    const normalizedSubscriptionId = Number(subscriptionId)
+
+    if (
+      !/^[0-9a-f-]{36}$/i.test(String(testId || '')) ||
+      !Number.isSafeInteger(normalizedAdminId) ||
+      normalizedAdminId <= 0 ||
+      !Number.isSafeInteger(normalizedSubscriptionId) ||
+      normalizedSubscriptionId <= 0
+    ) {
+      return res.status(400).json({ success: false, message: 'Invalid browser receipt.' })
+    }
+
+    await ensureTestDeliverySchema()
+    const { rows } = await query(
+      'SELECT admin_id, provider_accepted, created_at FROM push_test_deliveries WHERE test_id=$1 AND subscription_id=$2',
+      [testId, normalizedSubscriptionId],
+    )
+    const delivery = rows[0]
+    if (!delivery || Number(delivery.admin_id) !== normalizedAdminId) {
+      return res.status(404).json({ success: false, message: 'Push test delivery was not found.' })
+    }
+    if (!delivery.provider_accepted) {
+      return res.status(409).json({ success: false, message: 'This push was not accepted by the push provider.' })
+    }
+    if (Date.now() - new Date(delivery.created_at).getTime() > 10 * 60 * 1000) {
+      return res.status(410).json({ success: false, message: 'The browser receipt window has expired.' })
+    }
+
+    const expectedToken = receiptTokenFor(testId, normalizedSubscriptionId, normalizedAdminId)
+    if (!safeReceiptTokenMatch(receiptToken, expectedToken)) {
+      return res.status(403).json({ success: false, message: 'Invalid browser receipt signature.' })
+    }
+
+    await query(
+      'UPDATE push_test_deliveries SET browser_received_at=COALESCE(browser_received_at, NOW()), updated_at=NOW() ' +
+      'WHERE test_id=$1 AND subscription_id=$2 AND admin_id=$3',
+      [testId, normalizedSubscriptionId, normalizedAdminId],
+    )
+
+    return res.json({ success: true, browserReceived: true })
+  } catch (err) {
+    logger.error('[Push] browser receipt failed:', err.message)
+    return res.status(500).json({ success: false, message: 'Browser receipt could not be recorded.' })
   }
 }
