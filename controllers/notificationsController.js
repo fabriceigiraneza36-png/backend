@@ -783,19 +783,25 @@ const createNotificationInternal = async ({
   // displays the actual profile name instead of a generic sender label.
   // Preserve pre-aggregated multi-user notifications unchanged.
   const hasGroupedUsers = Array.isArray(metadata.users) && metadata.users.length > 1;
+  const isTravellerSender = String(senderType || "").toLowerCase() === "user";
+  const identityMetadata = {
+    ...metadata,
+    userId: metadata.userId || metadata.user_id || (isTravellerSender ? senderId : null),
+    userEmail: metadata.userEmail || metadata.user_email || (isTravellerSender ? metadata.senderEmail || metadata.sender_email : null),
+  };
   const hasIdentityHint = Boolean(
-    actor || metadata.user || metadata.actor || metadata.profile ||
-    metadata.userId || metadata.user_id || metadata.userEmail || metadata.user_email
+    actor || identityMetadata.user || identityMetadata.actor || identityMetadata.profile ||
+    identityMetadata.userId || identityMetadata.userEmail
   );
   if (targetScope !== "individual" && hasIdentityHint && !hasGroupedUsers) {
-    const identity = await resolveNotificationUser(actor, metadata);
+    const identity = await resolveNotificationUser(actor, identityMetadata);
     if (identity) {
       notificationMetadata = {
-        ...metadata,
+        ...identityMetadata,
         user: identity,
         users: [identity],
-        userId: identity.id || metadata.userId || metadata.user_id || null,
-        userName: identity.name || metadata.userName || metadata.user_name || null,
+        userId: identity.id || identityMetadata.userId || null,
+        userName: identity.name || identityMetadata.userName || identityMetadata.user_name || null,
       };
       notificationImageUrl = identity.avatarUrl || imageUrl;
     }
