@@ -519,11 +519,11 @@ const buildOtpHtml = ({
   purpose = "verify", expiryMinutes = 10,
 }) => {
   const code = String(otp ?? "").trim();
-  if (!/^\\d{6}$/.test(code)) {
+  if (!/^\d{6}$/.test(code)) {
     throw new TypeError("Altuvera email OTP must contain exactly six digits.");
   }
 
-  const copyCodeUrl = FRONTEND_URL.replace(/\\/+$/, "") + "/copy-code.html#" + encodeURIComponent(code);
+  const copyCodeUrl = FRONTEND_URL.replace(/\/+$/, "") + "/copy-code.html#" + encodeURIComponent(code);
   const minutes = Math.max(1, Number(expiryMinutes) || 10);
   const title = purpose === "login"
     ? "Your sign-in code"
