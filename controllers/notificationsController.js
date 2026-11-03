@@ -481,7 +481,10 @@ const normalizeNotificationUser = (user) => {
 const resolveNotificationUser = async (user, metadata = {}) => {
   const source = user || metadata.user || metadata.actor || null;
   let identity = normalizeNotificationUser(source);
-  const userId = identity?.id || metadata.userId || metadata.user_id || null;
+  // Prefer the candidate's own identity before shared notification metadata.
+  // Grouped notifications can contain many users; never resolve a later user
+  // against the first user's metadata.userId.
+  const userId = identity?.id || (!identity?.email ? (metadata.userId || metadata.user_id || null) : null);
   const email = identity?.email || metadata.userEmail || metadata.user_email || metadata.email || null;
   if ((!identity || !identity.avatarUrl || !identity.name || identity.name === identity.email) && (userId || email)) {
     try {
