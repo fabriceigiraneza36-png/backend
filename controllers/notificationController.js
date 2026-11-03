@@ -575,7 +575,27 @@ const adminCreateNotification = async (req, res) => {
       ],
     );
 
-    return res.status(201).json({ success: true, data: result.rows[0] });
+    const notification = result.rows[0];
+
+    // This admin-created notification endpoint is a separate legacy path from
+    // createNotificationInternal. Dispatch it through the same Web Push service
+    // so individual, role and broadcast notifications are not limited to the
+    // in-app inbox. The recipient policy still keeps admin/manager delivery
+    // independent of the traveller global switch.
+    deliverNotificationPush(notification, {
+      targetScope: target_scope,
+      targetRole: target_role || null,
+      userId: user_id || null,
+      userEmail: user_email || null,
+      actionUrl: action_url || null,
+      title: title.trim(),
+      message: message.trim(),
+      priority,
+    }).catch((error) => {
+      logger.warn("[Admin Notifications] Browser push delivery failed:", error.message);
+    });
+
+    return res.status(201).json({ success: true, data: notification });
   } catch (err) {
     logger.error("[Admin Notifications] create error:", err.message);
     return res.status(500).json({ success: false, message: "Server error" });
