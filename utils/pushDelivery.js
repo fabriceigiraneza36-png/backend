@@ -33,6 +33,9 @@ async function deliverNotificationPush(notification, {
   const roleSql = "$1::text[]";
   const where = [];
   if (scope === "individual") {
+    // Individual notifications belong to a traveller account, never an admin
+    // account that may coincidentally share the same numeric identifier.
+    if (!userPushEnabled) return { sent: 0, skipped: "user_delivery_disabled" };
     if (userId != null) {
       params.push(userId);
       where.push(`account_type = 'user' AND account_id::text = $2::text`);
@@ -42,10 +45,6 @@ async function deliverNotificationPush(notification, {
     } else {
       return { sent: 0, skipped: "missing_recipient" };
     }
-    if (!userPushEnabled) {
-      // This guard remains defensive for a malformed individual notification.
-      where.push(`account_type = 'user' AND role NOT IN (SELECT unnest(${roleSql}))`);
-    }
   } else if (scope === "admin") {
     where.push(`account_type = 'admin' AND role = ANY(${roleSql})`);
   } else if (scope === "role") {
@@ -53,7 +52,8 @@ async function deliverNotificationPush(notification, {
     if (!role) return { sent: 0, skipped: "missing_role" };
     params.push(role);
     if (ADMIN_ROLES.includes(role)) {
-      where.push(`account_type = 'admin' AND LOWER(role) = $2`);
+      if (role === "admin") where.push(`account_type = 'admin' AND role = ANY(${roleSql})`);
+      else where.push(`account_type = 'admin' AND LOWER(role) = $2`);
     } else {
       if (!userPushEnabled) return { sent: 0, skipped: "user_delivery_disabled" };
       where.push(`account_type = 'user' AND LOWER(role) = $2`);
