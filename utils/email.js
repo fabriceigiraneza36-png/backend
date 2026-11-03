@@ -154,18 +154,26 @@ const recipientInitials = (name, email) => {
   return String(email || "U").trim().slice(0, 1).toUpperCase() || "U";
 };
 
-const buildEmailHeader = ({ recipientName = "", recipientEmail = "", recipientAvatarUrl = "" } = {}) => {
+const buildEmailHeader = ({
+  recipientName = "",
+  recipientEmail = "",
+  recipientAvatarUrl = "",
+  showRecipientAvatar = true,
+} = {}) => {
   const avatarUrl = safeHttpsImageUrl(recipientAvatarUrl);
   const avatar = avatarUrl
     ? '<img src="' + esc(avatarUrl) + '" width="52" height="52" alt="' + esc(recipientName || "Your profile") + '" style="display:block;width:52px;height:52px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.82);" />'
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="52" height="52" style="width:52px;height:52px;border-radius:50%;background:#d1fae5;border:2px solid rgba(255,255,255,.82);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:15px;font-weight:800;color:#065f46;">' + esc(recipientInitials(recipientName, recipientEmail)) + '</td></tr></table>';
+  const avatarCell = showRecipientAvatar
+    ? '<td align="right" valign="middle" width="56">' + avatar + '</td>'
+    : '';
 
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>' +
     '<td align="left" valign="middle" width="124"><a href="' + FRONTEND_URL + '" style="text-decoration:none;">' +
     '<img src="' + EMAIL_LOGO_URL + '" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;border:1px solid rgba(255,255,255,.24);" /></a></td>' +
     '<td align="left" valign="middle" style="padding:0 10px 0 12px;"><p style="margin:0;color:#ffffff;font-family:Arial,sans-serif;font-size:19px;line-height:1.25;font-weight:800;">Altuvera Safaris</p>' +
     '<p style="margin:5px 0 0;color:#a7f3d0;font-family:Arial,sans-serif;font-size:10px;line-height:1.4;font-weight:700;letter-spacing:1.6px;text-transform:uppercase;">Premium African Adventures</p></td>' +
-    '<td align="right" valign="middle" width="56">' + avatar + '</td></tr></table>';
+    avatarCell + '</tr></table>';
 };
 
 /* ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚ÂÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¢Ãƒâ€šÃ‚Â
@@ -400,6 +408,7 @@ const baseTemplate = ({
   preheader = "", title = "", subtitle = "", body = "",
   ctaText = "", ctaUrl = "", recipientName = "", recipientEmail = "",
   recipientAvatarUrl = "", footerNote = "", bodyFirst = false,
+  showRecipientAvatar = true,
 }) => `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -449,7 +458,7 @@ ${esc(preheader)}
 <tr><td align="center" style="padding:0 16px;">
 <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="520" class="container">
   <tr><td class="hd" style="background:linear-gradient(135deg,#022c22 0%,#047857 100%);border-radius:20px 20px 0 0;padding:22px 24px;text-align:left;">
-    ${buildEmailHeader({ recipientName, recipientEmail, recipientAvatarUrl })}
+    ${buildEmailHeader({ recipientName, recipientEmail, recipientAvatarUrl, showRecipientAvatar })}
   </td></tr>
   <tr><td class="bd">
     ${bodyFirst ? body : ""}
@@ -510,46 +519,63 @@ const buildOtpHtml = ({
   purpose = "verify", expiryMinutes = 10,
 }) => {
   const code = String(otp ?? "").trim();
-  if (!/^\d{6}$/.test(code)) {
+  if (!/^\\d{6}$/.test(code)) {
     throw new TypeError("Altuvera email OTP must contain exactly six digits.");
   }
 
-  const copyCodeUrl = FRONTEND_URL.replace(/\/+$/, "") + "/copy-code.html#" + encodeURIComponent(code);
-  const title = purpose === "login" ? "Your Altuvera Login Code" : (OTP_TITLES[purpose] || OTP_TITLES.verify);
-  const minutes = Number(expiryMinutes) || 10;
+  const copyCodeUrl = FRONTEND_URL.replace(/\\/+$/, "") + "/copy-code.html#" + encodeURIComponent(code);
+  const minutes = Math.max(1, Number(expiryMinutes) || 10);
+  const title = purpose === "login"
+    ? "Your sign-in code"
+    : (OTP_TITLES[purpose] || OTP_TITLES.verify);
+  const subtitleByPurpose = {
+    verify: "Enter this code to verify your email address and finish setting up your account.",
+    login: "Enter this six-digit code on Altuvera to sign in securely.",
+    resend: "Enter this new code to complete your email verification.",
+    reverification: "Enter this code to confirm it is you and continue securely.",
+    booking: "Enter this code to verify the email address for your booking.",
+    forgot_username: "Enter this code to continue recovering your username.",
+  };
+  const subtitle = subtitleByPurpose[purpose] || "Enter this six-digit code on Altuvera to continue securely.";
+
   const body = [
-    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:0 0 18px;">',
+    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:22px 0 0;">',
       '<tr><td align="center">',
-        '<div class="otp-box" style="background:#f0fdf4;border:2px solid #6ee7b7;border-radius:16px;padding:24px 18px;display:block;width:100%;max-width:360px;box-sizing:border-box;">',
-          '<p style="margin:0 0 10px;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:2px;color:#6b7280;text-align:center;">Your Altuvera Safaris verification code</p>',
-          '<span class="otp-code" aria-label="Six-digit verification code" style="font-family:Courier New,monospace;font-size:38px;font-weight:900;letter-spacing:8px;color:#047857;display:block;text-align:center;user-select:all;-webkit-user-select:all;white-space:nowrap;">' + esc(code) + '</span>',
-          '<p style="margin:12px 0 0;font-size:12.5px;color:#6b7280;text-align:center;">Expires in <strong style="color:#374151;">' + minutes + ' minutes</strong></p>',
-        '</div>',
+        '<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="max-width:380px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:18px;">',
+          '<tr><td align="center" style="padding:24px 18px 20px;">',
+            '<p style="margin:0 0 12px;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:1.8px;color:#47735a;">ONE-TIME SECURITY CODE</p>',
+            '<p class="otp-code" style="margin:0;font-family:Courier New,monospace;font-size:38px;font-weight:800;letter-spacing:8px;color:#047857;text-align:center;white-space:nowrap;">' + esc(code) + '</p>',
+            '<p style="margin:14px 0 0;font-size:13px;color:#526b5b;text-align:center;">Expires in <strong style="color:#174c32;">' + minutes + ' minutes</strong></p>',
+          '</td></tr>',
+        '</table>',
       '</td></tr>',
     '</table>',
-    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:20px auto 8px;">',
+    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" align="center" style="margin:20px auto 0;">',
       '<tr><td align="center" bgcolor="#047857" style="border-radius:999px;background:#047857;">',
-        '<a href="' + esc(copyCodeUrl) + '" target="_blank" rel="noopener noreferrer" class="cta-btn" style="display:inline-block;padding:14px 36px;background:#047857;color:#ffffff!important;text-decoration:none;border-radius:999px;font-size:15px;font-weight:700;">Copy code</a>',
+        '<a href="' + esc(copyCodeUrl) + '" target="_blank" rel="noopener noreferrer" class="cta-btn" style="display:inline-block;padding:14px 34px;background:#047857;color:#ffffff!important;text-decoration:none;border-radius:999px;font-size:15px;font-weight:700;">Copy code</a>',
       '</td></tr>',
     '</table>',
-    '<p style="margin:8px 0 20px;font-size:12px;color:#6b7280;line-height:1.6;text-align:center;">Opens Altuvera’s secure copy page. Your email app may also provide its own Copy code shortcut.</p>',
-    '<div class="warn" style="background:#fffbeb;border-left:4px solid #f59e0b;border-radius:0 10px 10px 0;padding:14px 18px;margin:20px 0 0;">',
-      '<p style="margin:0;font-size:13px;color:#92400e;line-height:1.55;"><strong>Security reminder: Never share this code.</strong> ' + esc(APP_NAME) + ' staff will never ask for it.</p>',
-    '</div>',
+    '<p style="margin:9px 0 0;font-size:12px;color:#64748b;line-height:1.55;text-align:center;">Open the secure Altuvera copy page, or select the six digits above.</p>',
+    '<table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" style="margin:22px 0 0;background:#f8fafc;border:1px solid #e2e8f0;border-radius:12px;">',
+      '<tr><td style="padding:14px 16px;">',
+        '<p style="margin:0;font-size:13px;line-height:1.6;color:#475569;"><strong style="color:#174c32;">Keep this code private.</strong> Altuvera will never ask you to share it.</p>',
+      '</td></tr>',
+    '</table>',
+    '<p style="margin:18px 0 0;font-size:12px;line-height:1.6;color:#64748b;text-align:center;">Didn’t request this email? You can safely ignore it.</p>',
   ].join("");
 
   return baseTemplate({
-    // Do not repeat the digits in hidden preheader text; keep one clear code
-    // in the subject, the visible HTML code block, and the plain-text code line.
-    preheader: "Your Altuvera Safaris one-time code. Expires in " + minutes + " minutes.",
+    preheader: "Your Altuvera Safaris one-time code. It expires in " + minutes + " minutes.",
     title,
-    subtitle: "Enter the one-time code below to continue. Keep it private.",
+    subtitle,
     recipientName,
     recipientEmail,
-    recipientAvatarUrl,
+    recipientAvatarUrl: "",
+    showRecipientAvatar: false,
     body,
-    footerNote: 'This code is valid for ' + minutes + ' minutes. Need help? <a href="mailto:' + esc(SUPPORT_EMAIL) + '" style="color:#059669;">' + esc(SUPPORT_EMAIL) + '</a>',
-    bodyFirst: true,
+    // Keep the heading and greeting before the code card so every instruction
+    // describes content that follows it in the email.
+    bodyFirst: false,
   });
 };
 const buildOtpText = ({ otp, purpose = "verify", expiryMinutes = 10 }) =>
