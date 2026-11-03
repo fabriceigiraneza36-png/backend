@@ -1260,4 +1260,156 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
   }
 })
 
+
+/* Admin-created package information forms. */
+const normalizeInfoRequest = (row) => ({
+  ...row,
+  fields: Array.isArray(row.fields) ? row.fields : (typeof row.fields === 'string' ? (() => { try { return JSON.parse(row.fields) } catch { return [] } })() : []),
+  response: row.response && typeof row.response === 'object' ? row.response : (typeof row.response === 'string' ? (() => { try { return JSON.parse(row.response) } catch { return {} } })() : {}),
+});
+
+router.get('/:id/info-requests', requireAdmin, async (req, res) => {
+  try {
+    const packageId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(packageId) || packageId < 1) return res.status(400).json({ success: false, error: 'Invalid package ID.' });
+    const pkg = await db('SELECT id FROM packages WHERE id = $1 LIMIT 1', [packageId]);
+    if (!pkg.rows[0]) return res.status(404).json({ success: false, error: 'Package not found.' });
+    const result = await db('SELECT * FROM admin_info_requests WHERE package_id = $1 ORDER BY created_at DESC, id DESC', [packageId]);
+    return res.json({ success: true, data: result.rows.map(normalizeInfoRequest) });
+  } catch (error) {
+    logger.error('[Packages] Load information requests failed:', error.message);
+    return res.status(500).json({ success: false, error: 'Could not load information requests.' });
+  }
+});
+
+router.post('/:id/info-requests', requireAdmin, async (req, res) => {
+  try {
+    const packageId = Number.parseInt(req.params.id, 10);
+    if (!Number.isInteger(packageId) || packageId < 1) return res.status(400).json({ success: false, error: 'Invalid package ID.' });
+    const pkgResult = await db('SELECT id, title FROM packages WHERE id = $1 LIMIT 1', [packageId]);
+    const pkg = pkgResult.rows[0];
+    if (!pkg) return res.status(404).json({ success: false, error: 'Package not found.' });
+    const body = req.body || {};
+    const title = String(body.title || '').trim().slice(0, 500);
+    const description = String(body.description || '').trim();
+    const fields = Array.isArray(body.fields) ? body.fields : [];
+    const targetEmail = String(body.target_email || '').trim().toLowerCase();
+    const requestedUserId = body.user_id ? Number.parseInt(body.user_id, 10) : null;
+    if (!title) return res.status(400).json({ success: false, error: 'Form title is required.' });
+    if (!fields.length || fields.length > 40) return res.status(400).json({ success: false, error: 'Add between 1 and 40 form fields.' });
+    if (!targetEmail && !requestedUserId) return res.status(400).json({ success: false, error: 'Select a traveller with an email address or account.' });
+    if (targetEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(targetEmail)) return res.status(400).json({ success: false, error: 'Enter a valid traveller email address.' });
+
+    let recipient = null;
+    if (requestedUserId) {
+      const found = await db('SELECT id, email, full_name FROM users WHERE id = $1 LIMIT 1', [requestedUserId]);
+      recipient = found.rows[0] || null;
+    }
+    if (!recipient && targetEmail) {
+      const found = await db('SELECT id, email, full_name FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1', [targetEmail]);
+      recipient = found.rows[0] || null;
+    }
+    const userId = recipient?.id || null;
+    const email = recipient?.email || targetEmail;
+    const name = String(body.target_name || recipient?.full_name || '').trim().slice(0, 255);
+    if (!email) return res.status(400).json({ success: false, error: 'The selected traveller has no email address.' });
+
+    const allowedTypes = new Set(['text','email','tel','number','textarea','select','radio','checkbox','date','file']);
+    const safeFields = fields.map((field, index) => ({
+      id: String(field?.id || 'field-' + (index + 1)).slice(0, 100),
+      label: String(field?.label || '').trim().slice(0, 180),
+      type: allowedTypes.has(String(field?.type || 'text').toLowerCase()) ? String(field.type || 'text').toLowerCase() : 'text',
+      placeholder: String(field?.placeholder || '').slice(0, 300),
+      required: Boolean(field?.required),
+      options: Array.isArray(field?.options) ? field.options.map(option => String(option).slice(0, 120)).slice(0, 50) : [],
+    })).filter(field => field.label);
+    if (!safeFields.length) return res.status(400).json({ success: false, error: 'Every form field needs a label.' });
+
+    const expiresHours = Math.min(Math.max(Number.parseInt(body.expires_hours, 10) || 72, 1), 720);
+    const expiresAt = new Date(Date.now() + expiresHours * 60 * 60 * 1000);
+    const inserted = await db(
+      `INSERT INTO admin_info_requests
+        (package_id, user_id, target_email, target_name, title, description, fields,
+         theme, accent_color, header_image, custom_css, status, expires_at, created_by)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,'pending',$12,$13)
+       RETURNING *`,
+      [packageId, userId, email, name, title, description, JSON.stringify(safeFields),
+       String(body.theme || 'default').slice(0, 50), String(body.accent_color || '#047857').slice(0, 20),
+       String(body.header_image || '').slice(0, 1000), String(body.custom_css || '').slice(0, 12000),
+       expiresAt, req.user?.id || null],
+    );
+    const request = normalizeInfoRequest(inserted.rows[0]);
+    await createNotificationInternal({
+      userId, userEmail: email, senderType: 'admin', senderId: req.user?.id || null,
+      senderName: req.user?.full_name || req.user?.name || 'Altuvera Safaris',
+      type: 'package_info_request', category: 'package',
+      title: 'Additional information requested',
+      message: 'Altuvera Safaris needs a few more details for your request for ' + pkg.title + '. Open your package requests to complete the form.',
+      actionUrl: '/my-bookings?packageId=' + encodeURIComponent(packageId) + '&infoRequestId=' + encodeURIComponent(request.id),
+      actionLabel: 'Complete information form', priority: 'high',
+      metadata: { packageId, packageTitle: pkg.title, infoRequestId: request.id },
+      expiresAt, req,
+    }).catch((notificationError) => logger.warn('[Packages] Information request notification failed:', notificationError.message));
+    return res.status(201).json({ success: true, message: 'Information request created and traveller notified.', data: request });
+  } catch (error) {
+    logger.error('[Packages] Create information request failed:', error.message, error.stack);
+    return res.status(500).json({ success: false, error: 'Could not send the information request.' });
+  }
+});
+
+router.get('/my/info-requests', authenticate, async (req, res) => {
+  try {
+    const userId = Number.parseInt(req.user?.id, 10);
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    const result = await db(
+      `SELECT r.*, p.title AS package_title FROM admin_info_requests r
+        LEFT JOIN packages p ON p.id = r.package_id
+        WHERE r.user_id = $1 OR (r.user_id IS NULL AND LOWER(COALESCE(r.target_email,'')) = $2)
+        ORDER BY r.created_at DESC, r.id DESC`,
+      [userId, email],
+    );
+    return res.json({ success: true, data: result.rows.map(normalizeInfoRequest) });
+  } catch (error) {
+    logger.error('[Packages] Load traveller information requests failed:', error.message);
+    return res.status(500).json({ success: false, error: 'Could not load your information requests.' });
+  }
+});
+
+router.post('/:id/info-requests/:rId/respond', authenticate, async (req, res) => {
+  try {
+    const packageId = Number.parseInt(req.params.id, 10);
+    const requestId = Number.parseInt(req.params.rId, 10);
+    const userId = Number.parseInt(req.user?.id, 10);
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    const found = await db(
+      `SELECT * FROM admin_info_requests WHERE id = $1 AND package_id = $2
+        AND (user_id = $3 OR (user_id IS NULL AND LOWER(COALESCE(target_email,'')) = $4)) LIMIT 1`,
+      [requestId, packageId, userId, email],
+    );
+    const request = found.rows[0];
+    if (!request) return res.status(404).json({ success: false, error: 'Information request not found.' });
+    if (request.status !== 'pending') return res.status(409).json({ success: false, error: 'This information request is no longer accepting responses.' });
+    if (request.expires_at && new Date(request.expires_at) < new Date()) {
+      await db("UPDATE admin_info_requests SET status = 'expired', updated_at = NOW() WHERE id = $1", [requestId]);
+      return res.status(410).json({ success: false, error: 'This information request has expired.' });
+    }
+    const answers = req.body?.response && typeof req.body.response === 'object' ? req.body.response : {};
+    const fields = normalizeInfoRequest(request).fields;
+    const errors = fields.filter(field => field.required).filter(field => {
+      const value = answers[field.id];
+      return value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length);
+    }).map(field => field.label + ' is required.');
+    if (errors.length) return res.status(400).json({ success: false, errors, message: errors.join(' ') });
+    const updated = await db(
+      `UPDATE admin_info_requests SET response = $1::jsonb, status = 'responded',
+        responded_at = NOW(), responded_by = $2, updated_at = NOW() WHERE id = $3 RETURNING *`,
+      [JSON.stringify(answers), userId, requestId],
+    );
+    return res.json({ success: true, message: 'Your information has been submitted.', data: normalizeInfoRequest(updated.rows[0]) });
+  } catch (error) {
+    logger.error('[Packages] Submit information request response failed:', error.message);
+    return res.status(500).json({ success: false, error: 'Could not submit your information.' });
+  }
+});
+
 module.exports = router
