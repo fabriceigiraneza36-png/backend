@@ -1220,7 +1220,7 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
     }
 
     const userCheck = await query(
-      `SELECT id, email, full_name, avatar_url
+      `SELECT id, email, full_name, username, avatar_url
          FROM users
         WHERE id = $1 AND is_active = TRUE`,
       [uid],
@@ -1237,11 +1237,11 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
     const conv = await getOrCreateConversation({
       userId:        uid,
       sessionId:     null,
-      guestName:     targetUser.full_name,
+      guestName:     displayUserName(targetUser.full_name, targetUser.username),
       guestEmail:    targetUser.email,
       bookingId:     bookingId     || null,
       bookingNumber: bookingNumber || null,
-      subject:       subject || `Conversation with ${targetUser.full_name || targetUser.email}`,
+      subject:       subject || `Conversation with ${displayUserName(targetUser.full_name, targetUser.username, targetUser.email)}`,
       channel,
       source:        "admin",
       priority,
@@ -1269,6 +1269,15 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
           });
         }
       } catch (_) { /* socket errors never break REST */ }
+
+      try {
+        const { notifyAdminMessage, notifyAdminMessageSent } = require("../controllers/notificationsController");
+        const body = String(firstMessage).trim();
+        await notifyAdminMessage(conv.id, targetUser, req.user, body);
+        await notifyAdminMessageSent(conv.id, targetUser, req.user, body);
+      } catch (notificationError) {
+        logger.warn("[Messages] Initial admin message push delivery failed:", notificationError.message);
+      }
     }
 
     return res.json({ success: true, data: reshapeConversation(conv) });
@@ -2276,14 +2285,16 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     // This allows subscribed browsers to receive the message while Altuvera is closed.
     if (isAdminReq && conv.user_id) {
       try {
-        const { notifyAdminMessage } = require("../controllers/notificationsController");
-        await notifyAdminMessage(id, {
+        const { notifyAdminMessage, notifyAdminMessageSent } = require("../controllers/notificationsController");
+        const recipient = {
           id: conv.user_id,
           full_name: conv.user_full_name,
           username: conv.user_username,
           email: conv.user_email,
           avatar_url: conv.user_avatar,
-        }, senderProfile || req.user, String(body).trim());
+        };
+        await notifyAdminMessage(id, recipient, senderProfile || req.user, String(body).trim());
+        await notifyAdminMessageSent(id, recipient, senderProfile || req.user, String(body).trim());
       } catch (notificationError) {
         logger.warn("[Messages] Outgoing-message user notification failed:", notificationError.message);
       }
