@@ -458,7 +458,7 @@ router.get(
 
       const findProfile = (candidate, metadata, row) => {
         const id = candidate?.id ?? candidate?.userId ?? candidate?.user_id
-          ?? metadata.userId ?? metadata.user_id ?? metadata.senderId ?? metadata.sender_id ?? row.user_id;
+          ?? (!candidate?.email ? (metadata.userId ?? metadata.user_id ?? metadata.senderId ?? metadata.sender_id ?? row.user_id) : null);
         const email = candidate?.email ?? metadata.userEmail ?? metadata.user_email
           ?? metadata.email ?? row.user_email;
         return (id != null ? profilesById.get(String(id)) : null)
