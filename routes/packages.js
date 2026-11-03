@@ -896,11 +896,19 @@ router.post('/:id/book', authenticate, async (req, res) => {
         .catch((consentErr) => logger.warn('[Packages] Consent preference sync skipped:', consentErr.message))
     }
 
-    // Increment package booking count (graceful if column missing)
-    db(
-      'UPDATE packages SET booking_count = COALESCE(booking_count, 0) + 1 WHERE id = $1',
+    // Keep the denormalized package count aligned with the saved booking rows.
+    // Await the reconciliation before responding so the package list/stat cards
+    // cannot briefly report zero after a successful request.
+    await db(
+      `UPDATE packages p
+          SET booking_count = (
+            SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id
+          )
+        WHERE p.id = $1`,
       [p.id],
-    ).catch(() => {})
+    ).catch((countErr) => {
+      logger.warn('[Packages] Booking count reconciliation skipped:', countErr.message)
+    })
 
     // Fire booking emails
     const enrichedBooking = {
