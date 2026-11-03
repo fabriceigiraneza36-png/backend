@@ -86,6 +86,23 @@ const packageImage = (body = {}) => String(
   body.cover_image_url || body.image_url || body.thumbnail_url || ''
 ).trim()
 
+const normalizeLegacyPackageBooking = (row = {}) => ({
+  ...row,
+  booking_number: row.booking_ref || row.booking_number || null,
+  booking_type: 'package',
+  full_name: row.full_name || row.guest_name || row.user_name || null,
+  email: row.email || row.guest_email || row.user_email || null,
+  phone: row.phone || row.guest_phone || null,
+  return_date: row.return_date || row.end_date || null,
+  number_of_travelers: row.number_of_travelers ?? row.travelers_count ?? 1,
+  number_of_adults: row.number_of_adults ?? row.adults ?? 1,
+  number_of_children: row.number_of_children ?? row.children ?? 0,
+  dietary_requirements: row.dietary_requirements || row.dietary_needs || null,
+  source_table: 'package_bookings',
+  user_name: row.user_name || row.full_name || row.guest_name || null,
+  user_email: row.user_email || row.guest_email || row.email || null,
+})
+
 const jsonList = (value, fallback = []) => {
   if (value === undefined || value === null) return fallback
   if (Array.isArray(value)) return value
@@ -980,7 +997,40 @@ router.post('/:id/book', authenticate, async (req, res) => {
 router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
   try {
     const { id, bId } = req.params
-    const { status, admin_notes, payment_status } = req.body
+    const { status, admin_notes, payment_status } = req.body || {}
+    const requestedSource = String(req.query.source || req.body?.source_table || '').toLowerCase()
+
+    // Keep historical package_bookings records visible and editable. Newer
+    // package requests are stored in bookings, but older records use this table.
+    if (requestedSource === 'package_bookings') {
+      const previousLegacy = await db(
+        `SELECT pb.*, u.email AS user_email, u.full_name AS user_name,
+                u.avatar_url AS user_avatar_url
+           FROM package_bookings pb
+           LEFT JOIN users u ON u.id = pb.user_id
+          WHERE pb.id = $1 AND pb.package_id = $2
+          LIMIT 1`,
+        [bId, id],
+      )
+      if (!previousLegacy.rows.length) return res.status(404).json({ success: false, error: 'Package booking not found' })
+      const legacySets = ['updated_at = NOW()']
+      const legacyParams = []
+      if (status) { legacyParams.push(status); legacySets.push(`status = ${legacyParams.length}`) }
+      if (admin_notes !== undefined) { legacyParams.push(admin_notes); legacySets.push(`admin_notes = ${legacyParams.length}`) }
+      legacyParams.push(bId, id)
+      const updatedLegacy = await db(
+        `UPDATE package_bookings SET ${legacySets.join(', ')}
+          WHERE id = ${legacyParams.length - 1} AND package_id = ${legacyParams.length}
+          RETURNING *`,
+        legacyParams,
+      )
+      const booking = normalizeLegacyPackageBooking({ ...previousLegacy.rows[0], ...updatedLegacy.rows[0] })
+      try {
+        const io = req.app.get('io')
+        if (io) io.to('admin-room').emit('package:booking-updated', { booking, packageId: Number(id) })
+      } catch (socketErr) { logger.warn('[Packages] legacy booking update socket failed:', socketErr.message) }
+      return res.json({ success: true, data: booking })
+    }
 
     const sets   = ['updated_at = NOW()']
     const params = []
@@ -991,6 +1041,36 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
     if (payment_status)             { sets.push(`payment_status = $${pi++}`); params.push(payment_status) }
 
     const previous = await db('SELECT * FROM bookings WHERE id = $1 AND package_id = $2 LIMIT 1', [bId, id])
+    if (!previous.rows.length && requestedSource !== 'bookings') {
+      const legacy = await db(
+        `SELECT pb.*, u.email AS user_email, u.full_name AS user_name,
+                u.avatar_url AS user_avatar_url
+           FROM package_bookings pb
+           LEFT JOIN users u ON u.id = pb.user_id
+          WHERE pb.id = $1 AND pb.package_id = $2
+          LIMIT 1`,
+        [bId, id],
+      )
+      if (legacy.rows[0]) {
+        const legacySets = ['updated_at = NOW()']
+        const legacyParams = []
+        if (status) { legacyParams.push(status); legacySets.push(`status = ${legacyParams.length}`) }
+        if (admin_notes !== undefined) { legacyParams.push(admin_notes); legacySets.push(`admin_notes = ${legacyParams.length}`) }
+        legacyParams.push(bId, id)
+        const updatedLegacy = await db(
+          `UPDATE package_bookings SET ${legacySets.join(', ')}
+            WHERE id = ${legacyParams.length - 1} AND package_id = ${legacyParams.length}
+            RETURNING *`,
+          legacyParams,
+        )
+        const booking = normalizeLegacyPackageBooking({ ...legacy.rows[0], ...updatedLegacy.rows[0] })
+        try {
+          const io = req.app.get('io')
+          if (io) io.to('admin-room').emit('package:booking-updated', { booking, packageId: Number(id) })
+        } catch (socketErr) { logger.warn('[Packages] legacy booking update socket failed:', socketErr.message) }
+        return res.json({ success: true, data: booking })
+      }
+    }
     if (!previous.rows.length) return res.status(404).json({ success: false, error: 'Package booking not found' })
     if (status === 'confirmed' && !previous.rows[0].email_verified) {
       return res.status(409).json({ success: false, error: 'Traveller must confirm this request from their email inbox before the package booking can be confirmed.' })
@@ -1032,49 +1112,122 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
 /* ═══════════════════════════════════════════════════════════════════════════
    GET /api/packages/:id/bookings  (admin: list bookings for a package)
 ═══════════════════════════════════════════════════════════════════════════ */
-router.get('/:id/bookings', requireAdmin, async (req, res) => {
+router.get('/:id/bookings/:bId', requireAdmin, async (req, res) => {
   try {
-    const pkgId  = req.params.id
-    const { page = 1, limit = 10, status } = req.query
-    const lim    = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100)
-    const pg     = Math.max(parseInt(page, 10) || 1, 1)
-    const offset = (pg - 1) * lim
+    const { id: packageId, bId } = req.params
+    const source = String(req.query.source || '').toLowerCase()
+    let booking = null
 
-    const where = ['b.package_id = $1']
-    const vals  = [pkgId]
-
-    if (status) {
-      vals.push(status)
-      where.push(`b.status = $${vals.length}`)
+    if (source !== 'package_bookings') {
+      const current = await db(
+        `SELECT b.*, u.email AS user_email, u.full_name AS user_name,
+                u.avatar_url AS user_avatar_url
+           FROM bookings b
+           LEFT JOIN users u ON u.id = b.user_id
+          WHERE b.id = $1 AND b.package_id = $2
+          LIMIT 1`,
+        [bId, packageId],
+      )
+      if (current.rows[0]) booking = { ...current.rows[0], source_table: 'bookings', booking_type: 'package' }
     }
 
-    const whereSql = where.join(' AND ')
+    if (!booking && source !== 'bookings') {
+      const legacy = await db(
+        `SELECT pb.*, u.email AS user_email, u.full_name AS user_name,
+                u.avatar_url AS user_avatar_url
+           FROM package_bookings pb
+           LEFT JOIN users u ON u.id = pb.user_id
+          WHERE pb.id = $1 AND pb.package_id = $2
+          LIMIT 1`,
+        [bId, packageId],
+      )
+      if (legacy.rows[0]) booking = normalizeLegacyPackageBooking(legacy.rows[0])
+    }
+
+    if (!booking) return res.status(404).json({ success: false, error: 'Package booking not found' })
+    return res.json({ success: true, data: booking })
+  } catch (err) {
+    logger.error('[Packages] fetch single booking error:', err.message)
+    return res.status(500).json({ success: false, error: 'Failed to fetch package booking' })
+  }
+})
+
+router.get('/:id/bookings', requireAdmin, async (req, res) => {
+  try {
+    const pkgId = req.params.id
+    const { page = 1, limit = 10, status } = req.query
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100)
+    const pg = Math.max(parseInt(page, 10) || 1, 1)
+    const offset = (pg - 1) * lim
+    const statusClause = status ? ' AND status = $2' : ''
+    const filterParams = status ? [pkgId, status] : [pkgId]
+
+    // Read both the current unified bookings table and the historical package
+    // booking table. This preserves older requests without migrating/deleting
+    // user records and gives the admin view one consistent row shape.
+    const rowsSql = `
+      WITH package_rows AS (
+        SELECT
+          b.id, COALESCE(b.booking_number, b.booking_ref)::text AS booking_number,
+          b.package_id, COALESCE(b.package_title, p.title)::text AS package_title,
+          b.package_price, b.user_id, b.full_name, b.email, b.phone,
+          b.travel_date, b.return_date, b.number_of_travelers,
+          b.number_of_adults, b.number_of_children, b.special_requests,
+          b.dietary_requirements, b.pickup_location, b.status, b.priority,
+          b.admin_notes, b.source,
+          to_jsonb(b)->>'payment_status' AS payment_status,
+          COALESCE((to_jsonb(b)->>'email_verified')::boolean, false) AS email_verified,
+          b.created_at, b.updated_at,
+          u.email AS user_email, COALESCE(u.full_name, b.full_name) AS user_name,
+          u.avatar_url AS user_avatar_url,
+          'bookings'::text AS source_table,
+          'package'::text AS booking_type
+        FROM bookings b
+        LEFT JOIN users u ON u.id = b.user_id
+        LEFT JOIN packages p ON p.id = b.package_id
+        WHERE b.package_id = $1
+
+        UNION ALL
+
+        SELECT
+          pb.id, pb.booking_ref::text AS booking_number,
+          pb.package_id, COALESCE(pb.package_title, p.title)::text AS package_title,
+          pb.package_price, pb.user_id, pb.guest_name AS full_name,
+          pb.guest_email AS email, pb.guest_phone AS phone,
+          pb.travel_date, pb.end_date AS return_date, pb.travelers_count AS number_of_travelers,
+          pb.adults AS number_of_adults, pb.children AS number_of_children,
+          pb.special_requests, pb.dietary_needs AS dietary_requirements,
+          pb.pickup_location, pb.status, pb.priority, pb.admin_notes, pb.source,
+          NULL::text AS payment_status, NULL::boolean AS email_verified,
+          pb.created_at, pb.updated_at,
+          u.email AS user_email, COALESCE(u.full_name, pb.guest_name) AS user_name,
+          u.avatar_url AS user_avatar_url,
+          'package_bookings'::text AS source_table,
+          'package'::text AS booking_type
+        FROM package_bookings pb
+        LEFT JOIN users u ON u.id = pb.user_id
+        LEFT JOIN packages p ON p.id = pb.package_id
+        WHERE pb.package_id = $1
+      )
+    `
 
     const [countRes, dataRes] = await Promise.all([
-      db(`SELECT COUNT(*) FROM bookings b WHERE ${whereSql}`, vals),
+      db(`${rowsSql} SELECT COUNT(*)::int AS total FROM package_rows WHERE TRUE${statusClause}`, filterParams),
       db(
-        `SELECT b.*,
-                u.email     AS user_email,
-                u.full_name AS user_name,
-                u.avatar_url AS user_avatar_url
-         FROM bookings b
-         LEFT JOIN users u ON u.id = b.user_id
-         WHERE ${whereSql}
-         ORDER BY b.created_at DESC
-         LIMIT $${vals.length + 1} OFFSET $${vals.length + 2}`,
-        [...vals, lim, offset],
+        `${rowsSql}
+         SELECT * FROM package_rows
+          WHERE TRUE${statusClause}
+          ORDER BY created_at DESC NULLS LAST, id DESC, source_table ASC
+          LIMIT $${filterParams.length + 1} OFFSET $${filterParams.length + 2}`,
+        [...filterParams, lim, offset],
       ),
     ])
 
+    const total = Number(countRes.rows[0]?.total || 0)
     return res.json({
       success: true,
       data: dataRes.rows,
-      pagination: {
-        total: parseInt(countRes.rows[0].count, 10),
-        page:  pg,
-        limit: lim,
-        pages: Math.ceil(parseInt(countRes.rows[0].count, 10) / lim),
-      },
+      pagination: { total, page: pg, limit: lim, pages: Math.ceil(total / lim) },
     })
   } catch (err) {
     logger.error('[Packages] fetch bookings error:', err.message)
