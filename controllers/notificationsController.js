@@ -1042,6 +1042,36 @@ const notifyAdminMessage = async (conversationId, user, admin, messageBody) => {
   });
 };
 
+/* Admin activity — identify the actual traveller who received an outgoing chat message. */
+const notifyAdminMessageSent = async (conversationId, recipient, admin, messageBody) => {
+  const identity = await resolveNotificationUser(recipient, {
+    userId: recipient?.id || null,
+    userEmail: recipient?.email || null,
+  });
+  const recipientName = identity?.name || recipient?.username || recipient?.full_name || recipient?.email || "traveller";
+  return createNotificationInternal({
+    senderType: "admin",
+    senderId: admin?.id || null,
+    senderName: admin?.full_name || admin?.username || admin?.name || "Altuvera Team",
+    type: "admin_message_sent",
+    category: "messages",
+    title: `New message sent to ${recipientName}`,
+    message: String(messageBody || "A new message was sent to a traveller.").slice(0, 500),
+    actionUrl: conversationId ? `/messages?conversationId=${encodeURIComponent(conversationId)}` : "/messages",
+    actionLabel: "Open conversation",
+    priority: "normal",
+    targetScope: "admin",
+    targetRole: "admin",
+    actor: identity || recipient,
+    metadata: {
+      conversationId: conversationId || null,
+      recipientId: identity?.id || recipient?.id || null,
+      recipientName,
+      recipientEmail: identity?.email || recipient?.email || null,
+    },
+  });
+};
+
 /* Contact message — notify the user + admins (always single, high priority) */
 const notifyContactMessage = async (contact, user) => {
   const contactId = contact?.id || contact?.message_id || null;
@@ -1103,6 +1133,7 @@ module.exports = {
   notifyUserLogin,
   notifyContactMessage,
   notifyAdminMessage,
+  notifyAdminMessageSent,
   notifyAdminsImmediately,
   flushAdminBatch,
   flushAdminUserActivity,
