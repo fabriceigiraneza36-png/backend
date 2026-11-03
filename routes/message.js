@@ -1407,8 +1407,9 @@ router.post("/conversations", protect, async (req, res) => {
     // The admin inbox needs both a durable notification and a live conversation event.
     if (callerIsAdmin && savedMessage && conv.user_id) {
       try {
-        const { notifyAdminMessage } = require("../controllers/notificationsController");
+        const { notifyAdminMessage, notifyAdminMessageSent } = require("../controllers/notificationsController");
         await notifyAdminMessage(conv.id, accountProfile, req.user, initialMessage);
+        await notifyAdminMessageSent(conv.id, accountProfile, req.user, initialMessage);
       } catch (notificationError) {
         logger.warn("[Messages] Initial admin message notification failed:", notificationError.message);
       }
