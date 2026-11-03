@@ -410,9 +410,108 @@ router.get(
 
       const total = countRes.rows[0]?.total ?? 0;
 
+      // Hydrate user identities for existing notifications as well as new ones.
+      // This lets older rows (which may only have a userId/email in metadata)
+      // display the same traveller avatar and names as freshly-created alerts.
+      const notificationRows = dataRes.rows || [];
+      const profileIds = new Set();
+      const profileEmails = new Set();
+      const parseMetadata = (value) => {
+        if (typeof value === "string") {
+          try { return JSON.parse(value) || {}; } catch { return {}; }
+        }
+        return value && typeof value === "object" ? value : {};
+      };
+      for (const row of notificationRows) {
+        const metadata = parseMetadata(row.metadata);
+        const candidates = Array.isArray(metadata.users)
+          ? metadata.users
+          : [metadata.user || metadata.actor || null];
+        for (const candidate of candidates) {
+          if (!candidate || typeof candidate !== "object") continue;
+          const id = candidate.id ?? candidate.userId ?? candidate.user_id;
+          const email = candidate.email;
+          if (id != null && String(id).trim()) profileIds.add(String(id));
+          if (email && String(email).trim()) profileEmails.add(String(email).trim().toLowerCase());
+        }
+        const metadataId = metadata.userId || metadata.user_id || metadata.senderId || metadata.sender_id || row.user_id;
+        const metadataEmail = metadata.userEmail || metadata.user_email || metadata.email || row.user_email;
+        if (metadataId != null && String(metadataId).trim()) profileIds.add(String(metadataId));
+        if (metadataEmail && String(metadataEmail).trim()) profileEmails.add(String(metadataEmail).trim().toLowerCase());
+      }
+
+      const profilesById = new Map();
+      const profilesByEmail = new Map();
+      if (profileIds.size || profileEmails.size) {
+        const profileResult = await query(
+          `SELECT id, email, full_name, avatar_url
+             FROM users
+            WHERE id::text = ANY($1::text[])
+               OR LOWER(email) = ANY($2::text[])`,
+          [Array.from(profileIds), Array.from(profileEmails)],
+        );
+        for (const profile of profileResult.rows || []) {
+          profilesById.set(String(profile.id), profile);
+          if (profile.email) profilesByEmail.set(String(profile.email).toLowerCase(), profile);
+        }
+      }
+
+      const findProfile = (candidate, metadata, row) => {
+        const id = candidate?.id ?? candidate?.userId ?? candidate?.user_id
+          ?? metadata.userId ?? metadata.user_id ?? metadata.senderId ?? metadata.sender_id ?? row.user_id;
+        const email = candidate?.email ?? metadata.userEmail ?? metadata.user_email
+          ?? metadata.email ?? row.user_email;
+        return (id != null ? profilesById.get(String(id)) : null)
+          || (email ? profilesByEmail.get(String(email).toLowerCase()) : null)
+          || null;
+      };
+
+      for (const row of notificationRows) {
+        const metadata = parseMetadata(row.metadata);
+        const existingUsers = Array.isArray(metadata.users)
+          ? metadata.users
+          : (metadata.user || metadata.actor ? [metadata.user || metadata.actor] : []);
+        if (existingUsers.length) {
+          const hydratedUsers = existingUsers.map((candidate) => {
+            const profile = findProfile(candidate, metadata, row);
+            if (!profile) return candidate;
+            return {
+              ...candidate,
+              id: candidate.id ?? profile.id,
+              email: candidate.email || profile.email,
+              name: candidate.name || candidate.full_name || profile.full_name || profile.email,
+              full_name: candidate.full_name || profile.full_name,
+              avatarUrl: candidate.avatarUrl || candidate.avatar_url || profile.avatar_url || null,
+              avatar_url: candidate.avatar_url || candidate.avatarUrl || profile.avatar_url || null,
+            };
+          });
+          metadata.users = hydratedUsers;
+          if (metadata.user) metadata.user = hydratedUsers[0];
+          if (hydratedUsers[0]?.avatarUrl && !row.image_url) row.image_url = hydratedUsers[0].avatarUrl;
+          if (hydratedUsers[0]?.name && !row.user_name) row.user_name = hydratedUsers[0].name;
+        } else {
+          const profile = findProfile(null, metadata, row);
+          if (profile) {
+            metadata.userId = metadata.userId || profile.id;
+            metadata.user = {
+              id: profile.id,
+              email: profile.email,
+              name: profile.full_name || profile.email,
+              full_name: profile.full_name,
+              avatarUrl: profile.avatar_url || null,
+              avatar_url: profile.avatar_url || null,
+            };
+            metadata.users = [metadata.user];
+            row.image_url = row.image_url || profile.avatar_url || null;
+            row.user_name = row.user_name || profile.full_name || profile.email;
+          }
+        }
+        row.metadata = metadata;
+      }
+
       return res.json({
         success:      true,
-        data:         dataRes.rows,
+        data:         notificationRows,
         unread_count: unreadRes.rows[0]?.cnt ?? 0,
         pagination: {
           page,
