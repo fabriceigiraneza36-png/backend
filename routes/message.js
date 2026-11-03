@@ -1273,6 +1273,15 @@ router.post("/admin/conversations", adminProtect, async (req, res) => {
           });
         }
       } catch (_) { /* socket errors never break REST */ }
+
+      // Notify the selected traveller as well as updating the live conversation.
+      // The notification controller also dispatches browser push to subscribed devices.
+      try {
+        const { notifyAdminMessage } = require("../controllers/notificationsController");
+        await notifyAdminMessage(conv.id, targetUser, req.user, firstMessage);
+      } catch (notificationError) {
+        logger.warn("[Messages] First admin message notification failed:", notificationError.message);
+      }
     }
 
     return res.json({ success: true, data: reshapeConversation(conv) });
@@ -2059,6 +2068,7 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
     const convCheck = await query(
       `SELECT c.id, c.user_id, c.group_id, c.session_id, c.guest_name, c.guest_email, c.subject, c.status,
               c.conversation_type, c.channel, c.booking_id, c.booking_number,
+              u.full_name AS user_full_name, u.email AS user_email,
               u.deleted_at AS user_deleted_at
          FROM conversations c
          LEFT JOIN users u ON u.id = c.user_id
@@ -2257,6 +2267,18 @@ router.post("/conversations/:id/messages", protect, async (req, res) => {
             senderAvatar: profile.avatar_url || null,
           },
         });
+      } else if (conv.user_id) {
+        const { notifyAdminMessage } = require("../controllers/notificationsController");
+        await notifyAdminMessage(
+          id,
+          {
+            id: conv.user_id,
+            full_name: conv.user_full_name || conv.guest_name || "",
+            email: conv.user_email || conv.guest_email || "",
+          },
+          senderProfile,
+          String(body).trim(),
+        );
       }
     } catch (notificationError) {
       logger.warn("[Messages] Incoming-message admin notification failed:", notificationError.message);
