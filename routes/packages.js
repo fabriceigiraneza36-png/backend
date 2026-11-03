@@ -1268,6 +1268,24 @@ const normalizeInfoRequest = (row) => ({
   response: row.response && typeof row.response === 'object' ? row.response : (typeof row.response === 'string' ? (() => { try { return JSON.parse(row.response) } catch { return {} } })() : {}),
 });
 
+router.get('/my/info-requests', authenticate, async (req, res) => {
+  try {
+    const userId = Number.parseInt(req.user?.id, 10);
+    const email = String(req.user?.email || '').trim().toLowerCase();
+    const result = await db(
+      `SELECT r.*, p.title AS package_title FROM admin_info_requests r
+        LEFT JOIN packages p ON p.id = r.package_id
+        WHERE r.user_id = $1 OR (r.user_id IS NULL AND LOWER(COALESCE(r.target_email,'')) = $2)
+        ORDER BY r.created_at DESC, r.id DESC`,
+      [userId, email],
+    );
+    return res.json({ success: true, data: result.rows.map(normalizeInfoRequest) });
+  } catch (error) {
+    logger.error('[Packages] Load traveller information requests failed:', error.message);
+    return res.status(500).json({ success: false, error: 'Could not load your information requests.' });
+  }
+});
+
 router.get('/:id/info-requests', requireAdmin, async (req, res) => {
   try {
     const packageId = Number.parseInt(req.params.id, 10);
@@ -1354,24 +1372,6 @@ router.post('/:id/info-requests', requireAdmin, async (req, res) => {
   } catch (error) {
     logger.error('[Packages] Create information request failed:', error.message, error.stack);
     return res.status(500).json({ success: false, error: 'Could not send the information request.' });
-  }
-});
-
-router.get('/my/info-requests', authenticate, async (req, res) => {
-  try {
-    const userId = Number.parseInt(req.user?.id, 10);
-    const email = String(req.user?.email || '').trim().toLowerCase();
-    const result = await db(
-      `SELECT r.*, p.title AS package_title FROM admin_info_requests r
-        LEFT JOIN packages p ON p.id = r.package_id
-        WHERE r.user_id = $1 OR (r.user_id IS NULL AND LOWER(COALESCE(r.target_email,'')) = $2)
-        ORDER BY r.created_at DESC, r.id DESC`,
-      [userId, email],
-    );
-    return res.json({ success: true, data: result.rows.map(normalizeInfoRequest) });
-  } catch (error) {
-    logger.error('[Packages] Load traveller information requests failed:', error.message);
-    return res.status(500).json({ success: false, error: 'Could not load your information requests.' });
   }
 });
 
