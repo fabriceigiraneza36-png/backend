@@ -21,7 +21,8 @@ Authoritative site asset:
 - GitHub: `public/altuvera.png`
 - Brand helper: `src/utils/seo.js` uses `/altuvera.png`
 - Cloudinary public ID: `altuvera_qzbcvf`
-- Optimized email derivative: `https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png`
+- Canonical public email-header image: `https://www.altuverasafaris.com/altuvera.png` (the direct official asset is now the shared template default).
+- Optimized email derivative (optional fallback): `https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png`
 
 BIMI staging candidate (NOT validated, NOT production-ready):
 - `https://res.cloudinary.com/doijjawna/image/upload/v1793563971/altuvera_bimi_vector_candidate.svg`
