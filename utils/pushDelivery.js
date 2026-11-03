@@ -80,10 +80,12 @@ async function deliverNotificationPush(notification, {
               END AS account_type
          FROM push_subscriptions ps
          LEFT JOIN admin_users au
-           ON au.id = ps.admin_id
+           ON COALESCE(ps.account_type, 'user') = 'admin'
+          AND au.id = ps.admin_id
           AND LOWER(au.email) = LOWER(COALESCE(ps.admin_email, ''))
          LEFT JOIN users u
-           ON u.id = ps.admin_id
+           ON COALESCE(ps.account_type, 'user') = 'user'
+          AND u.id = ps.admin_id
           AND LOWER(u.email) = LOWER(COALESCE(ps.admin_email, ''))
         WHERE (au.id IS NOT NULL OR u.id IS NOT NULL)
       )
