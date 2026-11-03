@@ -53,7 +53,7 @@ const toInt = (v, fb = 0) => {
 };
 
 const ADMIN_ROLES = ["admin", "manager"];
-const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png";
+const EMAIL_LOGO_URL = process.env.EMAIL_LOGO_URL || "https://www.altuverasafaris.com/altuvera.png";
 const profileInitials = (name, email) => {
   const words = String(name || "").trim().split(/\s+/).filter(Boolean);
   if (words.length > 1) return (words[0][0] + words[words.length - 1][0]).toUpperCase();
