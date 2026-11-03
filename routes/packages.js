@@ -365,12 +365,17 @@ router.get('/', optionalAuth, async (req, res) => {
     } else if (effectiveSort === 'latest' || (effectiveSort === 'created_at' && order === 'desc')) {
       orderBy = 'p.created_at DESC'
     } else if (effectiveSort === 'popular' || (effectiveSort === 'view_count' && order === 'desc')) {
-      orderBy = 'COALESCE(p.booking_count,0) DESC, COALESCE(p.view_count,0) DESC'
+      orderBy = `${liveBookingCount} DESC, COALESCE(p.view_count,0) DESC`
     } else if (effectiveSort === 'sort_order') {
       orderBy = 'COALESCE(p.sort_order, 0) ASC, p.is_featured DESC NULLS LAST, p.created_at DESC'
     }
 
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    const liveBookingCount = `(
+      (SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id)
+      +
+      (SELECT COUNT(*)::INTEGER FROM package_bookings pb WHERE pb.package_id = p.id)
+    )`
 
     let countRes
     try {
@@ -398,6 +403,7 @@ router.get('/', optionalAuth, async (req, res) => {
 
     const dataRes   = await db(
       `SELECT p.*,
+              ${liveBookingCount} AS booking_count,
               ${destinationSelect}
        FROM packages p
        ${destinationJoin}
