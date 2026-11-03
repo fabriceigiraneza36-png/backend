@@ -569,9 +569,11 @@ exports.verifyCode = async (req, res) => {
         recipientAvatarUrl: freshUser.avatar_url || user.avatar_url || "",
       }).catch(() => {});
       notifyUserRegistered({
-        id:    user.id,
-        email: user.email,
-        name:  user.full_name || user.email,
+        id:    freshUser.id,
+        email: freshUser.email,
+        name:  freshUser.full_name || freshUser.email,
+        full_name: freshUser.full_name,
+        avatar_url: freshUser.avatar_url || null,
       }).catch(() => {});
     }
 
@@ -584,6 +586,7 @@ exports.verifyCode = async (req, res) => {
       email: freshUser.email,
       name: freshUser.full_name || freshUser.email,
       full_name: freshUser.full_name,
+      avatar_url: freshUser.avatar_url || null,
     }, sessionExpiresAt).catch((notifyErr) => {
       logger.warn("[Auth] Successful sign-in notification failed:", notifyErr.message);
     });
@@ -680,6 +683,7 @@ exports.completeLoginFactor = async (req, res) => {
     notifyUserLogin({
       id: fresh.id, email: fresh.email, name: fresh.full_name || fresh.email,
       full_name: fresh.full_name,
+      avatar_url: fresh.avatar_url || null,
     }, sessionExpiresAt).catch((notifyErr) => {
       logger.warn("[Auth] Successful second-factor sign-in notification failed:", notifyErr.message);
     });

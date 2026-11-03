@@ -468,6 +468,37 @@ const escapeAdminHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char)
   '"': "&quot;",
 }[char]));
 
+const normalizeNotificationUser = (user) => {
+  if (!user || typeof user !== "object") return null;
+  const id = user.id ?? user.userId ?? user.user_id ?? null;
+  const email = user.email ?? null;
+  const name = user.full_name || user.fullName || user.name || email || "Traveller";
+  const avatarUrl = user.avatar_url || user.avatarUrl || user.profile_image_url || user.picture || null;
+  if (!id && !email && !avatarUrl) return null;
+  return { id, email, name, avatarUrl };
+};
+
+const resolveNotificationUser = async (user, metadata = {}) => {
+  const source = user || metadata.user || metadata.actor || null;
+  let identity = normalizeNotificationUser(source);
+  const userId = identity?.id || metadata.userId || metadata.user_id || null;
+  const email = identity?.email || metadata.userEmail || metadata.user_email || null;
+  if ((!identity || !identity.avatarUrl || !identity.name || identity.name === identity.email) && (userId || email)) {
+    try {
+      const result = await query(
+        `SELECT id, email, full_name, avatar_url FROM users
+          WHERE ${userId ? "id = $1" : "LOWER(email) = LOWER($1)"}
+          LIMIT 1`,
+        [userId || email],
+      );
+      if (result.rows[0]) identity = normalizeNotificationUser({ ...result.rows[0], ...source });
+    } catch (err) {
+      logger.warn("[Notifications] Could not resolve notification user profile:", err.message);
+    }
+  }
+  return identity;
+};
+
 const notifyAdminsImmediately = async ({
   type,
   category,
@@ -477,7 +508,31 @@ const notifyAdminsImmediately = async ({
   actionLabel = "Open in Admin",
   metadata = {},
   priority = "high",
+  user = null,
+  users: suppliedUsers = null,
 }) => {
+  const candidates = Array.isArray(suppliedUsers) && suppliedUsers.length
+    ? suppliedUsers
+    : [user || metadata.user || metadata.actor || null];
+  const resolvedUsers = (await Promise.all(
+    candidates.map((candidate) => resolveNotificationUser(candidate, metadata)),
+  )).filter(Boolean);
+  const notificationMetadata = { ...metadata };
+  let imageUrl = null;
+  if (resolvedUsers.length) {
+    notificationMetadata.users = resolvedUsers;
+    if (resolvedUsers.length === 1) {
+      notificationMetadata.user = resolvedUsers[0];
+      notificationMetadata.userId = resolvedUsers[0].id || notificationMetadata.userId || null;
+    } else {
+      notificationMetadata.compiled = true;
+      notificationMetadata.count = resolvedUsers.length;
+      notificationMetadata.userIds = resolvedUsers.map((item) => item.id).filter(Boolean);
+      notificationMetadata.userId = resolvedUsers[0].id || null;
+    }
+    imageUrl = resolvedUsers[0].avatarUrl || null;
+  }
+
   const notif = await insertNotification({
     senderType: "system",
     senderName: "Altuvera",
@@ -487,9 +542,10 @@ const notifyAdminsImmediately = async ({
     message,
     actionUrl,
     actionLabel,
+    imageUrl,
     priority,
     targetScope: "admin",
-    metadata,
+    metadata: notificationMetadata,
   });
 
   emitNotification(null, { ...notif, target_scope: "admin" });
@@ -516,6 +572,71 @@ const notifyAdminsImmediately = async ({
   ).catch((err) => logger.warn("[Notifications] admin email failed:", err.message));
 
   return notif;
+};
+
+const USER_ACTIVITY_BATCH_WINDOW_MS = 8000;
+const pendingUserActivities = new Map();
+
+const queueAdminUserActivity = (activity, user, message) => {
+  const identity = normalizeNotificationUser(user);
+  if (!identity) {
+    logger.warn("[Notifications] User activity notification skipped: no user identity.");
+    return;
+  }
+  const key = "user-activity:" + activity;
+  let batch = pendingUserActivities.get(key);
+  if (!batch) {
+    batch = { activity, users: [], timer: null };
+    pendingUserActivities.set(key, batch);
+  }
+  const uid = identity.id || (identity.email && identity.email.toLowerCase());
+  if (uid && batch.users.some((item) => (item.id || item.email?.toLowerCase()) === uid)) return;
+  batch.users.push(identity);
+  if (!batch.timer) {
+    batch.timer = setTimeout(() => flushAdminUserActivity(key), USER_ACTIVITY_BATCH_WINDOW_MS);
+    if (typeof batch.timer.unref === "function") batch.timer.unref();
+  }
+};
+
+const flushAdminUserActivity = async (key) => {
+  const batch = pendingUserActivities.get(key);
+  if (!batch) return;
+  pendingUserActivities.delete(key);
+  if (batch.timer) clearTimeout(batch.timer);
+  const users = batch.users || [];
+  if (!users.length) return;
+  const count = users.length;
+  const names = users.slice(0, 2).map((item) => item.name || item.email || "Traveller");
+  const namesLabel = count <= 2
+    ? names.join(" and ")
+    : names.join(", ") + " and " + (count - 2) + " more";
+  const isSignup = batch.activity === "user_registered";
+  const title = isSignup
+    ? (count > 1 ? "New travellers registered" : "New traveller registered")
+    : (count > 1 ? "Travellers signed in" : "Traveller signed in");
+  const message = isSignup
+    ? namesLabel + (count > 1 ? " created Altuvera accounts." : " created an Altuvera account.")
+    : namesLabel + (count > 1 ? " signed in successfully." : " signed in successfully.");
+  try {
+    await notifyAdminsImmediately({
+      type: batch.activity,
+      category: isSignup ? "user" : "security",
+      title,
+      message,
+      actionUrl: users[0].id ? "/users?userId=" + encodeURIComponent(users[0].id) : "/users",
+      actionLabel: count > 1 ? "View travellers" : "View traveller",
+      metadata: {
+        activity: batch.activity,
+        compiled: count > 1,
+        count,
+        userId: users[0].id || null,
+      },
+      users,
+      priority: "high",
+    });
+  } catch (err) {
+    logger.warn("[Notifications] Could not flush grouped user activity:", err.message);
+  }
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -648,12 +769,22 @@ const createNotificationInternal = async ({
   skipUserEmail = false,
 } = {}) => {
   // 1) In-app notification for the user (or audience)
+  let notificationMetadata = metadata;
+  let notificationImageUrl = imageUrl;
+  if (targetScope !== "individual" && actor) {
+    const identity = await resolveNotificationUser(actor, metadata);
+    if (identity) {
+      notificationMetadata = { ...metadata, user: identity, users: [identity], userId: identity.id || metadata.userId || null };
+      notificationImageUrl = identity.avatarUrl || imageUrl;
+    }
+  }
+
   const notif = await insertNotification({
     userId, userEmail, senderType, senderId, senderName,
     type, category, title, message,
-    actionUrl, actionLabel, imageUrl,
+    actionUrl, actionLabel, imageUrl: notificationImageUrl,
     priority, targetScope, targetRole, targetSegment,
-    metadata, expiresAt,
+    metadata: notificationMetadata, expiresAt,
   });
 
   // 2) Realtime
@@ -754,7 +885,13 @@ const notifyBookingCreated = async (booking, user) => {
     message: `${booking?.full_name || booking?.email || "A traveller"} submitted booking ${booking?.booking_number || bookingId || ""}.`,
     actionUrl,
     actionLabel: "Open booking",
-    metadata: { bookingId: booking?.id || null, bookingNumber: booking?.booking_number || null },
+    user: user || {
+      id: booking?.user_id || booking?.userId || null,
+      email: booking?.email || null,
+      full_name: booking?.full_name || null,
+      avatar_url: booking?.avatar_url || booking?.avatarUrl || null,
+    },
+    metadata: { bookingId: booking?.id || null, bookingNumber: booking?.booking_number || null, userId: user?.id || booking?.user_id || booking?.userId || null },
   });
   return userNotif;
 };
@@ -798,6 +935,13 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
       bookingNumber: booking?.booking_number || null,
       requestType: "package_booking",
       hasSpecialRequests,
+      userId: booking?.user_id || booking?.userId || null,
+    },
+    actor: {
+      id: booking?.user_id || booking?.userId || null,
+      email: booking?.email || null,
+      full_name: booking?.full_name || null,
+      avatar_url: booking?.avatar_url || booking?.avatarUrl || null,
     },
     req,
   });
@@ -856,7 +1000,8 @@ const notifyReviewPosted = async (review, user) => {
     message: `${user?.name || user?.email || "A traveller"} submitted a new review.`,
     actionUrl: reviewId ? `/comments?commentId=${encodeURIComponent(reviewId)}` : "/comments",
     actionLabel: "Open review",
-    metadata: { reviewId },
+    metadata: { reviewId, userId: user?.id || null },
+    user,
   });
   return userNotif;
 };
@@ -874,15 +1019,8 @@ const notifyUserRegistered = async (user) => {
     actionLabel: "Explore destinations",
     actor: user,
   });
-  await notifyAdminsImmediately({
-    type: "user_registered",
-    category: "user",
-    title: "New traveller registered",
-    message: `${user?.name || user?.email || "A traveller"} created an Altuvera account.`,
-    actionUrl: user?.id ? `/users?userId=${encodeURIComponent(user.id)}` : "/users",
-    actionLabel: "Open traveller",
-    metadata: { userId: user?.id || null },
-  });
+  queueAdminUserActivity("user_registered", user);
+
   return userNotif;
 };
 
@@ -912,16 +1050,8 @@ const notifyUserLogin = async (user, sessionExpiresAt) => {
     metadata,
     actor: user,
   });
-  await notifyAdminsImmediately({
-    type: "user_login_success",
-    category: "security",
-    title: "Traveller signed in",
-    message: `${user?.name || user?.full_name || user?.email || "A traveller"} signed in successfully. Session expiry: ${expiryLabel}.`,
-    actionUrl: user?.id ? `/users?userId=${encodeURIComponent(user.id)}` : "/users",
-    actionLabel: "View traveller",
-    metadata,
-    priority: "normal",
-  });
+  queueAdminUserActivity("user_login_success", user);
+
   return userNotif;
 };
 
@@ -964,7 +1094,8 @@ const notifyContactMessage = async (contact, user) => {
     message: `${user?.name || user?.full_name || user?.email || "A visitor"} has sent a contact message${contact?.subject ? ` about "${contact.subject}"` : ""}. Open it to review and reply.`,
     actionUrl: contactId ? `/contact?messageId=${encodeURIComponent(contactId)}` : "/contact",
     actionLabel: "Open message",
-    metadata: { contactId },
+    metadata: { contactId, userId: user?.id || null },
+    user,
   });
   return userNotif;
 };
@@ -1020,5 +1151,6 @@ module.exports = {
   notifyAdminMessage,
   notifyAdminsImmediately,
   flushAdminBatch,
+  flushAdminUserActivity,
   ADMIN_BATCH_THRESHOLD,
 };
