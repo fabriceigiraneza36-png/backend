@@ -1227,9 +1227,17 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
     ])
 
     const total = Number(countRes.rows[0]?.total || 0)
+    // Keep the stored package summary accurate even when the list is filtered
+    // to a particular booking status.
     await db(
-      'UPDATE packages SET booking_count = $1 WHERE id = $2 AND COALESCE(booking_count, 0) <> $1',
-      [total, pkgId],
+      `UPDATE packages p
+          SET booking_count = (
+            SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id
+          ) + (
+            SELECT COUNT(*)::INTEGER FROM package_bookings pb WHERE pb.package_id = p.id
+          )
+        WHERE p.id = $1`,
+      [pkgId],
     ).catch((countErr) => logger.warn('[Packages] Package booking count sync skipped:', countErr.message))
     return res.json({
       success: true,
