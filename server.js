@@ -2243,6 +2243,7 @@ async function initializeServer () {
           id          SERIAL PRIMARY KEY,
           admin_id    INTEGER DEFAULT 0,
           admin_email VARCHAR(255),
+          account_type VARCHAR(10),
           endpoint    TEXT NOT NULL,
           p256dh      TEXT NOT NULL,
           auth        TEXT NOT NULL,
@@ -2251,6 +2252,28 @@ async function initializeServer () {
           updated_at  TIMESTAMP DEFAULT NOW()
         )
       `)
+      // Existing rows are tagged from their owning account table. New
+      // subscriptions persist this discriminator explicitly in the controller.
+      await query(`ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS account_type VARCHAR(10)`)
+      await query(`
+        UPDATE push_subscriptions ps
+           SET account_type = CASE
+             WHEN EXISTS (
+               SELECT 1 FROM admin_users au
+                WHERE au.id = ps.admin_id
+                  AND LOWER(au.email) = LOWER(COALESCE(ps.admin_email, ''))
+             ) THEN 'admin'
+             WHEN EXISTS (
+               SELECT 1 FROM users u
+                WHERE u.id = ps.admin_id
+                  AND LOWER(u.email) = LOWER(COALESCE(ps.admin_email, ''))
+                  AND LOWER(COALESCE(u.role, '')) IN ('admin', 'manager', 'superadmin', 'super_admin', 'moderator', 'editor')
+             ) THEN 'admin'
+             ELSE 'user'
+           END
+         WHERE ps.account_type IS NULL
+      `)
+      await query(`ALTER TABLE push_subscriptions ALTER COLUMN account_type SET DEFAULT 'user'`)
       logger.info('? Push Subscriptions table ready')
     } catch (err) {
       logger.warn('??  Push Subscriptions table (non-fatal):', err.message)
