@@ -18,7 +18,8 @@ exports.subscribe = async (req, res) => {
   try {
     const accountId   = req.admin?.id || req.user?.id
     const accountEmail = req.admin?.email || req.user?.email || ''
-    if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to enable push notifications.' })
+    const accountType = req.admin || req.userType === 'admin' ? 'admin' : 'user'
+    if (!accountId || !accountEmail) return res.status(401).json({ success: false, message: 'Sign in to enable push notifications.' })
     const { endpoint, p256dh, auth, userAgent } = req.body || {}
 
     if (!endpoint || !p256dh || !auth) {
@@ -30,16 +31,18 @@ exports.subscribe = async (req, res) => {
     await query(
       `DELETE FROM push_subscriptions
         WHERE endpoint=$1
-          AND LOWER(COALESCE(admin_email, ''))<>LOWER($2)`,
-      [endpoint, accountEmail],
+          AND (COALESCE(account_type, 'user')<>$2
+               OR LOWER(COALESCE(admin_email, ''))<>LOWER($3))`,
+      [endpoint, accountType, accountEmail],
     )
 
     const existing = await query(
       `UPDATE push_subscriptions
-         SET admin_email=$1, p256dh=$2, auth=$3, user_agent=$4, updated_at=NOW()
-       WHERE endpoint=$5 AND admin_id=$6 AND LOWER(COALESCE(admin_email, ''))=LOWER($1)
+         SET admin_email=$1, account_type=$7, p256dh=$2, auth=$3, user_agent=$4, updated_at=NOW()
+       WHERE endpoint=$5 AND admin_id=$6 AND COALESCE(account_type, 'user')=$7
+         AND LOWER(COALESCE(admin_email, ''))=LOWER($1)
        RETURNING id`,
-      [accountEmail, p256dh, auth, userAgent || null, endpoint, accountId],
+      [accountEmail, p256dh, auth, userAgent || null, endpoint, accountId, accountType],
     )
 
     let subId
@@ -47,9 +50,9 @@ exports.subscribe = async (req, res) => {
       subId = existing.rows[0].id
     } else {
       const inserted = await query(
-        `INSERT INTO push_subscriptions (admin_id, admin_email, endpoint, p256dh, auth, user_agent)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [accountId, accountEmail, endpoint, p256dh, auth, userAgent || null],
+        `INSERT INTO push_subscriptions (admin_id, admin_email, account_type, endpoint, p256dh, auth, user_agent)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [accountId, accountEmail, accountType, endpoint, p256dh, auth, userAgent || null],
       )
       subId = inserted.rows[0]?.id
     }
@@ -70,14 +73,16 @@ exports.subscribe = async (req, res) => {
 exports.unsubscribe = async (req, res) => {
   try {
     const accountId = req.admin?.id || req.user?.id
+    const accountEmail = req.admin?.email || req.user?.email || ''
+    const accountType = req.admin || req.userType === 'admin' ? 'admin' : 'user'
     const { endpoint } = req.body || {}
-    if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to manage push notifications.' })
+    if (!accountId || !accountEmail) return res.status(401).json({ success: false, message: 'Sign in to manage push notifications.' })
 
     if (!endpoint) {
       return res.status(400).json({ success: false, message: 'endpoint is required.' })
     }
 
-    await query(`DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id=$2 AND LOWER(COALESCE(admin_email, ''))=LOWER($3)`, [endpoint, accountId, accountEmail])
+    await query(`DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id=$2 AND COALESCE(account_type, 'user')=$3 AND LOWER(COALESCE(admin_email, ''))=LOWER($4)`, [endpoint, accountId, accountType, accountEmail])
     logger.info(`[Push] Account ${accountId} unsubscribed`)
     return res.json({ success: true })
   } catch (err) {
@@ -108,9 +113,10 @@ exports.mySubscriptions = async (req, res) => {
     if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to view push subscriptions.' })
     const { rows } = await query(
       `SELECT id, endpoint, created_at FROM push_subscriptions
-        WHERE admin_id=$1 AND LOWER(COALESCE(admin_email, ''))=LOWER($2)
+        WHERE admin_id=$1 AND COALESCE(account_type, 'user')=$2
+          AND LOWER(COALESCE(admin_email, ''))=LOWER($3)
         ORDER BY created_at DESC`,
-      [accountId, req.admin?.email || req.user?.email || ''],
+      [accountId, req.admin || req.userType === 'admin' ? 'admin' : 'user', req.admin?.email || req.user?.email || ''],
     )
     return res.json({ success: true, data: rows })
   } catch (err) {
@@ -225,7 +231,7 @@ exports.test = async (req, res) => {
 
     await ensureTestDeliverySchema()
     const { rows } = await query(
-      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1 AND LOWER(COALESCE(admin_email, \'\'))=LOWER($2) ORDER BY updated_at DESC',
+      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1 AND COALESCE(account_type, \'user\')=\'admin\' AND LOWER(COALESCE(admin_email, \'\'))=LOWER($2) ORDER BY updated_at DESC',
       [adminId, req.admin?.email || req.user?.email || ''],
     )
 
