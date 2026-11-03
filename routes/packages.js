@@ -903,8 +903,7 @@ router.post('/:id/book', authenticate, async (req, res) => {
       `UPDATE packages p
           SET booking_count = (
             SELECT COUNT(*)::INTEGER FROM bookings b WHERE b.package_id = p.id
-          ),
-          updated_at = NOW()
+          )
         WHERE p.id = $1`,
       [p.id],
     ).catch((countErr) => {
