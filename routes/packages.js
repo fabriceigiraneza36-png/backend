@@ -445,7 +445,13 @@ router.get('/stats', requireAdmin, async (req, res) => {
                (SELECT COUNT(*) FROM bookings b INNER JOIN packages p ON p.id = b.package_id)
                +
                (SELECT COUNT(*) FROM package_bookings pb INNER JOIN packages p ON p.id = pb.package_id)
-             )::INTEGER AS bookings
+             )::INTEGER AS bookings,
+             (
+               SELECT COUNT(*)::INTEGER
+                 FROM package_messages pm
+                WHERE COALESCE(pm.is_read, false) = false
+                  AND COALESCE(pm.sender_type, '') <> 'admin'
+             ) AS unread_messages
       FROM packages
     `)
     const pendingResult = await db(`
@@ -463,7 +469,7 @@ router.get('/stats', requireAdmin, async (req, res) => {
         ...row,
         packages: { total: row.total, published: row.published, featured: row.featured },
         bookings: { total: row.bookings, pending },
-        messages: { unread: 0 },
+        messages: { unread: Number(row.unread_messages || 0) },
       },
     })
   } catch (err) {
