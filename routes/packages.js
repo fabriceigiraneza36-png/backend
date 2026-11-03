@@ -1040,6 +1040,53 @@ router.get('/:id/bookings', requireAdmin, async (req, res) => {
     const pg     = Math.max(parseInt(page, 10) || 1, 1)
     const offset = (pg - 1) * lim
 
+    // Older package requests were stored in package_bookings. Import them
+    // idempotently into the unified bookings table so the package tab and
+    // the Bookings detail view show the same records.
+    const legacyTable = await db("SELECT to_regclass('public.package_bookings') AS table_name")
+    if (legacyTable.rows[0]?.table_name) {
+      const legacyBackfillSql = [
+        "INSERT INTO bookings ("
+        "  booking_number, destination_id, package_id, full_name, email, phone,"
+        "  travel_date, return_date, number_of_travelers, number_of_adults, number_of_children,"
+        "  special_requests, status, booking_type, source, user_id, created_at, updated_at"
+        ")"
+        "SELECT"
+        "  COALESCE(NULLIF(pb.booking_ref, ''), 'LEGACY-PKG-' || pb.id::text),"
+        "  p.destination_id, pb.package_id, NULLIF(TRIM(pb.guest_name), ''),"
+        "  NULLIF(LOWER(TRIM(pb.guest_email)), ''), NULLIF(TRIM(pb.guest_phone), ''),"
+        "  pb.travel_date, pb.end_date,"
+        "  GREATEST(COALESCE(pb.travelers_count, 1), 1),"
+        "  GREATEST(COALESCE(pb.adults, 1), 1),"
+        "  GREATEST(COALESCE(pb.children, 0), 0),"
+        "  NULLIF(TRIM(pb.special_requests), ''),"
+        "  CASE"
+        "    WHEN pb.status = 'no_show' THEN 'completed'"
+        "    WHEN pb.status IN ('pending', 'needs_info', 'confirmed', 'cancelled', 'completed') THEN pb.status"
+        "    ELSE 'pending'"
+        "  END,"
+        "  'package', COALESCE(NULLIF(pb.source, ''), 'package_page'), pb.user_id,"
+        "  COALESCE(pb.created_at, NOW()), COALESCE(pb.updated_at, pb.created_at, NOW())"
+        "FROM package_bookings pb"
+        "LEFT JOIN packages p ON p.id = pb.package_id"
+        "WHERE pb.package_id = $1"
+        "  AND NOT EXISTS ("
+        "    SELECT 1"
+        "    FROM bookings b"
+        "    WHERE b.package_id = pb.package_id"
+        "      AND ("
+        "        (NULLIF(pb.booking_ref, '') IS NOT NULL AND b.booking_number = pb.booking_ref)"
+        "        OR ("
+        "          COALESCE(b.user_id, 0) = COALESCE(pb.user_id, 0)"
+        "          AND LOWER(COALESCE(b.email, '')) = LOWER(COALESCE(pb.guest_email, ''))"
+        "          AND ABS(EXTRACT(EPOCH FROM (COALESCE(b.created_at, NOW()) - COALESCE(pb.created_at, NOW())))) < 60"
+        "        )"
+        "      )"
+        "  )"
+        "ON CONFLICT DO NOTHING"
+      ].join('\n')
+      await db(legacyBackfillSql, [pkgId])
+    }
     const where = ['b.package_id = $1']
     const vals  = [pkgId]
 
