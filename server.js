@@ -2242,6 +2242,7 @@ async function initializeServer () {
         CREATE TABLE IF NOT EXISTS push_subscriptions (
           id          SERIAL PRIMARY KEY,
           admin_id    INTEGER DEFAULT 0,
+          account_type VARCHAR(20) DEFAULT 'admin',
           admin_email VARCHAR(255),
           endpoint    TEXT NOT NULL,
           p256dh      TEXT NOT NULL,
@@ -2251,6 +2252,8 @@ async function initializeServer () {
           updated_at  TIMESTAMP DEFAULT NOW()
         )
       `)
+      // Existing rows are legacy admin subscriptions; preserve their routing.
+      await query("ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS account_type VARCHAR(20) DEFAULT 'admin'")
       logger.info('? Push Subscriptions table ready')
     } catch (err) {
       logger.warn('??  Push Subscriptions table (non-fatal):', err.message)

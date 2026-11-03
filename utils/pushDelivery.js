@@ -4,7 +4,8 @@ const { query } = require("../config/db");
 const pushUtility = require("./push");
 const { getUserBrowserPushEnabled } = require("./pushSettings");
 
-const ADMIN_ROLES = ["admin", "manager"];
+const ADMIN_ROLES = ["admin", "manager", "superadmin", "super_admin", "moderator", "editor"];
+const ACCOUNT_TYPE = "COALESCE(ps.account_type, 'admin')";
 
 const absoluteUrl = (base, path) => {
   const value = String(path || "/notifications");
@@ -28,50 +29,48 @@ async function deliverNotificationPush(notification, {
   const scope = String(targetScope || "individual").toLowerCase();
   const userPushEnabled = await getUserBrowserPushEnabled();
   const params = [];
-  let where = "u.id = ps.admin_id";
+  const conditions = [];
 
   if (scope === "individual") {
+    if (!userPushEnabled) return { sent: 0, skipped: "user_delivery_disabled" };
     if (userId != null) {
       params.push(userId);
-      where += ` AND u.id::text = $1::text`;
+      conditions.push(`(${ACCOUNT_TYPE} = 'user' AND ps.admin_id::text = $1::text)`);
     } else if (userEmail) {
       params.push(String(userEmail).toLowerCase());
-      where += ` AND LOWER(u.email) = $1`;
+      conditions.push(`(${ACCOUNT_TYPE} = 'user' AND LOWER(ps.admin_email) = $1)`);
     } else {
       return { sent: 0, skipped: "missing_recipient" };
     }
-    if (!userPushEnabled) {
-      params.push(ADMIN_ROLES);
-      where += ` AND u.role = ANY($${params.length}::text[])`;
-    }
   } else if (scope === "admin") {
-    params.push(ADMIN_ROLES);
-    where += ` AND u.role = ANY($1::text[])`;
+    conditions.push(`${ACCOUNT_TYPE} = 'admin'`);
   } else if (scope === "role") {
     const role = String(targetRole || "").toLowerCase();
     if (!role) return { sent: 0, skipped: "missing_role" };
     if (ADMIN_ROLES.includes(role)) {
-      params.push(role === "admin" ? ADMIN_ROLES : [role]);
-      where += ` AND u.role = ANY($1::text[])`;
+      conditions.push(`${ACCOUNT_TYPE} = 'admin'`);
     } else {
       if (!userPushEnabled) return { sent: 0, skipped: "user_delivery_disabled" };
       params.push(role);
-      where += ` AND u.role = $1`;
+      conditions.push(`${ACCOUNT_TYPE} = 'user'`);
+      conditions.push(`COALESCE(u.role, 'user') = $1`);
     }
   } else if (scope === "all") {
-    if (!userPushEnabled) {
-      params.push(ADMIN_ROLES);
-      where += ` AND u.role = ANY($1::text[])`;
-    }
+    if (!userPushEnabled) conditions.push(`${ACCOUNT_TYPE} = 'admin'`);
   } else {
     return { sent: 0, skipped: "unsupported_scope" };
   }
 
+  const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
   const { rows } = await query(
-    `SELECT DISTINCT ps.endpoint, ps.p256dh, ps.auth, u.role
+    `SELECT DISTINCT ps.endpoint, ps.p256dh, ps.auth,
+            ${ACCOUNT_TYPE} AS account_type,
+            CASE WHEN ${ACCOUNT_TYPE} = 'admin' THEN 'admin'
+                 ELSE COALESCE(u.role, 'user') END AS role
        FROM push_subscriptions ps
-       JOIN users u ON u.id = ps.admin_id
-      WHERE ${where}`,
+       LEFT JOIN users u
+         ON u.id = ps.admin_id AND ${ACCOUNT_TYPE} = 'user'
+       ${where}`,
     params,
   );
   if (!rows.length) return { sent: 0, skipped: "no_subscriptions" };
@@ -80,11 +79,9 @@ async function deliverNotificationPush(notification, {
   const adminBase = process.env.ADMIN_PANEL_URL || process.env.ADMIN_URL || "https://altuverapanel.vercel.app";
   const groups = new Map();
   for (const row of rows) {
-    const isAdmin = ADMIN_ROLES.includes(String(row.role || "").toLowerCase());
-    const base = isAdmin ? adminBase : frontendBase;
-    const key = base;
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key).push(row);
+    const base = row.account_type === "admin" ? adminBase : frontendBase;
+    if (!groups.has(base)) groups.set(base, []);
+    groups.get(base).push(row);
   }
 
   let sent = 0;

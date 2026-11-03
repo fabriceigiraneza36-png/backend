@@ -16,8 +16,9 @@ const { getUserBrowserPushEnabled, setUserBrowserPushEnabled } = require('../uti
    ───────────────────────────────────────────────────────────────────────────── */
 exports.subscribe = async (req, res) => {
   try {
-    const accountId   = req.admin?.id || req.user?.id
+    const accountId = req.admin?.id || req.user?.id
     const accountEmail = req.admin?.email || req.user?.email || ''
+    const accountType = req.userType === 'admin' || req.admin ? 'admin' : 'user'
     if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to enable push notifications.' })
     const { endpoint, p256dh, auth, userAgent } = req.body || {}
 
@@ -25,19 +26,23 @@ exports.subscribe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'endpoint, p256dh, and auth are required.' })
     }
 
-    // A browser endpoint belongs to the currently signed-in admin only.
-    // Reassign it on account changes rather than leaving a previous admin subscribed.
+    // A browser endpoint must belong to one account/type at a time. The
+    // account_type column is additive; legacy subscriptions are treated as admin.
     await query(
-      `DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id<>$2`,
-      [endpoint, accountId],
+      `DELETE FROM push_subscriptions
+        WHERE endpoint=$1
+          AND NOT (admin_id=$2 AND COALESCE(account_type,'admin')=$3)`,
+      [endpoint, accountId, accountType],
     )
 
     const existing = await query(
       `UPDATE push_subscriptions
-         SET admin_email=$1, p256dh=$2, auth=$3, user_agent=$4, updated_at=NOW()
-       WHERE endpoint=$5 AND admin_id=$6
-       RETURNING id`,
-      [accountEmail, p256dh, auth, userAgent || null, endpoint, accountId],
+          SET admin_email=$1, account_type=$2, p256dh=$3, auth=$4,
+              user_agent=$5, updated_at=NOW()
+        WHERE endpoint=$6 AND admin_id=$7
+          AND COALESCE(account_type,'admin')=$2
+        RETURNING id`,
+      [accountEmail, accountType, p256dh, auth, userAgent || null, endpoint, accountId],
     )
 
     let subId
@@ -45,15 +50,16 @@ exports.subscribe = async (req, res) => {
       subId = existing.rows[0].id
     } else {
       const inserted = await query(
-        `INSERT INTO push_subscriptions (admin_id, admin_email, endpoint, p256dh, auth, user_agent)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [accountId, accountEmail, endpoint, p256dh, auth, userAgent || null],
+        `INSERT INTO push_subscriptions
+           (admin_id, admin_email, account_type, endpoint, p256dh, auth, user_agent)
+         VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id`,
+        [accountId, accountEmail, accountType, endpoint, p256dh, auth, userAgent || null],
       )
       subId = inserted.rows[0]?.id
     }
 
-    logger.info(`[Push] Account ${accountId} subscribed (subId=${subId})`)
-    return res.json({ success: true, id: subId })
+    logger.info(`[Push] ${accountType} account ${accountId} subscribed (subId=${subId})`)
+    return res.json({ success: true, id: subId, accountType })
   } catch (err) {
     logger.error('[Push] subscribe failed:', err.message)
     return res.status(500).json({ success: false, message: 'Subscription failed.' })
@@ -68,6 +74,7 @@ exports.subscribe = async (req, res) => {
 exports.unsubscribe = async (req, res) => {
   try {
     const accountId = req.admin?.id || req.user?.id
+    const accountType = req.userType === 'admin' || req.admin ? 'admin' : 'user'
     const { endpoint } = req.body || {}
     if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to manage push notifications.' })
 
@@ -75,7 +82,12 @@ exports.unsubscribe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'endpoint is required.' })
     }
 
-    await query(`DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id=$2`, [endpoint, accountId])
+    await query(
+      `DELETE FROM push_subscriptions
+        WHERE endpoint=$1 AND admin_id=$2
+          AND COALESCE(account_type,'admin')=$3`,
+      [endpoint, accountId, accountType],
+    )
     logger.info(`[Push] Account ${accountId} unsubscribed`)
     return res.json({ success: true })
   } catch (err) {
@@ -103,10 +115,13 @@ exports.getVapidPublicKey = async (req, res) => {
 exports.mySubscriptions = async (req, res) => {
   try {
     const accountId = req.admin?.id || req.user?.id
+    const accountType = req.userType === 'admin' || req.admin ? 'admin' : 'user'
     if (!accountId) return res.status(401).json({ success: false, message: 'Sign in to view push subscriptions.' })
     const { rows } = await query(
-      `SELECT id, endpoint, created_at FROM push_subscriptions WHERE admin_id=$1 ORDER BY created_at DESC`,
-      [accountId],
+      `SELECT id, endpoint, created_at FROM push_subscriptions
+        WHERE admin_id=$1 AND COALESCE(account_type,'admin')=$2
+        ORDER BY created_at DESC`,
+      [accountId, accountType],
     )
     return res.json({ success: true, data: rows })
   } catch (err) {
@@ -221,7 +236,7 @@ exports.test = async (req, res) => {
 
     await ensureTestDeliverySchema()
     const { rows } = await query(
-      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1 ORDER BY updated_at DESC',
+      'SELECT id, endpoint, p256dh, auth FROM push_subscriptions WHERE admin_id=$1 AND COALESCE(account_type,'admin')='admin' ORDER BY updated_at DESC',
       [adminId],
     )
 
@@ -280,7 +295,7 @@ exports.test = async (req, res) => {
         providerFailed += 1
         providerError = 'Stored browser subscription is incomplete; this browser must sync a fresh subscription.'
         await query(
-          'DELETE FROM push_subscriptions WHERE id=$1 AND admin_id=$2',
+          'DELETE FROM push_subscriptions WHERE id=$1 AND admin_id=$2 AND COALESCE(account_type,'admin')='admin'',
           [subscription.id, adminId],
         ).catch((deleteErr) => logger.warn('[Push] Could not remove incomplete subscription:', deleteErr.message))
         await query(
