@@ -1,6 +1,6 @@
 # Altuvera Safaris email branding and BIMI readiness
 
-Last audited: 2026-11-01
+Last audited: 2026-11-03
 
 ## Current verified state
 
@@ -42,4 +42,7 @@ BIMI staging candidate (NOT validated, NOT production-ready):
 - Do not change the existing root SPF record by simply adding another SPF TXT record. SPF permits only one policy record per hostname; merge authorized senders into the existing record only after verifying the exact provider requirements.
 - Do not add guessed SendGrid DKIM CNAMEs or guessed SPF includes.
 - Do not publish the current staging SVG as a certified BIMI asset.
-- Gmail's automatic OTP "Copy code" UI is a Gmail-side heuristic. There is no published sender-side guarantee or known tag that forces it. The backend currently puts the numeric OTP first in the preview and plain-text alternatives for a test.
+- The shared OTP template is structured to improve Gmail recognition: the six-digit OTP leads the subject, appears as the first visible content after the official email header, and is the first line of the plain-text alternative. It is followed by an explicit "Altuvera Safaris verification code" label and expiry/security guidance.
+- Gmail's native "Copy code" shortcut remains a Gmail-side heuristic. Google has not published a sender-side guarantee or a tag that forces the shortcut; its appearance cannot be promised, even when an email follows common OTP patterns.
+- A logo embedded in the email body does NOT set Gmail's circular sender avatar. That avatar requires supported brand authentication such as BIMI. The current domain is still at DMARC `p=none` with no VMC/CMC, so no BIMI DNS record should be published yet.
+
