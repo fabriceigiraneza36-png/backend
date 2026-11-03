@@ -777,10 +777,26 @@ const createNotificationInternal = async ({
   // 1) In-app notification for the user (or audience)
   let notificationMetadata = metadata;
   let notificationImageUrl = imageUrl;
-  if (targetScope !== "individual" && actor) {
+  // Admin-facing activity notifications often carry the acting traveller's
+  // userId in metadata but do not pass an explicit actor object (for example,
+  // incoming chat messages). Resolve that ID here so the notification card
+  // displays the actual profile name instead of a generic sender label.
+  // Preserve pre-aggregated multi-user notifications unchanged.
+  const hasGroupedUsers = Array.isArray(metadata.users) && metadata.users.length > 1;
+  const hasIdentityHint = Boolean(
+    actor || metadata.user || metadata.actor || metadata.profile ||
+    metadata.userId || metadata.user_id || metadata.userEmail || metadata.user_email
+  );
+  if (targetScope !== "individual" && hasIdentityHint && !hasGroupedUsers) {
     const identity = await resolveNotificationUser(actor, metadata);
     if (identity) {
-      notificationMetadata = { ...metadata, user: identity, users: [identity], userId: identity.id || metadata.userId || null };
+      notificationMetadata = {
+        ...metadata,
+        user: identity,
+        users: [identity],
+        userId: identity.id || metadata.userId || metadata.user_id || null,
+        userName: identity.name || metadata.userName || metadata.user_name || null,
+      };
       notificationImageUrl = identity.avatarUrl || imageUrl;
     }
   }
