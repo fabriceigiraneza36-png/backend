@@ -1397,6 +1397,7 @@ router.post('/:id/info-requests/:rId/respond', authenticate, async (req, res) =>
     const fields = normalizeInfoRequest(request).fields;
     const errors = fields.filter(field => field.required).filter(field => {
       const value = answers[field.id];
+      if (field.type === 'checkbox' && !(field.options || []).length) return value !== true;
       return value === undefined || value === null || value === '' || (Array.isArray(value) && !value.length);
     }).map(field => field.label + ' is required.');
     if (errors.length) return res.status(400).json({ success: false, errors, message: errors.join(' ') });
