@@ -326,11 +326,11 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
           "Session scheduled to expire: " + formatLoginEmailDate(notif.metadata?.sessionExpiresAt),
           "",
           "If you don’t recognize this sign-in, review your account security:",
-          (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\\/+$/, "") + "/account/security",
+          (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "") + "/account/security",
           "",
           "Need help? info@altuverasafaris.com",
           "This is an automated account-security message. Please do not reply.",
-        ].join("\\n")
+        ].join("\n")
       : undefined;
 
     await sendEmail({
