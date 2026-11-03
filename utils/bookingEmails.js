@@ -117,7 +117,7 @@ const ENV = {
   year:         new Date().getFullYear(),
 
   logoUrl:      process.env.EMAIL_LOGO_URL ||
-    "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png",
+    "https://www.altuverasafaris.com/altuvera.png",
   heroImage:    process.env.EMAIL_HERO_URL ||
     "https://res.cloudinary.com/doijjawna/image/upload/v1781342220/ChatGPT_Image_Jun_13_2026_11_16_51_AM_oibwwb.png",
 
