@@ -5,7 +5,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
   const interestNames = [...new Set((Array.isArray(interests) ? interests : []).map((item) => String(item || "").trim()).filter(Boolean))].slice(0, 3);
   const safeFirstName = name ? escapeHtml(name.split(" ")[0]) : "";
-  const logoUrl = process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png";
+  const logoUrl = process.env.EMAIL_LOGO_URL || "https://www.altuverasafaris.com/altuvera.png";
   const avatarUrl = /^https:\/\//i.test(String(recipientAvatarUrl || "")) ? String(recipientAvatarUrl) : "";
   const initialsSource = String(name || email || "U").trim().split(/\s+/).filter(Boolean);
   const avatarInitials = initialsSource.length > 1

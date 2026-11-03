@@ -23,7 +23,7 @@ const cfg = {
   appName:      process.env.APP_NAME      || "Altuvera Safaris",
   appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   frontendUrl:  process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
-  logoUrl:      process.env.EMAIL_LOGO_URL || "https://res.cloudinary.com/doijjawna/image/upload/c_fit,h_96,w_192/f_png/q_auto/v1784310142/altuvera_qzbcvf.png",
+  logoUrl:      process.env.EMAIL_LOGO_URL || "https://www.altuverasafaris.com/altuvera.png",
   backendUrl:   process.env.BACKEND_URL   || "https://backend-jd8f.onrender.com",
   isDev:        process.env.NODE_ENV      !== "production",
 };
