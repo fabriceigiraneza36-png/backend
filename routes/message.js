@@ -495,11 +495,21 @@ const changeConversationStatus = typeof _changeConversationStatus === "function"
 function reshapeConversation(row, includeMessages = false) {
   if (!row) return null;
 
+  const storedGuestName = String(row.guest_name || '').trim();
+  const genericGuestName = /^(?:end\s*user|guest(?:\s*user)?|visitor|travell?er|user|unknown\s*member)$/i.test(storedGuestName);
+  const profileFullName = String(
+    row.user?.fullName || row.user?.full_name ||
+    row.user_full_name || row.u_full_name || ''
+  ).trim();
+  const resolvedGuestName = genericGuestName
+    ? (profileFullName || null)
+    : (storedGuestName || profileFullName || null);
+
   const base = {
     id:            row.id,
     sessionId:     row.session_id,
     userId:        row.user_id,
-    guestName:     row.guest_name || row.user?.fullName || row.user_full_name || row.u_full_name || null,
+    guestName:     resolvedGuestName,
     guestEmail:    row.guest_email || row.user?.email || row.user_email || row.u_email || null,
     guestAvatar:   row.user?.avatarUrl || row.user_avatar || row.u_avatar_url || row.guest_avatar || null,
     channel:       row.channel,
