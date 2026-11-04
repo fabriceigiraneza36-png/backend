@@ -84,26 +84,111 @@ function renderHtml(options) {
   const ctaText = personalise(template.cta_label || template.ctaLabel || "Explore more", recipient, context);
   const ctaCandidate = personalise(template.cta_url || template.ctaUrl || context.contentUrl || FRONTEND_URL + "/destinations", recipient, context);
   const ctaUrl = safeHttpUrl(ctaCandidate, FRONTEND_URL + "/destinations");
-  const layout = ["adventure", "editorial", "minimal"].includes(template.layout) ? template.layout : "editorial";
-  // Optional animation degrades gracefully when an email client strips CSS motion.
-  const animation = ["none", "fade", "rise"].includes(template.animation) ? template.animation : "none";
-  const animationCss = animation === "fade"
-    ? "@keyframes altuveraFade{from{opacity:.35}to{opacity:1}}.al-campaign-motion{animation:altuveraFade .6s ease-out both}"
-    : animation === "rise"
-      ? "@keyframes altuveraRise{from{opacity:.6;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}.al-campaign-motion{animation:altuveraRise .55s ease-out both}"
-      : ".al-campaign-motion{animation:none}";
+  const logoUrl = FRONTEND_URL + "/altuvera.png";
+  const displayName = String(recipient.name || "").trim();
+  const firstName = displayName.split(/\s+/)[0] || "Explorer";
+  const nameParts = displayName.split(/\s+/).filter(Boolean);
+  const initials = nameParts.length > 1
+    ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+    : (nameParts[0] || recipient.email || "U").slice(0, 2).toUpperCase();
+  const avatarUrl = safeHttpUrl(recipient.avatar_url || recipient.avatarUrl || "", "");
+  const avatarMarkup = avatarUrl
+    ? '<img src="' + escapeHtml(avatarUrl) + '" width="44" height="44" alt="' + escapeHtml(displayName || "Your profile") + '" style="display:block;width:44px;height:44px;border-radius:50%;object-fit:cover;border:2px solid #d1fae5;background:#fff" />'
+    : '<table role="presentation" width="44" height="44" cellpadding="0" cellspacing="0" style="width:44px;height:44px;border-radius:50%;background:#d1fae5;border:2px solid #fff"><tr><td align="center" valign="middle" style="font:800 13px Arial,sans-serif;color:#065f46">' + escapeHtml(initials) + '</td></tr></table>';
 
   const paragraphs = bodyText.split(/\n{2,}/).map(function (part) {
-    return '<p style="margin:0 0 14px;color:#334155;font-size:15px;line-height:1.75">' + escapeHtml(part).replace(/\n/g, "<br/>") + "</p>";
+    return '<p style="margin:0 0 13px;color:#334155;font-size:15px;line-height:1.7;overflow-wrap:anywhere">' +
+      escapeHtml(part).replace(/\n/g, "<br/>") + "</p>";
   }).join("");
-  const hero = heroUrl
-    ? '<tr><td style="padding:0;background:#e2e8f0"><img src="' + escapeHtml(heroUrl) + '" alt="' + escapeHtml(title) + '" width="600" style="display:block;width:100%;max-width:600px;height:auto;border:0" /></td></tr>'
+
+  const rawItems = Array.isArray(context.contentItems) ? context.contentItems : [];
+  const contentItems = rawItems.slice(0, 12).map((item) => ({
+    title: String(item.title || item.name || "Explore Altuvera").slice(0, 180),
+    type: String(item.type || "experience").replace(/[_-]+/g, " ").slice(0, 50),
+    description: String(item.description || item.short_description || item.excerpt || "").slice(0, 500),
+    url: safeHttpUrl(item.contentUrl || item.url || "", ctaUrl),
+  }));
+  const itemCards = contentItems.length
+    ? '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin:20px 0 4px">' +
+      contentItems.map((item) =>
+        '<tr><td style="padding:13px 15px;border:1px solid #dcebe1;border-radius:12px;background:#f8fcf9">' +
+        '<p style="margin:0 0 3px;color:#047857;font:700 9px Arial,sans-serif;letter-spacing:1px;text-transform:uppercase">' + escapeHtml(item.type) + '</p>' +
+        '<p style="margin:0 0 4px;color:#123b2c;font:700 15px Arial,sans-serif"><a href="' + escapeHtml(item.url) + '" style="color:#123b2c;text-decoration:none">' + escapeHtml(item.title) + '</a></p>' +
+        (item.description ? '<p style="margin:0;color:#64748b;font:12px/1.55 Arial,sans-serif">' + escapeHtml(item.description) + '</p>' : '') +
+        '</td></tr><tr><td height="8" style="height:8px;font-size:1px;line-height:1px">&nbsp;</td></tr>'
+      ).join("") + "</table>"
     : "";
-  const headerBg = layout === "minimal" ? "#ffffff" : accent;
-  const headerColor = layout === "minimal" ? "#0f172a" : "#ffffff";
-  const subtitleColor = layout === "minimal" ? accent : "#d1fae5";
+
+  const rawGallery = Array.isArray(context.mediaGallery) ? context.mediaGallery
+    : Array.isArray(context.galleryImages) ? context.galleryImages
+    : Array.isArray(context.images) ? context.images : [];
+  const galleryImages = rawGallery.map((entry) => {
+    if (typeof entry === "string") return { url: safeHttpUrl(entry, ""), alt: title };
+    return {
+      url: safeHttpUrl(entry?.url || entry?.image_url || entry?.imageUrl || "", ""),
+      alt: String(entry?.alt || entry?.title || title).slice(0, 180),
+      caption: String(entry?.caption || entry?.title || "").slice(0, 160),
+      link: safeHttpUrl(entry?.contentUrl || entry?.link || "", ctaUrl),
+    };
+  }).filter((image) => image.url).slice(0, 10);
+
+  const galleryMarkup = galleryImages.length
+    ? '<div style="margin:23px 0 8px">' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
+      '<td align="left" style="color:#174b35;font:800 11px Arial,sans-serif;letter-spacing:1.1px;text-transform:uppercase">A closer look</td>' +
+      '<td align="right" style="white-space:nowrap"><a href="#al-campaign-gallery-first" style="display:inline-block;padding:5px 9px;border:1px solid #b7dfc7;border-radius:50%;color:#087a50;text-decoration:none;font:700 16px Arial,sans-serif">‹</a>&nbsp;<a href="#al-campaign-gallery-last" style="display:inline-block;padding:5px 9px;border:1px solid #b7dfc7;border-radius:50%;color:#087a50;text-decoration:none;font:700 16px Arial,sans-serif">›</a></td>' +
+      '</tr></table>' +
+      '<div class="al-campaign-carousel" role="group" aria-label="Campaign image gallery" style="width:100%;max-width:536px;margin:10px 0 0;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch;scroll-snap-type:x mandatory;border-radius:13px">' +
+      '<span id="al-campaign-gallery-first" style="display:inline-block;width:1px;height:1px;overflow:hidden"></span>' +
+      galleryImages.map((image, index) =>
+        '<div class="al-campaign-slide" style="display:inline-block;vertical-align:top;width:238px;max-width:82%;margin-right:10px;white-space:normal;scroll-snap-align:start;border:1px solid #dcebe1;border-radius:13px;overflow:hidden;background:#fff">' +
+        '<a href="' + escapeHtml(image.link || ctaUrl) + '" style="display:block;text-decoration:none"><img src="' + escapeHtml(image.url) + '" alt="' + escapeHtml(image.alt) + '" width="238" style="display:block;width:100%;height:164px;object-fit:cover;background:#e8f3eb;border:0" /></a>' +
+        (image.caption ? '<p style="margin:0;padding:8px 10px;color:#52685d;font:11px/1.4 Arial,sans-serif">' + escapeHtml(image.caption) + '</p>' : '') +
+        '</div>'
+      ).join("") +
+      '<span id="al-campaign-gallery-last" style="display:inline-block;width:1px;height:1px;overflow:hidden"></span></div>' +
+      '<p style="margin:7px 0 0;color:#82938a;font:10px/1.5 Arial,sans-serif">Swipe to explore more images. On desktop, use the arrows or horizontal scroll.</p></div>'
+    : (heroUrl ? '<div style="margin:20px 0 5px;border-radius:13px;overflow:hidden"><img src="' + escapeHtml(heroUrl) + '" alt="' + escapeHtml(title) + '" width="536" style="display:block;width:100%;max-width:536px;height:auto;border:0" /></div>' : "");
+
+  const celebration = '<div class="al-celebration" style="position:relative;margin:0 0 18px;padding:11px 15px;border:1px solid #d1fae5;border-radius:13px;background:#f0fdf4;text-align:center;overflow:hidden">' +
+    '<span style="color:#047857;font:700 10px Arial,sans-serif;letter-spacing:1.2px;text-transform:uppercase">A fresh update from Altuvera</span>' +
+    '<span class="al-confetti al-c1" aria-hidden="true" style="position:absolute;left:10%;top:4px;width:6px;height:9px;background:#10b981;border-radius:2px;transform:rotate(28deg)"></span>' +
+    '<span class="al-confetti al-c2" aria-hidden="true" style="position:absolute;left:24%;top:6px;width:5px;height:8px;background:#a7f3d0;border-radius:2px;transform:rotate(-24deg)"></span>' +
+    '<span class="al-confetti al-c3" aria-hidden="true" style="position:absolute;right:17%;top:3px;width:6px;height:9px;background:#047857;border-radius:2px;transform:rotate(34deg)"></span>' +
+    '<span class="al-confetti al-c4" aria-hidden="true" style="position:absolute;right:8%;top:8px;width:5px;height:8px;background:#6ee7b7;border-radius:2px;transform:rotate(-30deg)"></span></div>';
+
+  const animationCss =
+    '@keyframes alCampaignConfetti{0%{transform:translateY(-8px) rotate(0deg);opacity:.25}18%{opacity:1}100%{transform:translateY(36px) rotate(230deg);opacity:.15}}' +
+    '.al-confetti{animation:alCampaignConfetti 1.5s ease-out both}' +
+    '.al-c2{animation-delay:.08s}.al-c3{animation-delay:.16s}.al-c4{animation-delay:.24s}' +
+    '@media(prefers-reduced-motion:reduce){.al-confetti{animation:none!important}}' +
+    '@media(max-width:620px){.al-campaign-content{padding:22px 17px!important}.al-campaign-heading{font-size:25px!important}.al-campaign-carousel{scroll-snap-type:x mandatory!important}}' +
+    '@media(hover:hover){.al-campaign-carousel::-webkit-scrollbar{height:7px}.al-campaign-carousel::-webkit-scrollbar-thumb{background:#a7f3d0;border-radius:10px}}';
+
   const unsubscribeUrl = BACKEND_URL + "/api/subscribers/unsubscribe/" + encodeURIComponent(String(recipient.email || ""));
-  return '<!DOCTYPE html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="color-scheme" content="light only"/><title>' + escapeHtml(personalise(subject, recipient, context)) + '</title><style>'+animationCss+'@media(prefers-reduced-motion:reduce){.al-campaign-motion{animation:none!important;transform:none!important;opacity:1!important}}body{margin:0;padding:0;background:' + background + ';font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%}@media(max-width:620px){.outer{padding:12px 6px!important}.content{padding:22px 18px!important}.heading{font-size:25px!important}}</style></head><body style="margin:0;padding:0;background:' + background + ';font-family:Arial,Helvetica,sans-serif"><div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent">' + escapeHtml(preheader) + '</div><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:' + background + ';padding:24px 10px" class="outer"><tr><td align="center"><table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#fff;border:1px solid #dbe7e1;border-radius:18px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,.07)"><tr><td style="padding:25px 28px 22px;background:' + headerBg + ';color:' + headerColor + ';text-align:center"><div style="font-size:12px;font-weight:700;letter-spacing:2px;text-transform:uppercase;opacity:.82">ALTUVERA SAFARIS</div><h1 class="heading" style="margin:11px 0 0;font-size:30px;line-height:1.2;font-weight:800;color:' + headerColor + '">' + escapeHtml(title) + '</h1><p style="margin:9px 0 0;font-size:12px;line-height:1.5;color:' + subtitleColor + '">True adventure in high places &amp; deep culture</p></td></tr>' + hero + '<tr><td class="content al-campaign-motion" style="padding:29px 32px 28px">' + paragraphs + '<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:22px auto 8px"><tr><td bgcolor="' + accent + '" style="border-radius:11px;text-align:center"><a href="' + escapeHtml(ctaUrl) + '" style="display:inline-block;padding:14px 22px;background:' + accent + ';border:1px solid ' + accent + ';border-radius:11px;color:#fff;text-decoration:none;font-size:14px;line-height:1.2;font-weight:700">' + escapeHtml(ctaText) + '</a></td></tr></table><p style="margin:20px 0 0;color:#64748b;text-align:center;font-size:12px;line-height:1.6">Our team is happy to help shape the details around your interests and dates.</p></td></tr><tr><td style="padding:18px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center"><p style="margin:0;color:#64748b;font-size:11px;line-height:1.7">' + escapeHtml(APP_NAME) + ' · East Africa</p><p style="margin:6px 0 0;color:#94a3b8;font-size:11px;line-height:1.7">You are receiving travel inspiration because you opted in. <a href="' + escapeHtml(unsubscribeUrl) + '" style="color:' + accent + ';text-decoration:underline">Unsubscribe</a></p><p style="margin:8px 0 0"><a href="' + escapeHtml(FRONTEND_URL) + '" style="font-size:11px;color:' + accent + '">Visit Altuvera</a></p></td></tr></table></td></tr></table></body></html>';
+  return '<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta name="x-apple-disable-message-reformatting"/><meta name="color-scheme" content="light only"/><title>' +
+    escapeHtml(personalise(subject, recipient, context)) + '</title><style>' + animationCss +
+    'body{margin:0;padding:0;background:' + background + ';font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%}table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt}img{border:0;outline:none;text-decoration:none}' +
+    '@media(max-width:620px){.al-campaign-outer{padding:10px 5px!important}.al-campaign-card{border-radius:14px!important}.al-campaign-content{padding:20px 15px!important}.al-campaign-heading{font-size:24px!important}.al-campaign-logo{width:66px!important;height:36px!important}}' +
+    '</style></head><body style="margin:0;padding:0;background:' + background + ';font-family:Arial,Helvetica,sans-serif">' +
+    '<div style="display:none;max-height:0;overflow:hidden;opacity:0;color:transparent;mso-hide:all">' + escapeHtml(preheader) + '</div>' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" class="al-campaign-outer" style="width:100%;background:' + background + ';padding:23px 10px"><tr><td align="center">' +
+    '<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="al-campaign-card" style="width:100%;max-width:600px;background:#fff;border:1px solid #dbe7e1;border-radius:18px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,.07)">' +
+    '<tr><td bgcolor="#064e3b" style="padding:14px 19px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e,#087a50)">' +
+    '<table data-altuvera-email-header="true" role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
+    '<td width="79" valign="middle" style="width:79px"><img class="al-campaign-logo" src="' + escapeHtml(logoUrl) + '" width="72" height="40" alt="Altuvera Safaris logo" style="display:block;width:72px;height:40px;object-fit:contain;border-radius:7px;background:#fff;padding:3px"/></td>' +
+    '<td valign="middle" style="padding:0 9px"><p style="margin:0;color:#fff;font:800 15px/1.25 Arial,sans-serif">Altuvera Safaris</p><p style="margin:4px 0 0;color:#b9f2d4;font:700 8px/1.4 Arial,sans-serif;letter-spacing:.85px;text-transform:uppercase">True adventure in high places &amp; deep culture</p></td>' +
+    '<td align="right" valign="middle" width="48" style="width:48px">' + avatarMarkup + '</td></tr></table></td></tr>' +
+    '<tr><td class="al-campaign-content" style="padding:28px 32px 27px">' + celebration +
+    '<h1 class="al-campaign-heading" style="margin:0 0 11px;color:#123b2c;font:800 29px/1.2 Arial,sans-serif;letter-spacing:-.5px">' + escapeHtml(title) + '</h1>' +
+    '<p style="margin:0 0 16px;color:#52685d;font:13px/1.55 Arial,sans-serif">Hello <strong>' + escapeHtml(firstName) + '</strong>,</p>' +
+    paragraphs + itemCards + galleryMarkup +
+    '<table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:21px auto 8px"><tr><td bgcolor="' + accent + '" style="border-radius:999px;text-align:center"><a href="' + escapeHtml(ctaUrl) + '" style="display:inline-block;padding:13px 22px;background:' + accent + ';border:1px solid ' + accent + ';border-radius:999px;color:#fff;text-decoration:none;font:700 13px/1.2 Arial,sans-serif">' + escapeHtml(ctaText) + ' &#8594;</a></td></tr></table>' +
+    '<p style="margin:15px 0 0;color:#82938a;text-align:center;font:11px/1.6 Arial,sans-serif">Our team is happy to help shape the details around your interests and dates.</p></td></tr>' +
+    '<tr><td style="padding:16px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center"><p style="margin:0;color:#64748b;font:11px/1.6 Arial,sans-serif">' + escapeHtml(APP_NAME) + ' · East Africa</p>' +
+    '<p style="margin:5px 0 0;color:#94a3b8;font:10px/1.6 Arial,sans-serif">You are receiving travel updates because you opted in. <a href="' + escapeHtml(unsubscribeUrl) + '" style="color:' + accent + ';text-decoration:underline">Unsubscribe</a></p>' +
+    '<p style="margin:6px 0 0"><a href="' + escapeHtml(FRONTEND_URL) + '" style="color:' + accent + ';font:10px Arial,sans-serif">Visit Altuvera Safaris</a></p>' +
+    '<p style="margin:7px 0 0;color:#a5b1a9;font:9px Arial,sans-serif">© ' + new Date().getFullYear() + ' Altuvera Safaris. All rights reserved.</p></td></tr></table></td></tr></table></body></html>';
 }
 
 async function listTemplates() {
