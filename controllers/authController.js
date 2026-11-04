@@ -1292,8 +1292,9 @@ const GITHUB_CALLBACK_URL =
   "https://altuverasafaris.com/auth/github/callback";
 
 exports.githubSignInInit = async (req, res) => {
-  if (!process.env.GITHUB_CLIENT_ID)
-    return res.status(500).json({ success: false, message: "GitHub auth not configured." });
+  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\\/+$/, "");
+  if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
+    return res.redirect(`${frontend}/auth/github/callback?error=github_not_configured`);
   const redirect = GITHUB_CALLBACK_URL;
   res.redirect(
     `https://github.com/login/oauth/authorize?client_id=${process.env.GITHUB_CLIENT_ID}` +
@@ -1486,12 +1487,9 @@ const verifyFacebookState = (state, cookieHeader) => {
 };
 
 exports.facebookSignInInit = async (req, res) => {
+  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\\/+$/, "");
   if (!process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
-    return res.status(503).json({
-      success: false,
-      code: "FACEBOOK_AUTH_NOT_CONFIGURED",
-      message: "Facebook sign-in is not configured for Altuvera yet.",
-    });
+    return res.redirect(`${frontend}/auth/facebook/callback?error=facebook_not_configured`);
   }
   const authorizationUrl = new URL("https://www.facebook.com/" + FACEBOOK_GRAPH_VERSION + "/dialog/oauth");
   authorizationUrl.searchParams.set("client_id", process.env.FACEBOOK_CLIENT_ID);
