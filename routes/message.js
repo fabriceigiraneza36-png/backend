@@ -628,9 +628,13 @@ async function getActiveRegisteredUser(userId) {
 async function ensureTravelerChannels(userId) {
   const profile = await getActiveRegisteredUser(userId);
   if (!profile) throw Object.assign(new Error("This account is no longer available."), { status: 403 });
+  // Every traveler receives exactly one persistent thread for each purpose.
+  // Keep the established database types for General and Booking Support so
+  // existing itineraries, booking lookups, and historical records keep working.
   const defaults = [
-    { type: "personal", channel: "personal_support", subject: "Personal chat with Altuvera", source: "system" },
-    { type: "resource_support", channel: "booking_support", subject: "Bookings & travel help", source: "system" },
+    { type: "personal", channel: "general_enquiries", subject: "General Enquiries", source: "system" },
+    { type: "safari_planning", channel: "safari_planning", subject: "Safari Planning", source: "system" },
+    { type: "resource_support", channel: "booking_support", subject: "Booking Support", source: "system" },
   ];
   for (const item of defaults) {
     await query(
@@ -641,34 +645,38 @@ async function ensureTravelerChannels(userId) {
         WHERE NOT EXISTS (
           SELECT 1 FROM conversations
            WHERE user_id=$1 AND conversation_type=CAST($7 AS VARCHAR) AND deleted_at IS NULL
+             AND group_id IS NULL
         )`,
       [profile.id, profile.full_name || null, profile.email || null, item.channel, item.subject, item.source, item.type],
     );
   }
   const { rows } = await query(
     `SELECT id, conversation_type FROM conversations
-      WHERE user_id=$1 AND conversation_type IN ('personal','resource_support')
-        AND deleted_at IS NULL`,
+      WHERE user_id=$1 AND conversation_type IN ('personal','safari_planning','resource_support')
+        AND deleted_at IS NULL AND group_id IS NULL`,
     [profile.id],
   );
   const personalId = rows.find(row => row.conversation_type === "personal")?.id;
+  const planningId = rows.find(row => row.conversation_type === "safari_planning")?.id;
   const supportId = rows.find(row => row.conversation_type === "resource_support")?.id;
 
-  // Preserve old private-chat history while consolidating each account to the
-  // two canonical private channels. Legacy booking-related messages move to
-  // booking support; all other old private chats merge into personal support.
-  if (personalId && supportId) {
+  // Consolidate old direct threads once, preserving every message. Booking
+  // operations remain in Booking Support; destination/package discovery moves
+  // to Safari Planning; unrelated questions stay in General Enquiries.
+  if (personalId && planningId && supportId) {
     const { rows: legacyRows } = await query(
       `SELECT id, booking_id, booking_number, channel, subject
          FROM conversations
         WHERE user_id=$1 AND group_id IS NULL AND deleted_at IS NULL
-          AND conversation_type NOT IN ('personal','resource_support')`,
+          AND conversation_type NOT IN ('personal','safari_planning','resource_support')`,
       [profile.id],
     );
     for (const legacy of legacyRows) {
+      const legacyDescriptor = String(legacy.channel || "") + " " + String(legacy.subject || "");
       const isBookingThread = legacy.booking_id != null ||
-        /booking|package|destination|itinerary|travel|safari/i.test(String(legacy.channel || "") + " " + String(legacy.subject || ""));
-      const targetId = isBookingThread ? supportId : personalId;
+        /booking|confirmation|itinerary|pickup|travel document|change request/i.test(legacyDescriptor);
+      const isPlanningThread = /destination|package|country|safari|planning|availability|permit|activities|experience/i.test(legacyDescriptor);
+      const targetId = isBookingThread ? supportId : (isPlanningThread ? planningId : personalId);
       await query(
         `UPDATE messages
             SET metadata = CASE WHEN $3::boolean
@@ -690,7 +698,7 @@ async function ensureTravelerChannels(userId) {
           WHERE id = ANY($2::bigint[]) AND user_id=$1`,
         [profile.id, legacyRows.map(row => Number(row.id)).filter(Number.isFinite)],
       );
-      for (const targetId of [personalId, supportId]) {
+      for (const targetId of [personalId, planningId, supportId]) {
         await query(
           `UPDATE conversations c
               SET last_message=(SELECT m.body FROM messages m WHERE m.conversation_id=c.id ORDER BY m.created_at DESC,m.id DESC LIMIT 1),
@@ -704,7 +712,6 @@ async function ensureTravelerChannels(userId) {
   }
   return { profile, channels: rows };
 }
-
 const ensureItineraryEmailColumns = async () => {
   await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary_status VARCHAR(40) DEFAULT 'not_started'");
   await query("ALTER TABLE bookings ADD COLUMN IF NOT EXISTS itinerary JSONB DEFAULT '{}'::JSONB");
@@ -1300,7 +1307,7 @@ router.post("/conversations", protect, async (req, res) => {
     const {
       sessionId, guestName, guestEmail, bookingId, bookingNumber, subject,
       channel, source, priority, firstMessage, body, targetUserId,
-      destinationName, metadata,
+      destinationName, metadata, conversationType: requestedConversationType, purpose,
     } = req.body || {};
 
     if (!req.user) {
@@ -1339,16 +1346,70 @@ router.post("/conversations", protect, async (req, res) => {
         return res.status(400).json({ success: false, message: "Choose a valid destination from the suggestions, or clear the destination field." });
       }
     }
+    const purposeAliases = {
+      general: "personal", general_enquiries: "personal", personal: "personal",
+      planning: "safari_planning", safari: "safari_planning", safari_planning: "safari_planning",
+      booking: "resource_support", booking_support: "resource_support", resource_support: "resource_support",
+    };
+    const requestedPurpose = String(requestedConversationType || purpose || "").trim().toLowerCase();
+    const canonicalType = requestedPurpose ? purposeAliases[requestedPurpose] : null;
+    if (requestedPurpose && !canonicalType) {
+      return res.status(400).json({ success: false, message: "Choose General Enquiries, Safari Planning, or Booking Support." });
+    }
+    const purposeConfig = {
+      personal: { channel: "general_enquiries", subject: "General Enquiries" },
+      safari_planning: { channel: "safari_planning", subject: "Safari Planning" },
+      resource_support: { channel: "booking_support", subject: "Booking Support" },
+    };
+    if (canonicalType) {
+      const expectedChannel = purposeConfig[canonicalType].channel;
+      if (channel && ![expectedChannel, "live_chat", "personal_support", "booking_support"].includes(String(channel))) {
+        return res.status(400).json({ success: false, message: "The selected conversation purpose does not match its channel." });
+      }
+    }
     const conversationMetadata = {
       ...(metadata && typeof metadata === "object" && !Array.isArray(metadata) ? metadata : {}),
       ...(destination ? { destinationName: destination } : {}),
+      ...(canonicalType ? { conversationPurpose: canonicalType } : {}),
     };
     const conversationSubject = String(subject || "").trim() || (destination ? `Question about ${destination}` : null);
 
-    // An explicit subject means the user/admin intentionally requested a new thread.
-    // Keep separate threads possible; getOrCreate remains the fallback for legacy guest sessions.
     let conv;
-    if (userId && conversationSubject) {
+    if (canonicalType) {
+      // Reuse the one canonical private thread for this purpose. Repeated
+      // enquiries never create duplicate threads; each message retains its
+      // own subject/resource context in message metadata.
+      await ensureTravelerChannels(userId);
+      const purposeThread = await query(
+        `SELECT * FROM conversations
+          WHERE user_id=$1 AND group_id IS NULL AND deleted_at IS NULL
+            AND conversation_type=$2
+          ORDER BY updated_at DESC NULLS LAST, created_at ASC
+          LIMIT 1`,
+        [userId, canonicalType],
+      );
+      conv = purposeThread.rows[0] || null;
+      if (!conv) {
+        const created = await query(
+          `INSERT INTO conversations
+            (session_id, user_id, guest_name, guest_email, channel, subject, status, priority,
+             source, booking_id, booking_number, metadata, conversation_type, unread_admin, unread_user, created_at, updated_at)
+           VALUES (NULL,$1,$2,$3,$4,$5,'open',$6,$7,NULL,NULL,'{}'::jsonb,$8,0,0,NOW(),NOW())
+           RETURNING *`,
+          [
+            userId, accountProfile.full_name || null, accountProfile.email || null,
+            purposeConfig[canonicalType].channel, purposeConfig[canonicalType].subject,
+            priority || "normal", source || (callerIsAdmin ? "admin" : "messages-portal"),
+            canonicalType,
+          ],
+        );
+        conv = created.rows[0];
+      }
+      if (callerIsAdmin && conv) {
+        await query(`UPDATE conversations SET created_by_admin_id = $1 WHERE id = $2 AND created_by_admin_id IS NULL`, [req.user.id, conv.id]);
+        conv.created_by_admin_id = conv.created_by_admin_id || req.user.id;
+      }
+    } else if (userId && conversationSubject) {
       const created = await query(
         `INSERT INTO conversations
           (session_id, user_id, guest_name, guest_email, channel, subject, status, priority,
@@ -1356,16 +1417,10 @@ router.post("/conversations", protect, async (req, res) => {
          VALUES (NULL, $1, $2, $3, $4, $5, 'open', $6, $7, $8, $9, $10::jsonb, 0, 0, NOW(), NOW())
          RETURNING *`,
         [
-          userId,
-          accountProfile.full_name || null,
-          accountProfile.email || null,
-          channel || "live_chat",
-          conversationSubject,
-          priority || "normal",
+          userId, accountProfile.full_name || null, accountProfile.email || null,
+          channel || "live_chat", conversationSubject, priority || "normal",
           source || (callerIsAdmin ? "admin" : "messages-portal"),
-          bookingId || null,
-          bookingNumber || null,
-          JSON.stringify(conversationMetadata),
+          bookingId || null, bookingNumber || null, JSON.stringify(conversationMetadata),
         ],
       );
       conv = created.rows[0];
