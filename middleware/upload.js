@@ -62,6 +62,14 @@ const sanitizeBaseName = (value = "asset") =>
 
 const getRouteFolder = (req) => {
   const path = `${req.baseUrl || ""}${req.path || ""}`.toLowerCase();
+  const contentType = String(req.params?.type || "").toLowerCase();
+  if (path.includes("/email-broadcast/assets/upload")) return "gallery";
+  if (path.includes("/email-broadcast/content/")) {
+    if (contentType === "destination") return "destinations";
+    if (contentType === "country") return "countries";
+    if (contentType === "package") return "packages";
+    if (contentType === "post") return "posts";
+  }
 
   // Dedicated user-owned folder keeps profile media easy to identify and clean.
   if (req.params?.folder === "avatar" && req.user?.id) {
