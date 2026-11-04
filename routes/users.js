@@ -26,51 +26,57 @@ router.use((req, res, next) => {
   const route = resolveAuthDiagnosticRoute(req.path);
   if (!route) return next();
 
-  const captureResponse = (payload) => {
-    if (res.statusCode >= 400 || payload?.success === false) {
-      const code = payload?.code || payload?.errorCode || `HTTP_${res.statusCode}`;
-      const message = payload?.message || payload?.error || "Authentication request failed.";
-      authDiagnostics.recordServerFailure({
-        provider: route.provider,
-        stage: route.stage,
-        category: authDiagnostics.classifyCategory?.(code, message, res.statusCode),
-        errorCode: code,
-        httpStatus: res.statusCode,
-        message,
-        pagePath: req.path,
-        origin: req.headers.origin,
-        userAgent: req.headers["user-agent"],
-        details: { errorName: "AuthApiResponse" },
-      }).catch((error) => logger.warn("[AuthDiagnostics] Response capture failed:", error.message));
-    }
+  const captureServerEvent = (payload, statusCode) => {
+    const code = payload?.code || payload?.errorCode || `HTTP_${statusCode}`;
+    const message = payload?.message || payload?.error || "Authentication request failed.";
+    const referenceId = authDiagnostics.createReferenceId();
+    authDiagnostics.recordServerFailure({
+      referenceId,
+      provider: route.provider,
+      stage: route.stage,
+      category: authDiagnostics.classifyCategory(code, message, statusCode),
+      errorCode: code,
+      httpStatus: statusCode,
+      message,
+      pagePath: req.path,
+      origin: req.headers.origin,
+      userAgent: req.headers["user-agent"],
+      details: { errorName: "AuthApiResponse" },
+    }).catch((error) => logger.warn("[AuthDiagnostics] Response capture failed:", error.message));
+    return referenceId;
   };
 
   const originalJson = res.json.bind(res);
   res.json = (payload) => {
-    captureResponse(payload);
+    if (res.statusCode >= 400 || payload?.success === false) {
+      const referenceId = captureServerEvent(payload, res.statusCode);
+      const outgoing = payload && typeof payload === "object" && !Array.isArray(payload)
+        ? { ...payload, diagnosticReference: referenceId }
+        : { success: false, message: "Authentication request failed.", diagnosticReference: referenceId };
+      return originalJson(outgoing);
+    }
     return originalJson(payload);
   };
 
   const originalRedirect = res.redirect.bind(res);
   res.redirect = (...args) => {
-    const target = args.length > 1 ? args[1] : args[0];
+    const targetIndex = args.length > 1 ? 1 : 0;
+    const target = args[targetIndex];
     try {
-      const redirectUrl = new URL(String(target || ""), "https://altuvera.invalid");
+      const rawTarget = String(target || "");
+      const redirectUrl = new URL(rawTarget, "https://altuvera.invalid");
       const errorCode = redirectUrl.searchParams.get("error");
       if (errorCode) {
-        authDiagnostics.recordServerFailure({
-          provider: route.provider,
-          stage: route.stage,
-          errorCode,
-          httpStatus: 302,
+        const referenceId = captureServerEvent({
+          code: errorCode,
           message: "The identity provider callback could not complete authentication.",
-          pagePath: req.path,
-          origin: req.headers.origin,
-          userAgent: req.headers["user-agent"],
-          details: { errorName: "OAuthCallbackFailure" },
-        }).catch((error) => logger.warn("[AuthDiagnostics] OAuth capture failed:", error.message));
+        }, 302);
+        redirectUrl.searchParams.set("auth_ref", referenceId);
+        args[targetIndex] = /^https?:\/\//i.test(rawTarget)
+          ? redirectUrl.toString()
+          : `${redirectUrl.pathname}${redirectUrl.search}${redirectUrl.hash}`;
       }
-    } catch { /* keep the provider redirect working even if diagnostics parsing fails */ }
+    } catch { /* diagnostics must never interrupt an OAuth redirect */ }
     return originalRedirect(...args);
   };
 
