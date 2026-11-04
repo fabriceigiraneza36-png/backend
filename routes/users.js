@@ -12,7 +12,7 @@ const authDiagnostics = require("../controllers/authDiagnosticsController");
 
 // Capture failed authentication responses centrally so unexpected 4xx/5xx
 // responses are not lost just because a provider-specific handler changes.
-const resolveAuthDiagnosticRoute = (path) => {
+const resolveAuthDiagnosticRoute = (path, body = {}) => {
   if (/^\/(google|google\/signin|google\/signup-init|google\/signup-complete)$/.test(path)) return { provider: "google", stage: path.slice(1).replace(/\//g, "_") };
   if (/^\/github(?:\/(?:signin|signup|callback))?$/.test(path)) return { provider: "github", stage: path.slice(1).replace(/\//g, "_") };
   if (/^\/facebook(?:\/(?:signin|callback))?$/.test(path)) return { provider: "facebook", stage: path.slice(1).replace(/\//g, "_") };
@@ -23,7 +23,7 @@ const resolveAuthDiagnosticRoute = (path) => {
 };
 
 router.use((req, res, next) => {
-  const route = resolveAuthDiagnosticRoute(req.path);
+  const route = resolveAuthDiagnosticRoute(req.path, req.body || {});
   if (!route) return next();
 
   const captureServerEvent = (payload, statusCode) => {
