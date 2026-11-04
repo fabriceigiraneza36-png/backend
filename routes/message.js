@@ -650,6 +650,26 @@ async function ensureTravelerChannels(userId) {
       [profile.id, profile.full_name || null, profile.email || null, item.channel, item.subject, item.source, item.type],
     );
   }
+  // Normalize older canonical threads to the visible purpose labels without
+  // overwriting custom subjects that staff or travelers intentionally set.
+  for (const item of defaults) {
+    const legacySubjects = item.type === "personal"
+      ? ["Personal chat with Altuvera", "Personal support"]
+      : item.type === "resource_support"
+        ? ["Bookings & travel help", "Booking enquiries", "Booking enquiry"]
+        : [];
+    await query(
+      `UPDATE conversations
+          SET channel=$3,
+              subject=CASE
+                WHEN subject IS NULL OR BTRIM(subject)='' OR subject=ANY($4::text[])
+                THEN $5 ELSE subject END,
+              updated_at=COALESCE(updated_at,NOW())
+        WHERE user_id=$1 AND conversation_type=$2
+          AND group_id IS NULL AND deleted_at IS NULL`,
+      [profile.id, item.type, item.channel, legacySubjects, item.subject],
+    );
+  }
   const { rows } = await query(
     `SELECT id, conversation_type FROM conversations
       WHERE user_id=$1 AND conversation_type IN ('personal','safari_planning','resource_support')
