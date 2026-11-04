@@ -17,10 +17,12 @@ async function eraseUserData(userId) {
 
     // Safe for production databases that predate the soft-delete field.
     await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+    await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_notice_shown_at TIMESTAMPTZ");
 
     const result = await client.query(
       `UPDATE users
           SET deleted_at = COALESCE(deleted_at, NOW()),
+              deletion_notice_shown_at = NULL,
               is_active = FALSE,
               updated_at = NOW()
         WHERE id::text = $1::text AND deleted_at IS NULL
