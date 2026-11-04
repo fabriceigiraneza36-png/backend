@@ -1403,6 +1403,7 @@ exports.githubCallback = async (req, res) => {
       new URLSearchParams({
         emailOtpRequired: "1",
         email: user.email,
+        fullName: user.full_name || gh.name || gh.login || "",
         provider: "github",
         expiresAt: String(codeExpiresAt.getTime()),
       }),
