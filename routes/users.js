@@ -74,6 +74,8 @@ router.post("/github", authLimiter, auth.githubAuth);
 router.get("/github/signin", authLimiter, auth.githubSignInInit);
 router.get("/github/signup", authLimiter, auth.githubSignUpInit);
 router.get("/github/callback", authLimiter, auth.githubCallback);
+router.get("/facebook/signin", authLimiter, auth.facebookSignInInit);
+router.get("/facebook/callback", authLimiter, auth.facebookCallback);
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Token refresh
