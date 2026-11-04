@@ -78,7 +78,7 @@ const normalizeDetails = (value) => {
 const classifyCategory = (code, message, status) => {
   const value = `${String(code || "")} ${String(message || "")}`.toLowerCase();
   if (/not configured|missing .*client|oauth.*configuration|client id/.test(value)) return "configuration";
-  if (/state mismatch|identity mismatch|different account|already linked|origin mismatch|rp id|relying party|audience/.test(value)) return "identity_mismatch";
+  if (String(code || "") === "23505" || /duplicate key|unique constraint|state mismatch|identity mismatch|different account|already linked|origin mismatch|rp id|relying party|audience/.test(value)) return "identity_mismatch";
   if (/email.*(missing|required|not returned)|could not retrieve email/.test(value)) return "email_missing";
   if (/rate limit|too many|cooldown|wait .*second/.test(value) || Number(status) === 429) return "rate_limited";
   if (/expired|timeout|timed out/.test(value)) return "challenge_expired";
