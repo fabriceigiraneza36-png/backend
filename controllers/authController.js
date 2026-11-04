@@ -392,9 +392,29 @@ exports.register = async (req, res) => {
     const existing = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
 
     if (existing.rows.length) {
-      const user = existing.rows[0];
-      if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This email belongs to an Altuvera account that has been removed. If you believe this is a mistake, contact Altuvera support." });
-      if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
+      let user = existing.rows[0];
+      // A removed account may be recreated with the same email. Reuse its
+      // unique row, clear the deletion marker, and require fresh email OTP
+      // verification before issuing any session.
+      if (user.deleted_at) {
+        const restored = await query(
+          `UPDATE users SET
+             deleted_at = NULL, is_active = true, is_verified = false,
+             verification_code = NULL, code_expiry = NULL, code_attempts = 0,
+             full_name = COALESCE(NULLIF($1,''), full_name),
+             phone = COALESCE(NULLIF($2,''), phone),
+             bio = COALESCE(NULLIF($3,''), bio),
+             avatar_url = COALESCE(NULLIF($4,''), avatar_url),
+             preferences = CASE WHEN $5::jsonb IS NULL THEN preferences
+               ELSE COALESCE(preferences, '{}'::jsonb) || $5::jsonb END,
+             auth_provider = 'email', updated_at = NOW()
+           WHERE id = $6 RETURNING *`,
+          [name, phone || null, bio || null, avatar || null, onboardingJson, user.id],
+        );
+        user = restored.rows[0];
+      } else if (user.is_active === false) {
+        return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
+      }
       if (user.is_verified)
         return res.status(409).json({ success: false, message: "Account exists. Please sign in." });
       if (isRateLimited(user))
