@@ -780,6 +780,7 @@ const ensureUserSchema = async () => {
     await addColumns("users", [
       { name: "google_id",          type: "VARCHAR(255)" },
       { name: "github_id",          type: "VARCHAR(255)" },
+      { name: "facebook_id",        type: "VARCHAR(255)" },
       { name: "auth_provider",      type: "VARCHAR(50) DEFAULT 'email'" },
       { name: "is_active",          type: "BOOLEAN DEFAULT true" },
       { name: "is_verified",        type: "BOOLEAN DEFAULT false" },
@@ -832,6 +833,7 @@ const ensureUserSchema = async () => {
       `CREATE INDEX IF NOT EXISTS idx_users_email              ON users(email)`,
       `CREATE INDEX IF NOT EXISTS idx_users_google_id          ON users(google_id)`,
       `CREATE INDEX IF NOT EXISTS idx_users_github_id          ON users(github_id)`,
+      `CREATE INDEX IF NOT EXISTS idx_users_facebook_id        ON users(facebook_id)`,
       `CREATE INDEX IF NOT EXISTS idx_users_reset_token        ON users(reset_token)`,
       `CREATE INDEX IF NOT EXISTS idx_users_verification_token ON users(verification_token)`,
       `CREATE INDEX IF NOT EXISTS idx_users_login_counter      ON users(login_counter)`,
