@@ -258,7 +258,17 @@ const fetchJsonOrThrow = async (url, options = {}, label = "request") => {
   }
 };
 
+let deletedAtColumnReady = null;
+const ensureDeletedAtColumn = async () => {
+  if (!deletedAtColumnReady) {
+    deletedAtColumnReady = query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ")
+      .catch((err) => { deletedAtColumnReady = null; throw err; });
+  }
+  return deletedAtColumnReady;
+};
+
 const assertAccountAvailableForAuth = async (email, providerColumn, providerId) => {
+  await ensureDeletedAtColumn();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const values = [normalizedEmail];
   let where = "LOWER(email) = $1";
@@ -353,6 +363,7 @@ const incrementLoginCounter = async (userId) => {
 ════════════════════════════════════════════════════════════════ */
 exports.register = async (req, res) => {
   try {
+    await ensureDeletedAtColumn();
     const { email, fullName, full_name, phone, bio, avatar, preferences } = req.body;
     const name   = ((fullName || full_name || "").trim()).slice(0, 100);
     const onboarding = preferences && typeof preferences === "object" && !Array.isArray(preferences)
@@ -464,6 +475,7 @@ exports.register = async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 exports.login = async (req, res) => {
   try {
+    await ensureDeletedAtColumn();
     const { email, fullName, full_name } = req.body;
     const name   = ((fullName || full_name || "").trim()).slice(0, 100);
     const nEmail = ((email   || "").trim().toLowerCase());
@@ -535,6 +547,7 @@ exports.login = async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 exports.verifyCode = async (req, res) => {
   try {
+    await ensureDeletedAtColumn();
     const code   = String(req.body.code   || "").trim();
     const nEmail = ((req.body.email || "").trim().toLowerCase());
 
@@ -1265,7 +1278,10 @@ exports.githubCallback = async (req, res) => {
     );
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
-    return res.redirect(`${FRONTEND}/auth/github/callback?error=github_callback_failed`);
+    const errorCode = err.code === "ACCOUNT_REMOVED" ? "account_removed"
+      : err.code === "ACCOUNT_DEACTIVATED" ? "account_deactivated"
+      : "github_callback_failed";
+    return res.redirect(`${FRONTEND}/auth/github/callback?${new URLSearchParams({ error: errorCode })}`);
   }
 };
 
