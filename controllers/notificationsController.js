@@ -1028,7 +1028,19 @@ const notifyUserLogin = async (user, sessionExpiresAt) => {
           LIMIT 1`,
         [user.id, String(sessionExpiresAt)],
       );
-      if (existing.rows[0]) return existing.rows[0];
+      if (existing.rows[0]) {
+        // Older releases could create multiple rows for the same token session.
+        // Keep the earliest durable record, remove only its same-session copies.
+        await query(
+          `DELETE FROM notifications
+            WHERE user_id = $1
+              AND type = 'login_success'
+              AND metadata->>'sessionExpiresAt' = $2
+              AND id <> $3`,
+          [user.id, String(sessionExpiresAt), existing.rows[0].id],
+        );
+        return existing.rows[0];
+      }
     } catch (dedupeError) {
       logger.warn("[Notifications] Login notification deduplication check failed:", dedupeError.message);
     }
