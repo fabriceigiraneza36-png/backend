@@ -43,7 +43,7 @@ const authenticateUser = async (req, res, next) => {
     }
 
     const result = await query(
-      "SELECT id, email, full_name, avatar_url, is_verified, is_active FROM users WHERE id = $1",
+      "SELECT id, email, full_name, avatar_url, is_verified, is_active, deleted_at FROM users WHERE id = $1",
       [decoded.id]
     );
 
@@ -56,10 +56,19 @@ const authenticateUser = async (req, res, next) => {
 
     const user = result.rows[0];
 
-    if (!user.is_active) {
-      return res.status(401).json({ 
+    if (user.deleted_at) {
+      return res.status(410).json({
         success: false,
-        error: "Account deactivated" 
+        code: "ACCOUNT_REMOVED",
+        message: "This Altuvera account has been removed and is no longer available.",
+      });
+    }
+
+    if (!user.is_active) {
+      return res.status(403).json({
+        success: false,
+        code: "ACCOUNT_DEACTIVATED",
+        message: "This Altuvera account is currently deactivated.",
       });
     }
 
@@ -85,7 +94,7 @@ const optionalUserAuth = async (req, res, next) => {
         
         if (decoded.type === "user") {
           const result = await query(
-            "SELECT id, email, full_name, avatar_url, is_verified FROM users WHERE id = $1 AND is_active = true",
+            "SELECT id, email, full_name, avatar_url, is_verified FROM users WHERE id = $1 AND is_active = true AND deleted_at IS NULL",
             [decoded.id]
           );
           
