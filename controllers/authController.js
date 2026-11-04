@@ -1439,9 +1439,43 @@ const createFacebookState = () => {
   return value + "." + signature;
 };
 
-const verifyFacebookState = (state) => {
+const FACEBOOK_STATE_COOKIE = "altuvera_facebook_oauth_state";
+
+const getFacebookStateCookiePath = () => {
+  try { return new URL(getFacebookCallbackUrl()).pathname; }
+  catch { return "/api/users/facebook/callback"; }
+};
+
+const setFacebookStateCookie = (res, state) => {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.append(
+    "Set-Cookie",
+    `${FACEBOOK_STATE_COOKIE}=${encodeURIComponent(state)}; Path=${getFacebookStateCookiePath()}; Max-Age=600; HttpOnly; SameSite=Lax${secure}`,
+  );
+};
+
+const clearFacebookStateCookie = (res) => {
+  const secure = process.env.NODE_ENV === "production" ? "; Secure" : "";
+  res.append(
+    "Set-Cookie",
+    `${FACEBOOK_STATE_COOKIE}=; Path=${getFacebookStateCookiePath()}; Max-Age=0; HttpOnly; SameSite=Lax${secure}`,
+  );
+};
+
+const readCookieValue = (cookieHeader, name) => {
+  const prefix = `${name}=`;
+  const entry = String(cookieHeader || "").split(";").map((part) => part.trim())
+    .find((part) => part.startsWith(prefix));
+  if (!entry) return "";
+  try { return decodeURIComponent(entry.slice(prefix.length)); }
+  catch { return ""; }
+};
+
+const verifyFacebookState = (state, cookieHeader) => {
   const parts = String(state || "").split(".");
   if (parts.length !== 3 || !parts[0] || !parts[1] || !/^[a-f0-9]{64}$/i.test(parts[2])) return false;
+  const cookieState = readCookieValue(cookieHeader, FACEBOOK_STATE_COOKIE);
+  if (!cookieState || cookieState !== state) return false;
   const timestamp = Number(parts[0]);
   const age = Date.now() - timestamp;
   if (!Number.isFinite(timestamp) || age < -30_000 || age > 10 * 60 * 1000) return false;
@@ -1464,15 +1498,20 @@ exports.facebookSignInInit = async (req, res) => {
   authorizationUrl.searchParams.set("redirect_uri", getFacebookCallbackUrl());
   authorizationUrl.searchParams.set("response_type", "code");
   authorizationUrl.searchParams.set("scope", "email,public_profile");
-  authorizationUrl.searchParams.set("state", createFacebookState());
+  const state = createFacebookState();
+  setFacebookStateCookie(res, state);
+  authorizationUrl.searchParams.set("state", state);
   return res.redirect(authorizationUrl.toString());
 };
 
 exports.facebookCallback = async (req, res) => {
   const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\/+$/, "");
-  const redirectFailure = (error) => res.redirect(
-    frontend + "/auth/facebook/callback?" + new URLSearchParams({ error, provider: "facebook" }),
-  );
+  const redirectFailure = (error) => {
+    clearFacebookStateCookie(res);
+    return res.redirect(
+      frontend + "/auth/facebook/callback?" + new URLSearchParams({ error, provider: "facebook" }),
+    );
+  };
 
   try {
     const oauthError = String(req.query.error || "");
@@ -1480,7 +1519,7 @@ exports.facebookCallback = async (req, res) => {
       return redirectFailure(oauthError === "access_denied" ? "facebook_cancelled" : "facebook_auth_failed");
     }
     const { code, state } = req.query || {};
-    if (!verifyFacebookState(state)) return redirectFailure("facebook_state_invalid");
+    if (!verifyFacebookState(state, req.headers.cookie)) return redirectFailure("facebook_state_invalid");
     if (!code || !process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
       return redirectFailure("facebook_auth_failed");
     }
@@ -1543,6 +1582,7 @@ exports.facebookCallback = async (req, res) => {
       });
     }
 
+    clearFacebookStateCookie(res);
     return res.redirect(
       frontend + "/auth/facebook/callback?" + new URLSearchParams({
         emailOtpRequired: "1",
