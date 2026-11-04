@@ -63,6 +63,11 @@ const sanitizeBaseName = (value = "asset") =>
 const getRouteFolder = (req) => {
   const path = `${req.baseUrl || ""}${req.path || ""}`.toLowerCase();
 
+  // Dedicated user-owned folder keeps profile media easy to identify and clean.
+  if (req.params?.folder === "avatar" && req.user?.id) {
+    return `avatars/${sanitizeBaseName(String(req.user.id))}`;
+  }
+
   if (path.includes("destinations")) return "destinations";
   if (path.includes("gallery")) return "gallery";
   if (path.includes("posts")) return "posts";
