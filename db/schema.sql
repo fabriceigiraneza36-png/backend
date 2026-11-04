@@ -731,6 +731,7 @@ CREATE TABLE users (
   -- OAuth providers
   google_id       VARCHAR(255) UNIQUE,
   github_id       VARCHAR(255) UNIQUE,
+  facebook_id     VARCHAR(255) UNIQUE,
   auth_provider   VARCHAR(50) DEFAULT 'email',
   
   -- Account status
@@ -756,6 +757,7 @@ CREATE TRIGGER trg_users_updated
 CREATE INDEX idx_users_email ON users(email);
 CREATE INDEX idx_users_google ON users(google_id) WHERE google_id IS NOT NULL;
 CREATE INDEX idx_users_github ON users(github_id) WHERE github_id IS NOT NULL;
+CREATE INDEX idx_users_facebook ON users(facebook_id) WHERE facebook_id IS NOT NULL;
 
 -- User sessions for tracking
 DROP TABLE IF EXISTS user_sessions CASCADE;
