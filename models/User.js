@@ -67,6 +67,11 @@ const User = sequelize.define(
       unique: true,
       allowNull: true,
     },
+    facebook_id: {
+      type: DataTypes.STRING(255),
+      unique: true,
+      allowNull: true,
+    },
     auth_provider: {
       type: DataTypes.STRING(50),
       defaultValue: "email",
