@@ -833,7 +833,7 @@ const ensureUserSchema = async () => {
       `CREATE INDEX IF NOT EXISTS idx_users_email              ON users(email)`,
       `CREATE INDEX IF NOT EXISTS idx_users_google_id          ON users(google_id)`,
       `CREATE INDEX IF NOT EXISTS idx_users_github_id          ON users(github_id)`,
-      `CREATE INDEX IF NOT EXISTS idx_users_facebook_id        ON users(facebook_id)`,
+      `CREATE UNIQUE INDEX IF NOT EXISTS idx_users_facebook_id_unique ON users(facebook_id) WHERE facebook_id IS NOT NULL`,
       `CREATE INDEX IF NOT EXISTS idx_users_reset_token        ON users(reset_token)`,
       `CREATE INDEX IF NOT EXISTS idx_users_verification_token ON users(verification_token)`,
       `CREATE INDEX IF NOT EXISTS idx_users_login_counter      ON users(login_counter)`,
