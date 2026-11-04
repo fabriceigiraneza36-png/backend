@@ -1409,6 +1409,8 @@ exports.githubCallback = async (req, res) => {
   } catch (err) {
     logger.error("[GitHub Callback] Error:", err.message);
     const errorCode = err.code === "ACCOUNT_REMOVED" ? "account_removed"
+      : err.code === "ACCOUNT_RECREATE_REQUIRED" ? "account_recreate_required"
+      : err.code === "ACCOUNT_NOT_FOUND" ? "account_not_found"
       : err.code === "ACCOUNT_DEACTIVATED" ? "account_deactivated"
       : "github_callback_failed";
     return res.redirect(`${FRONTEND}/auth/github/callback?${new URLSearchParams({ error: errorCode })}`);
