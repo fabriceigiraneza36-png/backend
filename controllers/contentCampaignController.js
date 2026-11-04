@@ -49,7 +49,7 @@ function contentUrl(type,row) {
   if (type === "destination") return FRONTEND_URL + "/destinations/" + key;
   if (type === "country") return FRONTEND_URL + "/country/" + key;
   if (type === "package") return FRONTEND_URL + "/packages/" + key;
-  if (type === "post") return FRONTEND_URL + "/blog/" + key;
+  if (type === "post") return FRONTEND_URL + "/post/" + key;
   return FRONTEND_URL + "/gallery";
 }
 
@@ -69,7 +69,7 @@ async function getContentItem(type,id) {
   } else if (type === "country") {
     images = listUrls(row.hero_image,row.hero_image_url,row.cover_image_url,row.cover_image,row.image_url,row.images,row.hero_images,row.gallery);
   } else if (type === "package") {
-    images = listUrls(row.cover_image_url,row.thumbnail_url,row.image_url,row.image_gallery);
+    images = listUrls(row.cover_image_url,row.thumbnail_url,row.image_url,row.image_gallery,row.images,row.gallery);
   } else if (type === "post") {
     images = listUrls(row.image_url,row.image_gallery);
   } else {
