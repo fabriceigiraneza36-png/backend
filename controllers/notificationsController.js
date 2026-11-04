@@ -1014,6 +1014,26 @@ const notifyUserRegistered = async (user) => {
  * The signed JWT expiry is recorded so both dashboards can show an accurate
  * session-expiry countdown instead of guessing a duration. */
 const notifyUserLogin = async (user, sessionExpiresAt) => {
+  // Session expiry is minted into the signed access token and stays constant
+  // throughout that login. Reusing the same login event must not create another
+  // durable notification when auth callbacks are retried or repeated.
+  if (user?.id && sessionExpiresAt) {
+    try {
+      const existing = await query(
+        `SELECT * FROM notifications
+          WHERE user_id = $1
+            AND type = 'login_success'
+            AND metadata->>'sessionExpiresAt' = $2
+          ORDER BY created_at DESC
+          LIMIT 1`,
+        [user.id, String(sessionExpiresAt)],
+      );
+      if (existing.rows[0]) return existing.rows[0];
+    } catch (dedupeError) {
+      logger.warn("[Notifications] Login notification deduplication check failed:", dedupeError.message);
+    }
+  }
+
   const expiryLabel = sessionExpiresAt
     ? new Date(sessionExpiresAt).toLocaleString("en-US", { dateStyle: "medium", timeStyle: "short", timeZone: "UTC" }) + " UTC"
     : "according to your account session settings";
