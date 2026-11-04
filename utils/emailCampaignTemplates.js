@@ -75,7 +75,8 @@ function renderHtml(options) {
   const template = options.template || {};
   const recipient = options.recipient || {};
   const context = options.context || {};
-  const bodyText = personalise(template.body || options.body || "", recipient, context);
+  const bodyText = personalise(template.body || options.body || "", recipient, context)
+    .replace(/^\s*(?:hello|dear)\s+[^,\n]+,?\s*\n+/i, "");
   const title = personalise(template.headline || subject, recipient, context);
   const preheader = personalise(template.preheader || subject, recipient, context);
   const accent = safeColor(template.accent_color || template.accentColor, "#059669");
@@ -132,22 +133,34 @@ function renderHtml(options) {
     };
   }).filter((image) => image.url).slice(0, 10);
 
+  const galleryRows = [];
+  for (let index = 0; index < galleryImages.length; index += 2) {
+    galleryRows.push(galleryImages.slice(index, index + 2));
+  }
+
+  // Gmail and several mobile email apps do not reliably support horizontally
+  // scrollable containers. Use a responsive, table-based gallery so every
+  // selected image is visible without requiring swipe or carousel support.
   const galleryMarkup = galleryImages.length
     ? '<div style="margin:23px 0 8px">' +
-      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
-      '<td align="left" style="color:#174b35;font:800 11px Arial,sans-serif;letter-spacing:1.1px;text-transform:uppercase">A closer look</td>' +
-      '<td align="right" style="white-space:nowrap"><a href="#al-campaign-gallery-first" style="display:inline-block;padding:5px 9px;border:1px solid #b7dfc7;border-radius:50%;color:#087a50;text-decoration:none;font:700 16px Arial,sans-serif">‹</a>&nbsp;<a href="#al-campaign-gallery-last" style="display:inline-block;padding:5px 9px;border:1px solid #b7dfc7;border-radius:50%;color:#087a50;text-decoration:none;font:700 16px Arial,sans-serif">›</a></td>' +
-      '</tr></table>' +
-      '<div class="al-campaign-carousel" role="group" aria-label="Campaign image gallery" style="width:100%;max-width:536px;margin:10px 0 0;overflow-x:auto;overflow-y:hidden;white-space:nowrap;-webkit-overflow-scrolling:touch;scroll-snap-type:x mandatory;border-radius:13px">' +
-      '<span id="al-campaign-gallery-first" style="display:inline-block;width:1px;height:1px;overflow:hidden"></span>' +
-      galleryImages.map((image, index) =>
-        '<div class="al-campaign-slide" style="display:inline-block;vertical-align:top;width:238px;max-width:82%;margin-right:10px;white-space:normal;scroll-snap-align:start;border:1px solid #dcebe1;border-radius:13px;overflow:hidden;background:#fff">' +
-        '<a href="' + escapeHtml(image.link || ctaUrl) + '" style="display:block;text-decoration:none"><img src="' + escapeHtml(image.url) + '" alt="' + escapeHtml(image.alt) + '" width="238" style="display:block;width:100%;height:164px;object-fit:cover;background:#e8f3eb;border:0" /></a>' +
-        (image.caption ? '<p style="margin:0;padding:8px 10px;color:#52685d;font:11px/1.4 Arial,sans-serif">' + escapeHtml(image.caption) + '</p>' : '') +
-        '</div>'
+      '<p style="margin:0 0 11px;color:#174b35;font:800 11px Arial,sans-serif;letter-spacing:1.1px;text-transform:uppercase">Explore the highlights</p>' +
+      '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;table-layout:fixed;border-collapse:separate;border-spacing:0">' +
+      galleryRows.map((row) =>
+        '<tr>' +
+        row.map((image) =>
+          '<td width="50%" valign="top" style="width:50%;padding:0 5px 10px">' +
+          '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;border:1px solid #dcebe1;border-radius:12px;background:#fff;overflow:hidden">' +
+          '<tr><td>' +
+          '<a href="' + escapeHtml(image.link || ctaUrl) + '" style="display:block;text-decoration:none">' +
+          '<img src="' + escapeHtml(image.url) + '" alt="' + escapeHtml(image.alt) + '" width="250" height="150" style="display:block;width:100%;height:150px;object-fit:cover;background:#e8f3eb;border:0;border-radius:11px 11px 0 0" />' +
+          '</a></td></tr>' +
+          (image.caption ? '<tr><td style="padding:8px 9px;color:#52685d;font:11px/1.4 Arial,sans-serif">' + escapeHtml(image.caption) + '</td></tr>' : '') +
+          '</table></td>'
+        ).join("") +
+        (row.length === 1 ? '<td width="50%" style="width:50%;padding:0 5px 10px">&nbsp;</td>' : '') +
+        '</tr>'
       ).join("") +
-      '<span id="al-campaign-gallery-last" style="display:inline-block;width:1px;height:1px;overflow:hidden"></span></div>' +
-      '<p style="margin:7px 0 0;color:#82938a;font:10px/1.5 Arial,sans-serif">Swipe to explore more images. On desktop, use the arrows or horizontal scroll.</p></div>'
+      '</table></div>'
     : (heroUrl ? '<div style="margin:20px 0 5px;border-radius:13px;overflow:hidden"><img src="' + escapeHtml(heroUrl) + '" alt="' + escapeHtml(title) + '" width="536" style="display:block;width:100%;max-width:536px;height:auto;border:0" /></div>' : "");
 
   const celebration = '<div class="al-celebration" style="position:relative;margin:0 0 18px;padding:11px 15px;border:1px solid #d1fae5;border-radius:13px;background:#f0fdf4;text-align:center;overflow:hidden">' +
@@ -162,8 +175,7 @@ function renderHtml(options) {
     '.al-confetti{animation:alCampaignConfetti 1.5s ease-out both}' +
     '.al-c2{animation-delay:.08s}.al-c3{animation-delay:.16s}.al-c4{animation-delay:.24s}' +
     '@media(prefers-reduced-motion:reduce){.al-confetti{animation:none!important}}' +
-    '@media(max-width:620px){.al-campaign-content{padding:22px 17px!important}.al-campaign-heading{font-size:25px!important}.al-campaign-carousel{scroll-snap-type:x mandatory!important}}' +
-    '@media(hover:hover){.al-campaign-carousel::-webkit-scrollbar{height:7px}.al-campaign-carousel::-webkit-scrollbar-thumb{background:#a7f3d0;border-radius:10px}}';
+    '@media(max-width:620px){.al-campaign-content{padding:22px 17px!important}.al-campaign-heading{font-size:25px!important}}';
 
   const unsubscribeUrl = BACKEND_URL + "/api/subscribers/unsubscribe/" + encodeURIComponent(String(recipient.email || ""));
   return '<!doctype html><html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><meta name="x-apple-disable-message-reformatting"/><meta name="color-scheme" content="light only"/><title>' +
