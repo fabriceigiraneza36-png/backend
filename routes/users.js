@@ -8,6 +8,74 @@ const { authLimiter, verifyLimiter } = require("../middleware/rateLimiter");
 const { query } = require("../config/db");
 const { eraseUserData } = require("../utils/eraseUserData");
 const logger = require("../utils/logger");
+const authDiagnostics = require("../controllers/authDiagnosticsController");
+
+// Capture failed authentication responses centrally so unexpected 4xx/5xx
+// responses are not lost just because a provider-specific handler changes.
+const resolveAuthDiagnosticRoute = (path) => {
+  if (/^\/(google|google\/signin|google\/signup-init|google\/signup-complete)$/.test(path)) return { provider: "google", stage: path.slice(1).replace(/\//g, "_") };
+  if (/^\/github(?:\/(?:signin|signup|callback))?$/.test(path)) return { provider: "github", stage: path.slice(1).replace(/\//g, "_") };
+  if (/^\/facebook(?:\/(?:signin|callback))?$/.test(path)) return { provider: "facebook", stage: path.slice(1).replace(/\//g, "_") };
+  if (/^\/login\/passkey\/(?:options|verify)$/.test(path) || /^\/security\/passkeys/.test(path)) return { provider: "passkey", stage: path.slice(1).replace(/\//g, "_") };
+  if (/^\/login\/(?:factor|verify-factor)$/.test(path)) return { provider: "authenticator", stage: path.slice(1).replace(/\//g, "_") };
+  if (/^\/(?:register|login|verify-code|verify|resend-code|check-email|forgot-username\/.*)$/.test(path)) return { provider: "email", stage: path.slice(1).replace(/\//g, "_") };
+  return null;
+};
+
+router.use((req, res, next) => {
+  const route = resolveAuthDiagnosticRoute(req.path);
+  if (!route) return next();
+
+  const captureResponse = (payload) => {
+    if (res.statusCode >= 400 || payload?.success === false) {
+      const code = payload?.code || payload?.errorCode || `HTTP_${res.statusCode}`;
+      const message = payload?.message || payload?.error || "Authentication request failed.";
+      authDiagnostics.recordServerFailure({
+        provider: route.provider,
+        stage: route.stage,
+        category: authDiagnostics.classifyCategory?.(code, message, res.statusCode),
+        errorCode: code,
+        httpStatus: res.statusCode,
+        message,
+        pagePath: req.path,
+        origin: req.headers.origin,
+        userAgent: req.headers["user-agent"],
+        details: { errorName: "AuthApiResponse" },
+      }).catch((error) => logger.warn("[AuthDiagnostics] Response capture failed:", error.message));
+    }
+  };
+
+  const originalJson = res.json.bind(res);
+  res.json = (payload) => {
+    captureResponse(payload);
+    return originalJson(payload);
+  };
+
+  const originalRedirect = res.redirect.bind(res);
+  res.redirect = (...args) => {
+    const target = args.length > 1 ? args[1] : args[0];
+    try {
+      const redirectUrl = new URL(String(target || ""), "https://altuvera.invalid");
+      const errorCode = redirectUrl.searchParams.get("error");
+      if (errorCode) {
+        authDiagnostics.recordServerFailure({
+          provider: route.provider,
+          stage: route.stage,
+          errorCode,
+          httpStatus: 302,
+          message: "The identity provider callback could not complete authentication.",
+          pagePath: req.path,
+          origin: req.headers.origin,
+          userAgent: req.headers["user-agent"],
+          details: { errorName: "OAuthCallbackFailure" },
+        }).catch((error) => logger.warn("[AuthDiagnostics] OAuth capture failed:", error.message));
+      }
+    } catch { /* keep the provider redirect working even if diagnostics parsing fails */ }
+    return originalRedirect(...args);
+  };
+
+  next();
+});
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Stats (no auth)
@@ -54,6 +122,10 @@ router.post("/login/factor", verifyLimiter, accountSecurity.loginWithFactor);
 router.post("/verify",      verifyLimiter, auth.verifyCode);
 router.post("/resend-code", authLimiter,   auth.resendCode);
 router.post("/check-email",                auth.checkEmail);
+
+// Client-side diagnostics are scrubbed and visible to admins only.
+router.post("/auth-diagnostics", authLimiter, authDiagnostics.capture);
+router.get("/auth-diagnostics", adminProtect, authDiagnostics.list);
 
 // ═══════════════════════════════════════════════════════════════
 // PUBLIC — Forgot Username flow
