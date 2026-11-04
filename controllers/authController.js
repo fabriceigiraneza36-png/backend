@@ -339,7 +339,7 @@ const assertAccountAvailableForAuth = async (email, providerColumn, providerId, 
 const upsertSocialUser = async ({
   provider, providerId, email, name, avatar, phone, bio, allowRecreate = false,
 }) => {
-  const col = { google: "google_id", github: "github_id" }[provider];
+  const col = { google: "google_id", github: "github_id", facebook: "facebook_id" }[provider];
   if (!col) throw Object.assign(new Error(`Unsupported provider: ${provider}`), { status: 400 });
 
   const e   = (email  || "").trim().toLowerCase();
@@ -373,6 +373,7 @@ const upsertSocialUser = async ({
            code_attempts = 0, last_code_sent_at = NULL,
            google_id = CASE WHEN $1 = 'google' THEN $2 ELSE NULL END,
            github_id = CASE WHEN $1 = 'github' THEN $2 ELSE NULL END,
+           facebook_id = CASE WHEN $1 = 'facebook' THEN $2 ELSE NULL END,
            full_name = COALESCE(NULLIF($3,''), full_name),
            avatar_url = COALESCE(NULLIF($4,''), avatar_url),
            phone = COALESCE(NULLIF($5,''), phone),
@@ -477,7 +478,7 @@ exports.register = async (req, res) => {
              is_active = true, is_verified = false,
              verification_code = NULL, code_expiry = NULL, code_attempts = 0,
              last_code_sent_at = NULL, login_counter = 0, last_login = NULL,
-             google_id = NULL, github_id = NULL,
+             google_id = NULL, github_id = NULL, facebook_id = NULL,
              full_name = COALESCE(NULLIF($1,''), full_name),
              phone = COALESCE(NULLIF($2,''), phone),
              bio = COALESCE(NULLIF($3,''), bio),
@@ -1414,6 +1415,153 @@ exports.githubCallback = async (req, res) => {
       : err.code === "ACCOUNT_DEACTIVATED" ? "account_deactivated"
       : "github_callback_failed";
     return res.redirect(`${FRONTEND}/auth/github/callback?${new URLSearchParams({ error: errorCode })}`);
+  }
+};
+
+
+/* ════════════════════════════════════════════════════════════════
+   FACEBOOK LOGIN — OPTIONAL META OAUTH CODE FLOW
+════════════════════════════════════════════════════════════════ */
+const FACEBOOK_GRAPH_VERSION = String(process.env.FACEBOOK_GRAPH_VERSION || "v26.0")
+  .replace(/^v?/i, "v");
+const getFacebookCallbackUrl = () => {
+  const backendOrigin = String(process.env.RENDER_EXTERNAL_URL || "https://backend-jd8f.onrender.com").replace(/\/+$/, "");
+  return process.env.FACEBOOK_CALLBACK_URL || backendOrigin + "/api/users/facebook/callback";
+};
+
+const createFacebookState = () => {
+  const timestamp = String(Date.now());
+  const nonce = crypto.randomBytes(24).toString("hex");
+  const value = timestamp + "." + nonce;
+  const signature = crypto.createHmac("sha256", process.env.FACEBOOK_CLIENT_SECRET)
+    .update(value).digest("hex");
+  return value + "." + signature;
+};
+
+const verifyFacebookState = (state) => {
+  const parts = String(state || "").split(".");
+  if (parts.length !== 3 || !parts[0] || !parts[1] || !/^[a-f0-9]{64}$/i.test(parts[2])) return false;
+  const timestamp = Number(parts[0]);
+  const age = Date.now() - timestamp;
+  if (!Number.isFinite(timestamp) || age < -30_000 || age > 10 * 60 * 1000) return false;
+  const expected = crypto.createHmac("sha256", process.env.FACEBOOK_CLIENT_SECRET)
+    .update(parts[0] + "." + parts[1]).digest();
+  const received = Buffer.from(parts[2], "hex");
+  return received.length === expected.length && crypto.timingSafeEqual(received, expected);
+};
+
+exports.facebookSignInInit = async (req, res) => {
+  if (!process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
+    return res.status(503).json({
+      success: false,
+      code: "FACEBOOK_AUTH_NOT_CONFIGURED",
+      message: "Facebook sign-in is not configured for Altuvera yet.",
+    });
+  }
+  const authorizationUrl = new URL("https://www.facebook.com/" + FACEBOOK_GRAPH_VERSION + "/dialog/oauth");
+  authorizationUrl.searchParams.set("client_id", process.env.FACEBOOK_CLIENT_ID);
+  authorizationUrl.searchParams.set("redirect_uri", getFacebookCallbackUrl());
+  authorizationUrl.searchParams.set("response_type", "code");
+  authorizationUrl.searchParams.set("scope", "email,public_profile");
+  authorizationUrl.searchParams.set("state", createFacebookState());
+  return res.redirect(authorizationUrl.toString());
+};
+
+exports.facebookCallback = async (req, res) => {
+  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\/+$/, "");
+  const redirectFailure = (error) => res.redirect(
+    frontend + "/auth/facebook/callback?" + new URLSearchParams({ error, provider: "facebook" }),
+  );
+
+  try {
+    const oauthError = String(req.query.error || "");
+    if (oauthError) {
+      return redirectFailure(oauthError === "access_denied" ? "facebook_cancelled" : "facebook_auth_failed");
+    }
+    const { code, state } = req.query || {};
+    if (!verifyFacebookState(state)) return redirectFailure("facebook_state_invalid");
+    if (!code || !process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
+      return redirectFailure("facebook_auth_failed");
+    }
+
+    // Exchange the single-use authorization code on the server. Neither the
+    // app secret nor the access token is sent to frontend code or browser URLs.
+    const tokenUrl = new URL("https://graph.facebook.com/" + FACEBOOK_GRAPH_VERSION + "/oauth/access_token");
+    tokenUrl.searchParams.set("client_id", process.env.FACEBOOK_CLIENT_ID);
+    tokenUrl.searchParams.set("client_secret", process.env.FACEBOOK_CLIENT_SECRET);
+    tokenUrl.searchParams.set("redirect_uri", getFacebookCallbackUrl());
+    tokenUrl.searchParams.set("code", String(code));
+    const tokenData = await fetchJsonOrThrow(tokenUrl.toString(), {}, "Facebook token exchange");
+    if (!tokenData?.access_token) return redirectFailure("facebook_token_failed");
+
+    const profileUrl = new URL("https://graph.facebook.com/" + FACEBOOK_GRAPH_VERSION + "/me");
+    profileUrl.searchParams.set("fields", "id,name,email,picture.type(large)");
+    profileUrl.searchParams.set("access_token", tokenData.access_token);
+    const profile = await fetchJsonOrThrow(profileUrl.toString(), {}, "Facebook profile");
+    const email = String(profile?.email || "").trim().toLowerCase();
+    const fullName = String(profile?.name || "").trim() || email.split("@")[0];
+
+    // Altuvera requires an email to verify every sign-in. Meta may omit email
+    // when the permission is absent or the Facebook account has no email.
+    if (!profile?.id || !email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return redirectFailure("facebook_email_required");
+    }
+
+    const avatar = profile?.picture?.data?.url || "";
+    const { user, isNew } = await upsertSocialUser({
+      provider: "facebook",
+      providerId: String(profile.id),
+      email,
+      name: fullName,
+      avatar,
+      phone: null,
+      bio: null,
+    });
+
+    // Keep the same mandatory Altuvera email OTP gate as Google and GitHub.
+    let codeExpiresAt = user.code_expiry ? new Date(user.code_expiry) : null;
+    const hasActiveCode = Boolean(
+      user.verification_code && codeExpiresAt && codeExpiresAt.getTime() > Date.now()
+    );
+    if (isRateLimited(user)) {
+      if (!hasActiveCode) return redirectFailure("verification_rate_limited");
+    } else {
+      const otp = generateOTP();
+      const otpResult = await setOtp(user.id, otp, OTP_EXPIRY_MINUTES);
+      codeExpiresAt = otpResult.rows[0]?.code_expiry
+        ? new Date(otpResult.rows[0].code_expiry)
+        : new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
+      await sendOtpEmail({
+        to: user.email,
+        recipientName: user.full_name || fullName,
+        recipientEmail: user.email,
+        recipientAvatarUrl: user.avatar_url || avatar,
+        otp,
+        purpose: isNew ? "verify" : "login",
+        expiryMinutes: OTP_EXPIRY_MINUTES,
+      });
+    }
+
+    return res.redirect(
+      frontend + "/auth/facebook/callback?" + new URLSearchParams({
+        emailOtpRequired: "1",
+        email: user.email,
+        fullName: user.full_name || fullName,
+        provider: "facebook",
+        expiresAt: String(codeExpiresAt.getTime()),
+      }),
+    );
+  } catch (err) {
+    logger.error("[Facebook Callback] OAuth failed:", {
+      code: err?.code || "FACEBOOK_CALLBACK_FAILED",
+      message: err?.message || "Unknown error",
+    });
+    const errorCode = err?.code === "ACCOUNT_REMOVED" ? "account_removed"
+      : err?.code === "ACCOUNT_RECREATE_REQUIRED" ? "account_recreate_required"
+      : err?.code === "ACCOUNT_NOT_FOUND" ? "account_not_found"
+      : err?.code === "ACCOUNT_DEACTIVATED" ? "account_deactivated"
+      : "facebook_auth_failed";
+    return redirectFailure(errorCode);
   }
 };
 
