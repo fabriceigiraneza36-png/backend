@@ -111,123 +111,72 @@ const formatLoginEmailDate = (value) => {
  * emoji, and table-based layout so the message remains stable in email clients. */
 const buildSignInSuccessEmailHtml = ({
   recipientName = "",
+  recipientEmail = "",
+  recipientAvatarUrl = "",
   loginAt = null,
   expiresAt = null,
 }) => {
   const esc = escapeLoginEmailHtml;
   const firstName = String(recipientName || "").trim().split(/\s+/)[0] || "";
+  const nameParts = String(recipientName || "").trim().split(/\s+/).filter(Boolean);
+  const initials = nameParts.length > 1
+    ? (nameParts[0][0] + nameParts[nameParts.length - 1][0]).toUpperCase()
+    : (nameParts[0] || recipientEmail || "U").slice(0, 2).toUpperCase();
   const baseUrl = String(process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "");
   const securityUrl = esc(baseUrl + "/account/security");
-  const loginTimeLabel = formatLoginEmailDate(loginAt);
-  const expiryLabel = formatLoginEmailDate(expiresAt);
+  const loginTimeLabel = esc(formatLoginEmailDate(loginAt));
+  const expiryLabel = esc(formatLoginEmailDate(expiresAt));
   const logoUrl = esc(EMAIL_LOGO_URL);
+  let avatarUrl = "";
+  try {
+    const parsedAvatar = new URL(String(recipientAvatarUrl || "").trim());
+    if (parsedAvatar.protocol === "https:") avatarUrl = esc(parsedAvatar.toString());
+  } catch { /* Use the initials fallback when no safe profile image exists. */ }
+  const avatar = avatarUrl
+    ? '<img src="' + avatarUrl + '" width="46" height="46" alt="' + esc(recipientName || "Your profile") + '" style="display:block;width:46px;height:46px;border-radius:50%;object-fit:cover;border:2px solid #d1fae5;background:#ffffff;" />'
+    : '<table role="presentation" cellpadding="0" cellspacing="0" width="46" height="46" style="width:46px;height:46px;border-radius:50%;background:#d1fae5;border:2px solid #ffffff;"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:13px;font-weight:800;color:#065f46;">' + esc(initials) + '</td></tr></table>';
 
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <meta name="x-apple-disable-message-reformatting">
-  <title>Sign-in successful | Altuvera Safaris</title>
-  <style>
-    body{margin:0!important;padding:0!important;width:100%!important;background:#f3f7f4;color:#173326;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;-ms-text-size-adjust:100%}
-    table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt}
-    img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic}
-    a{color:#087a50}
-    @media only screen and (max-width:620px){
-      .outer-pad{padding:16px 8px!important}
-      .card{width:100%!important;border-radius:16px!important}
-      .header-pad{padding:22px 18px!important}
-      .content-pad{padding:26px 18px!important}
-      .footer-pad{padding:18px!important}
-      .brand-logo{width:92px!important;height:auto!important}
-      .brand-name{font-size:17px!important}
-      .main-title{font-size:25px!important}
-      .detail-label{width:112px!important}
-      .cta-link{display:block!important;text-align:center!important}
-    }
-  </style>
-</head>
-<body>
-  <div style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;max-height:0;max-width:0;overflow:hidden;mso-hide:all;">
-    Your Altuvera Safaris account was signed in successfully. Review your recent session details.
-  </div>
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f3f7f4;">
-    <tr>
-      <td align="center" class="outer-pad" style="padding:36px 14px;">
-        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" class="card" style="width:100%;max-width:600px;background:#ffffff;border:1px solid #e1ebe4;border-radius:22px;overflow:hidden;">
-          <tr>
-            <td class="header-pad" bgcolor="#064e3b" style="padding:24px 30px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e 0%,#087a50 100%);">
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
-                <tr>
-                  <td width="112" valign="middle" style="width:112px;">
-                    <a href="${esc(baseUrl)}" style="text-decoration:none;">
-                      <img class="brand-logo" src="${logoUrl}" width="108" alt="Altuvera Safaris" style="display:block;width:108px;max-width:100%;height:auto;max-height:58px;object-fit:contain;background:#ffffff;border-radius:9px;padding:4px;">
-                    </a>
-                  </td>
-                  <td valign="middle" style="padding-left:15px;">
-                    <p class="brand-name" style="margin:0;color:#ffffff;font-size:19px;line-height:1.3;font-weight:800;overflow-wrap:anywhere;">Altuvera Safaris</p>
-                    <p style="margin:4px 0 0;color:#b9f2d4;font-size:10px;line-height:1.5;font-weight:700;letter-spacing:1.5px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td class="content-pad" style="padding:38px 38px 34px;">
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 20px;">
-                <tr>
-                  <td valign="middle" width="40" height="40" align="center" style="width:40px;height:40px;border-radius:50%;background:#e8f7ef;border:1px solid #b9e8ce;color:#087a50;font-size:22px;font-weight:700;line-height:40px;">&#10003;</td>
-                  <td valign="middle" style="padding-left:11px;color:#087a50;font-size:12px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;">Account security notification</td>
-                </tr>
-              </table>
-              <h1 class="main-title" style="margin:0 0 12px;color:#123b2c;font-size:29px;line-height:1.2;font-weight:800;letter-spacing:-.5px;">You’re signed in</h1>
-              <p style="margin:0 0 10px;color:#344f42;font-size:16px;line-height:1.65;">Hello${firstName ? ", <strong>" + esc(firstName) + "</strong>" : ""},</p>
-              <p style="margin:0;color:#52685d;font-size:15px;line-height:1.75;overflow-wrap:anywhere;">Your Altuvera Safaris account was signed in successfully. You can continue exploring your account and travel plans.</p>
-
-              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:26px 0 0;background:#f7fbf8;border:1px solid #dcebe1;border-radius:15px;">
-                <tr>
-                  <td colspan="2" style="padding:17px 18px 8px;color:#174b35;font-size:11px;font-weight:800;letter-spacing:1.3px;text-transform:uppercase;">Recent session</td>
-                </tr>
-                <tr>
-                  <td width="34" valign="top" style="width:34px;padding:10px 0 14px 18px;color:#087a50;font-size:18px;line-height:1.4;">&#8599;</td>
-                  <td valign="top" style="padding:10px 18px 14px 10px;">
-                    <p style="margin:0 0 4px;color:#64796d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;">Sign-in time</p>
-                    <p style="margin:0;color:#183d2d;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">${esc(loginTimeLabel)}</p>
-                  </td>
-                </tr>
-                <tr>
-                  <td width="34" valign="top" style="width:34px;padding:12px 0 17px 18px;border-top:1px solid #e4eee7;color:#087a50;font-size:18px;line-height:1.4;">&#9719;</td>
-                  <td valign="top" style="padding:12px 18px 17px 10px;border-top:1px solid #e4eee7;">
-                    <p style="margin:0 0 4px;color:#64796d;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;">Session scheduled to expire</p>
-                    <p style="margin:0;color:#183d2d;font-size:14px;line-height:1.5;overflow-wrap:anywhere;">${esc(expiryLabel)}</p>
-                  </td>
-                </tr>
-              </table>
-
-              <p style="margin:23px 0 0;color:#52685d;font-size:14px;line-height:1.7;">If this sign-in was yours, no action is needed. If you don’t recognize it, review your account security.</p>
-              <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:23px 0 0;">
-                <tr>
-                  <td bgcolor="#087a50" style="background:#087a50;border-radius:999px;">
-                    <a class="cta-link" href="${securityUrl}" style="display:inline-block;padding:14px 24px;color:#ffffff!important;font-size:14px;line-height:1.3;font-weight:700;text-decoration:none;border-radius:999px;">Review account security <span aria-hidden="true">&#8594;</span></a>
-                  </td>
-                </tr>
-              </table>
-            </td>
-          </tr>
-          <tr>
-            <td class="footer-pad" style="padding:20px 30px;background:#f7faf8;border-top:1px solid #e5eee8;">
-              <p style="margin:0 0 6px;color:#546b5e;font-size:12px;line-height:1.6;">Need help? Contact <a href="mailto:info@altuverasafaris.com" style="color:#087a50;font-weight:700;text-decoration:none;overflow-wrap:anywhere;">info@altuverasafaris.com</a>.</p>
-              <p style="margin:0;color:#82938a;font-size:11px;line-height:1.6;">This is an automated account-security message from Altuvera Safaris. Please do not reply.</p>
-              <p style="margin:12px 0 0;color:#9aa79f;font-size:10px;line-height:1.5;">© ${new Date().getFullYear()} Altuvera Safaris. All rights reserved.</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>`;
+  return '<!doctype html>' +
+  '<html lang="en"><head><meta charset="utf-8">' +
+  '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+  '<meta name="x-apple-disable-message-reformatting">' +
+  '<title>Sign-in successful | Altuvera Safaris</title>' +
+  '<style>' +
+  'body{margin:0!important;padding:0!important;width:100%!important;background:#f3f7f4;color:#173326;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;}' +
+  'table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;}img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}' +
+  'a{color:#087a50;}' +
+  '@media only screen and (max-width:620px){.outer-pad{padding:10px 6px!important;}.card{width:100%!important;border-radius:15px!important;}.header-pad{padding:13px 14px!important;}.content-pad{padding:19px 17px!important;}.footer-pad{padding:13px 16px!important;}.brand-logo{width:70px!important;height:36px!important;}.brand-name{font-size:15px!important;}.brand-tagline{font-size:8px!important;letter-spacing:.7px!important;}.avatar-cell{width:48px!important;}.main-title{font-size:24px!important;}.session-pad{padding-left:12px!important;padding-right:12px!important;}.cta-link{display:block!important;text-align:center!important;}}' +
+  '</style></head><body>' +
+  '<div style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;max-height:0;max-width:0;overflow:hidden;mso-hide:all;">Your Altuvera Safaris account was signed in successfully. Review your recent session details.</div>' +
+  '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f3f7f4;"><tr><td align="center" class="outer-pad" style="padding:22px 12px;">' +
+  '<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" class="card" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #e1ebe4;border-radius:18px;overflow:hidden;">' +
+  '<tr><td class="header-pad" bgcolor="#064e3b" style="padding:15px 21px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e 0%,#087a50 100%);">' +
+  '<table data-altuvera-email-header="true" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>' +
+  '<td width="84" valign="middle" style="width:84px;"><a href="' + esc(baseUrl) + '" style="text-decoration:none;"><img class="brand-logo" src="' + logoUrl + '" width="78" height="42" alt="Altuvera Safaris logo" style="display:block;width:78px;height:42px;object-fit:contain;background:#ffffff;border-radius:8px;padding:3px;"></a></td>' +
+  '<td valign="middle" style="padding:0 8px 0 10px;"><p class="brand-name" style="margin:0;color:#ffffff;font-size:16px;line-height:1.25;font-weight:800;">Altuvera Safaris</p><p class="brand-tagline" style="margin:4px 0 0;color:#b9f2d4;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:1px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
+  '<td class="avatar-cell" align="right" valign="middle" width="52" style="width:52px;">' + avatar + '</td>' +
+  '</tr></table></td></tr>' +
+  '<tr><td class="content-pad" style="padding:25px 30px 22px;">' +
+  '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 12px;"><tr>' +
+  '<td valign="middle" width="29" height="29" align="center" style="width:29px;height:29px;border-radius:50%;background:#e8f7ef;border:1px solid #b9e8ce;color:#087a50;font-size:17px;font-weight:700;line-height:29px;">&#10003;</td>' +
+  '<td valign="middle" style="padding-left:9px;color:#087a50;font-size:10px;font-weight:800;letter-spacing:1px;text-transform:uppercase;">Account security notification</td>' +
+  '</tr></table>' +
+  '<h1 class="main-title" style="margin:0 0 8px;color:#123b2c;font-size:27px;line-height:1.2;font-weight:800;letter-spacing:-.4px;">You’re signed in</h1>' +
+  '<p style="margin:0 0 7px;color:#344f42;font-size:14px;line-height:1.5;">Hello' + (firstName ? ', <strong>' + esc(firstName) + '</strong>' : '') + ',</p>' +
+  '<p style="margin:0;color:#52685d;font-size:13px;line-height:1.65;overflow-wrap:anywhere;">Your Altuvera Safaris account was signed in successfully. You can continue exploring your account and travel plans.</p>' +
+  '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:18px 0 0;background:#f7fbf8;border:1px solid #dcebe1;border-radius:13px;">' +
+  '<tr><td class="session-pad" colspan="2" style="padding:12px 15px 5px;color:#174b35;font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;">Recent session</td></tr>' +
+  '<tr><td width="33" valign="middle" align="center" style="width:33px;padding:8px 0 10px 13px;color:#087a50;font-size:16px;line-height:1;">&#8599;</td><td valign="middle" style="padding:8px 14px 10px 8px;"><p style="margin:0 0 2px;color:#64796d;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;">Sign-in time</p><p style="margin:0;color:#183d2d;font-size:13px;line-height:1.45;overflow-wrap:anywhere;">' + loginTimeLabel + '</p></td></tr>' +
+  '<tr><td width="33" valign="middle" align="center" style="width:33px;padding:9px 0 12px 13px;border-top:1px solid #e4eee7;color:#087a50;font-size:16px;line-height:1;">&#9719;</td><td valign="middle" style="padding:9px 14px 12px 8px;border-top:1px solid #e4eee7;"><p style="margin:0 0 2px;color:#64796d;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;">Session scheduled to expire</p><p style="margin:0;color:#183d2d;font-size:13px;line-height:1.45;overflow-wrap:anywhere;">' + expiryLabel + '</p></td></tr>' +
+  '</table>' +
+  '<p style="margin:16px 0 0;color:#52685d;font-size:12px;line-height:1.6;">If this sign-in was yours, no action is needed. If you don’t recognize it, review your account security.</p>' +
+  '<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:16px 0 0;"><tr><td bgcolor="#087a50" style="background:#087a50;border-radius:999px;"><a class="cta-link" href="' + securityUrl + '" style="display:inline-block;padding:12px 21px;color:#ffffff!important;font-size:13px;line-height:1.3;font-weight:700;text-decoration:none;border-radius:999px;">Review account security &#8594;</a></td></tr></table>' +
+  '</td></tr>' +
+  '<tr><td class="footer-pad" style="padding:14px 24px;background:#f7faf8;border-top:1px solid #e5eee8;">' +
+  '<p style="margin:0 0 4px;color:#546b5e;font-size:11px;line-height:1.5;">Need help? Contact <a href="mailto:info@altuverasafaris.com" style="color:#087a50;font-weight:700;text-decoration:none;">info@altuverasafaris.com</a>.</p>' +
+  '<p style="margin:0;color:#82938a;font-size:10px;line-height:1.5;">This is an automated account-security message from Altuvera Safaris. Please do not reply.</p>' +
+  '<p style="margin:7px 0 0;color:#9aa79f;font-size:9px;line-height:1.4;">© ' + new Date().getFullYear() + ' Altuvera Safaris. All rights reserved.</p>' +
+  '</td></tr></table></td></tr></table></body></html>';
 };
 
 const sendUserEmail = async (notif, recipientEmail, recipientName) => {
@@ -309,6 +258,8 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
     const loginHtml = isSignInSuccess
       ? buildSignInSuccessEmailHtml({
           recipientName: recipient.full_name || recipientName || "",
+          recipientEmail,
+          recipientAvatarUrl: recipient.avatar_url || "",
           loginAt: notif.metadata?.lastLoginAt,
           expiresAt: notif.metadata?.sessionExpiresAt,
         })
