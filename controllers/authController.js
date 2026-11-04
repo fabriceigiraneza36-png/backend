@@ -612,7 +612,8 @@ exports.login = async (req, res) => {
       });
 
     const otp     = generateOTP();
-    const purpose = user.is_verified ? "login" : "verify";
+    const isNew = !user.is_verified;
+    const purpose = isNew ? "verify" : "login";
 
     const otpResult = await setOtp(user.id, otp);
     const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
