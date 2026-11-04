@@ -1284,11 +1284,14 @@ exports.updateProfile = async (req, res) => {
     if (avatar && previousAvatarUrl && savedAvatarUrl && previousAvatarUrl !== savedAvatarUrl) {
       // The database now points at the replacement. The shared cleanup utility
       // scans remaining DB references and preserves any still-used Cloudinary asset.
-      destroyCloudinaryUrls([previousAvatarUrl]).then((cleanup) => {
-        if (cleanup.failed > 0) logger.warn("[Profile] Previous avatar cleanup was incomplete:", cleanup);
-      }).catch((cleanupError) => {
+      try {
+        const cleanup = await destroyCloudinaryUrls([previousAvatarUrl]);
+        if (cleanup.failed > 0 || cleanup.preserved > 0) {
+          logger.warn("[Profile] Previous avatar cleanup was incomplete or safely preserved:", cleanup);
+        }
+      } catch (cleanupError) {
         logger.warn("[Profile] Previous avatar cleanup failed:", cleanupError.message);
-      });
+      }
     }
 
     sendActivityAlert({
