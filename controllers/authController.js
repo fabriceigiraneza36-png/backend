@@ -1292,7 +1292,7 @@ const GITHUB_CALLBACK_URL =
   "https://altuverasafaris.com/auth/github/callback";
 
 exports.githubSignInInit = async (req, res) => {
-  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\\/+$/, "");
+  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\/+$/, "");
   if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
     return res.redirect(`${frontend}/auth/github/callback?error=github_not_configured`);
   const redirect = GITHUB_CALLBACK_URL;
@@ -1487,7 +1487,7 @@ const verifyFacebookState = (state, cookieHeader) => {
 };
 
 exports.facebookSignInInit = async (req, res) => {
-  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\\/+$/, "");
+  const frontend = String(process.env.FRONTEND_URL || "https://altuverasafaris.com").replace(/\/+$/, "");
   if (!process.env.FACEBOOK_CLIENT_ID || !process.env.FACEBOOK_CLIENT_SECRET) {
     return res.redirect(`${frontend}/auth/facebook/callback?error=facebook_not_configured`);
   }
