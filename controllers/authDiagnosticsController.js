@@ -94,9 +94,11 @@ const classifyCategory = (code, message, status) => {
   return "unexpected";
 };
 
+const createReferenceId = () => `AUTH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+
 async function recordDiagnostic(input = {}) {
   await ensureSchema();
-  const referenceId = clean(input.referenceId, 64) || `AUTH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+  const referenceId = clean(input.referenceId, 64) || createReferenceId();
   const provider = safeProvider(input.provider);
   const stage = safeStage(input.stage);
   const category = safeCategory(input.category || classifyCategory(input.errorCode, input.message, input.httpStatus));
@@ -198,4 +200,4 @@ const list = async (req, res) => {
 
 const recordServerFailure = (input) => recordDiagnostic({ ...input, source: "server" });
 
-module.exports = { capture, list, recordServerFailure, recordDiagnostic, classifyCategory };
+module.exports = { capture, list, recordServerFailure, recordDiagnostic, classifyCategory, createReferenceId };
