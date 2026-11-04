@@ -144,8 +144,14 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
 
 const respondWithAuth = async (res, user, isNew = false, statusCode = 200) => {
   try {
-    if (!user || user.is_active === false) {
-      return res.status(401).json({ success: false, message: "Account deactivated. Contact support." });
+    if (!user) {
+      return res.status(404).json({ success: false, code: "ACCOUNT_NOT_FOUND", message: "We couldn't find an Altuvera account for this sign-in." });
+    }
+    if (user.deleted_at) {
+      return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support." });
+    }
+    if (user.is_active === false) {
+      return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
     }
 
     // Social identity is not an Altuvera session. A fresh email OTP must be
@@ -252,6 +258,36 @@ const fetchJsonOrThrow = async (url, options = {}, label = "request") => {
   }
 };
 
+const assertAccountAvailableForAuth = async (email, providerColumn, providerId) => {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  const values = [normalizedEmail];
+  let where = "LOWER(email) = $1";
+  if (providerColumn && providerId) {
+    values.push(String(providerId));
+    where += ` OR ${providerColumn} = $2`;
+  }
+  const found = await query(
+    `SELECT id, email, is_active, deleted_at FROM users WHERE ${where} LIMIT 1`,
+    values,
+  );
+  const account = found.rows[0];
+  if (!account) return null;
+
+  if (account.deleted_at) {
+    const error = new Error("This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support.");
+    error.status = 410;
+    error.code = "ACCOUNT_REMOVED";
+    throw error;
+  }
+  if (account.is_active === false) {
+    const error = new Error("This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access.");
+    error.status = 403;
+    error.code = "ACCOUNT_DEACTIVATED";
+    throw error;
+  }
+  return account;
+};
+
 const upsertSocialUser = async ({
   provider, providerId, email, name, avatar, phone, bio,
 }) => {
@@ -266,6 +302,10 @@ const upsertSocialUser = async ({
     throw Object.assign(new Error(`${provider} account ID missing`), { status: 401 });
   if (!e || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
     throw Object.assign(new Error("Valid email required from OAuth provider"), { status: 400 });
+
+  // Never let OAuth silently reuse or overwrite a soft-deleted/deactivated
+  // account. Apply the same account-state checks to Google and GitHub.
+  await assertAccountAvailableForAuth(e, col, pid);
 
   const result = await query(
     `INSERT INTO users (
@@ -342,6 +382,8 @@ exports.register = async (req, res) => {
 
     if (existing.rows.length) {
       const user = existing.rows[0];
+      if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This email belongs to an Altuvera account that has been removed. If you believe this is a mistake, contact Altuvera support." });
+      if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
       if (user.is_verified)
         return res.status(409).json({ success: false, message: "Account exists. Please sign in." });
       if (isRateLimited(user))
@@ -445,11 +487,8 @@ exports.login = async (req, res) => {
 
     const user = result.rows[0];
 
-    if (user.is_active === false)
-      return res.status(401).json({
-        success: false,
-        message: "Account deactivated. Contact support.",
-      });
+    if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support." });
+    if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
 
     if (isRateLimited(user))
       return res.status(429).json({
@@ -509,7 +548,8 @@ exports.verifyCode = async (req, res) => {
       return res.status(404).json({ success: false, message: "Account not found." });
 
     const user = result.rows[0];
-    if (user.is_active === false) return res.status(401).json({success:false,message:"Account deactivated. Contact support."});
+    if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support." });
+    if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
 
     if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
       await query(
