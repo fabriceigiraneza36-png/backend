@@ -47,9 +47,9 @@ function listUrls() {
 function contentUrl(type,row) {
   const key = encodeURIComponent(row.slug || row.id);
   if (type === "destination") return FRONTEND_URL + "/destinations/" + key;
-  if (type === "country") return FRONTEND_URL + "/countries/" + key;
+  if (type === "country") return FRONTEND_URL + "/country/" + key;
   if (type === "package") return FRONTEND_URL + "/packages/" + key;
-  if (type === "post") return FRONTEND_URL + "/post/" + key;
+  if (type === "post") return FRONTEND_URL + "/blog/" + key;
   return FRONTEND_URL + "/gallery";
 }
 
@@ -201,14 +201,19 @@ async function getUserRows(ids) {
 
 async function getAllOptedInEmails() {
   const {rows} = await query(
-    "SELECT LOWER(email) AS email,name,avatar_url FROM (SELECT u.email,u.full_name AS name,u.avatar_url FROM users u WHERE COALESCE(u.is_active,true)=true AND COALESCE(u.subscribed,false)=true AND u.email IS NOT NULL AND u.email<>'' UNION ALL SELECT s.email,COALESCE(s.name,u.full_name) AS name,u.avatar_url FROM subscribers s LEFT JOIN users u ON LOWER(u.email)=LOWER(s.email) WHERE s.is_active=true AND s.email IS NOT NULL AND s.email<>'' UNION ALL SELECT b.email,b.full_name AS name,u.avatar_url FROM bookings b LEFT JOIN users u ON LOWER(u.email)=LOWER(b.email) WHERE b.email IS NOT NULL AND b.email<>'' AND COALESCE(b.newsletter_opt_in,false)=true) t"
+    "SELECT LOWER(email) AS email,name,avatar_url,user_id FROM (SELECT u.email,u.full_name AS name,u.avatar_url,u.id AS user_id FROM users u WHERE COALESCE(u.is_active,true)=true AND COALESCE(u.subscribed,false)=true AND u.email IS NOT NULL AND u.email<>'' UNION ALL SELECT s.email,COALESCE(s.name,u.full_name) AS name,u.avatar_url,u.id AS user_id FROM subscribers s LEFT JOIN users u ON LOWER(u.email)=LOWER(s.email) WHERE s.is_active=true AND s.email IS NOT NULL AND s.email<>'' UNION ALL SELECT b.email,b.full_name AS name,u.avatar_url,u.id AS user_id FROM bookings b LEFT JOIN users u ON LOWER(u.email)=LOWER(b.email) WHERE b.email IS NOT NULL AND b.email<>'' AND COALESCE(b.newsletter_opt_in,false)=true) t"
   );
   const map = new Map();
   for (const row of rows) {
     const email = String(row.email || "").trim().toLowerCase();
     if (!isEmail(email)) continue;
     const previous = map.get(email) || {};
-    map.set(email,{email,name:previous.name || row.name || null,avatar_url:previous.avatar_url || row.avatar_url || null});
+    map.set(email,{
+      email,
+      name:previous.name || row.name || null,
+      avatar_url:previous.avatar_url || row.avatar_url || null,
+      user_id:previous.user_id || row.user_id || null,
+    });
   }
   return [...map.values()];
 }
@@ -372,10 +377,14 @@ exports.send = async (req,res,next) => {
     }).filter(Boolean).slice(0,10);
     contextData.mediaGallery = mediaGallery;
     if (!contextData.heroImageUrl && mediaGallery[0]) contextData.heroImageUrl = mediaGallery[0].url;
-    const notificationTitle = String(payload.notificationTitle || template.headline || subject).trim().slice(0,120);
-    const notificationMessage = String(payload.notificationMessage || body).trim().slice(0,1800);
+    const notificationTitle = String(campaignTemplates.personalise(payload.notificationTitle || template.headline || subject,{name:"traveller"},contextData)).trim().slice(0,120);
+    const notificationMessage = String(campaignTemplates.personalise(payload.notificationMessage || body,{name:"traveller"},contextData)).trim().slice(0,1800);
     const actionUrl = String(contextData.contentUrl || template.cta_url || FRONTEND_URL + "/destinations");
     const notificationImage = mediaGallery[0]?.url || contextData.heroImageUrl || null;
+    const optedInUserIds = new Set(emailRecipients.map((recipient) => Number(recipient.user_id)).filter((id) => Number.isSafeInteger(id) && id > 0));
+    const skippedForEmailConsent = channels.email
+      ? target.users.filter((user) => !optedInUserIds.has(Number(user.id))).length
+      : 0;
 
     let sent=0, failed=0;
     const errors=[];
@@ -446,7 +455,7 @@ exports.send = async (req,res,next) => {
       templateKey,context,subject,audience:target.mode,total:Math.max(emailRecipients.length,userIds.length),sent,failed,
       details:{
         recipientMode:target.mode,emailRecipients:emailRecipients.length,inAppRecipients:userIds.length,
-        inAppSent,inAppFailed,emailSkippedForConsent:target.users.length-emailRecipients.filter((item)=>item.user_id).length,
+        inAppSent,inAppFailed,emailSkippedForConsent:skippedForEmailConsent,
         contentItems:contentItems.map(({id,type,title,contentUrl})=>({id,type,title,contentUrl})),
         imageCount:mediaGallery.length,channels,errors,
       },
@@ -456,7 +465,7 @@ exports.send = async (req,res,next) => {
       message:"Campaign sent. "+sent+" email(s) delivered and "+inAppSent+" in-app notification(s) created.",
       sent,failed,total:emailRecipients.length,inAppSent,inAppFailed,
       selectedUsers:target.userIds.length,emailEligible:emailRecipients.length,
-      skippedForEmailConsent:Math.max(0,target.users.length-emailRecipients.filter((item)=>item.user_id).length),
+      skippedForEmailConsent,
       recipientMode:target.mode,context,templateKey:templateKey || null,errors:failed ? errors : undefined,
     });
   } catch(error) {
