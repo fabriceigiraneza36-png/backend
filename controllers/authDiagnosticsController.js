@@ -75,12 +75,31 @@ const normalizeDetails = (value) => {
   return safe;
 };
 
+const classifyCategory = (code, message, status) => {
+  const value = `${String(code || "")} ${String(message || "")}`.toLowerCase();
+  if (/not configured|missing .*client|oauth.*configuration|client id/.test(value)) return "configuration";
+  if (/state mismatch|identity mismatch|different account|already linked|origin mismatch|rp id|relying party|audience/.test(value)) return "identity_mismatch";
+  if (/email.*(missing|required|not returned)|could not retrieve email/.test(value)) return "email_missing";
+  if (/rate limit|too many|cooldown|wait .*second/.test(value) || Number(status) === 429) return "rate_limited";
+  if (/expired|timeout|timed out/.test(value)) return "challenge_expired";
+  if (/cancel|dismissed|user aborted/.test(value)) return "passkey_cancelled";
+  if (/not supported|unsupported|publickeycredential/.test(value)) return "passkey_unsupported";
+  if (/account not found|couldn't find an altuvera account/.test(value) || Number(status) === 404) return "account_not_found";
+  if (/deactivated|disabled account/.test(value) || Number(status) === 403) return "account_deactivated";
+  if (/network|failed to fetch|connection|offline|enotfound|econn/.test(value)) return "network";
+  if (/credential|token|signature|invalid assertion|invalid code|incorrect code|verification failed/.test(value) || Number(status) === 401) return "invalid_credential";
+  if (/challenge/.test(value)) return "challenge_invalid";
+  if (/provider denied|access_denied/.test(value)) return "provider_denied";
+  if (/invalid email|email.*invalid|name.*required/.test(value)) return "validation";
+  return "unexpected";
+};
+
 async function recordDiagnostic(input = {}) {
   await ensureSchema();
   const referenceId = clean(input.referenceId, 64) || `AUTH-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
   const provider = safeProvider(input.provider);
   const stage = safeStage(input.stage);
-  const category = safeCategory(input.category);
+  const category = safeCategory(input.category || classifyCategory(input.errorCode, input.message, input.httpStatus));
   const errorCode = safeCode(input.errorCode);
   const source = input.source === "client" ? "client" : "server";
   const httpStatus = Number.isInteger(Number(input.httpStatus)) && Number(input.httpStatus) >= 100 && Number(input.httpStatus) <= 599
@@ -179,4 +198,4 @@ const list = async (req, res) => {
 
 const recordServerFailure = (input) => recordDiagnostic({ ...input, source: "server" });
 
-module.exports = { capture, list, recordServerFailure, recordDiagnostic };
+module.exports = { capture, list, recordServerFailure, recordDiagnostic, classifyCategory };
