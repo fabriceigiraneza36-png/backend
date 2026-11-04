@@ -517,10 +517,21 @@ exports.login = async (req, res) => {
       isNew = true;
     }
 
-    const user = result.rows[0];
+    let user = result.rows[0];
 
-    if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support." });
-    if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
+    if (user.deleted_at) {
+      const restored = await query(
+        `UPDATE users SET deleted_at = NULL, is_active = true, is_verified = false,
+           verification_code = NULL, code_expiry = NULL, code_attempts = 0,
+           auth_provider = 'email', full_name = COALESCE(NULLIF($1,''), full_name),
+           updated_at = NOW() WHERE id = $2 RETURNING *`,
+        [name, user.id],
+      );
+      user = restored.rows[0];
+      isNew = true;
+    } else if (user.is_active === false) {
+      return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
+    }
 
     if (isRateLimited(user))
       return res.status(429).json({
