@@ -9,6 +9,7 @@ const http   = require("http");
 
 const { query }   = require("../config/db");
 const { eraseUserData } = require("../utils/eraseUserData");
+const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 const { recordAccountActivity } = require("../utils/accountActivity");
 const {
   sendEmail,
@@ -1259,6 +1260,11 @@ exports.updateProfile = async (req, res) => {
         message: "Name must be 2–50 characters.",
       });
 
+    const previousAvatarResult = avatar
+      ? await query("SELECT avatar_url FROM users WHERE id = $1 LIMIT 1", [id])
+      : null;
+    const previousAvatarUrl = previousAvatarResult?.rows[0]?.avatar_url || null;
+
     const result = await query(
       `UPDATE users SET
          full_name   = COALESCE(NULLIF($1,''), full_name),
@@ -1273,6 +1279,17 @@ exports.updateProfile = async (req, res) => {
 
     if (!result.rows.length)
       return res.status(404).json({ success: false, message: "User not found." });
+
+    const savedAvatarUrl = result.rows[0].avatar_url || null;
+    if (avatar && previousAvatarUrl && savedAvatarUrl && previousAvatarUrl !== savedAvatarUrl) {
+      // The database now points at the replacement. The shared cleanup utility
+      // scans remaining DB references and preserves any still-used Cloudinary asset.
+      destroyCloudinaryUrls([previousAvatarUrl]).then((cleanup) => {
+        if (cleanup.failed > 0) logger.warn("[Profile] Previous avatar cleanup was incomplete:", cleanup);
+      }).catch((cleanupError) => {
+        logger.warn("[Profile] Previous avatar cleanup failed:", cleanupError.message);
+      });
+    }
 
     sendActivityAlert({
       to:            result.rows[0].email,
