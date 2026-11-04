@@ -9,6 +9,8 @@
 
 const router = require("express").Router();
 const ctrl = require("../controllers/emailBroadcastController");
+const contentCampaign = require("../controllers/contentCampaignController");
+const upload = require("../middleware/upload");
 const { protect, adminOnly } = require("../middleware/auth");
 
 let asyncHandler;
@@ -19,6 +21,18 @@ try {
   asyncHandler = (fn) => (req, res, next) =>
     Promise.resolve(fn(req, res, next)).catch(next);
 }
+
+// Content-aware campaign studio: real records, media, saved recipient audiences.
+router.get("/content/library", protect, adminOnly, asyncHandler(contentCampaign.getContentLibrary));
+router.post("/content/:type/:id/images", protect, adminOnly, upload.array("images", 8), asyncHandler(contentCampaign.uploadContentImages));
+router.post("/assets/upload", protect, adminOnly, upload.array("images", 8), asyncHandler(contentCampaign.uploadGalleryAssets));
+router.get("/recipients", protect, adminOnly, asyncHandler(contentCampaign.getRecipients));
+router.get("/audience-settings", protect, adminOnly, asyncHandler(contentCampaign.getAudienceSettings));
+router.put("/audience-settings", protect, adminOnly, asyncHandler(contentCampaign.updateAudienceSettings));
+router.post("/audiences", protect, adminOnly, asyncHandler(contentCampaign.saveAudienceList));
+router.delete("/audiences/:id", protect, adminOnly, asyncHandler(contentCampaign.deleteAudienceList));
+router.post("/content-preview", protect, adminOnly, asyncHandler(contentCampaign.preview));
+router.post("/content-send", protect, adminOnly, asyncHandler(contentCampaign.send));
 
 // Automatic contextual email queue: pending preview, retouch, or immediate send
 router.get("/queue/pending", protect, adminOnly, asyncHandler(ctrl.getPendingQueue));
