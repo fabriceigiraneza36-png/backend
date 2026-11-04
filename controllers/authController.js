@@ -137,7 +137,9 @@ const handleError = (res, err, message = "Operation failed", status = 500) => {
   logger.error(`[Auth] ${message}:`, { error: err.message, stack: err.stack });
   return res.status(err.status || status).json({
     success: false,
+    ...(err.code ? { code: err.code } : {}),
     message: err.message || message,
+    ...(err.data ? { data: err.data } : {}),
     ...(process.env.NODE_ENV === "development" && { debug: err.stack }),
   });
 };
@@ -261,13 +263,52 @@ const fetchJsonOrThrow = async (url, options = {}, label = "request") => {
 let deletedAtColumnReady = null;
 const ensureDeletedAtColumn = async () => {
   if (!deletedAtColumnReady) {
-    deletedAtColumnReady = query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ")
-      .catch((err) => { deletedAtColumnReady = null; throw err; });
+    deletedAtColumnReady = (async () => {
+      await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
+      await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deletion_notice_shown_at TIMESTAMPTZ");
+    })().catch((err) => { deletedAtColumnReady = null; throw err; });
   }
   return deletedAtColumnReady;
 };
 
-const assertAccountAvailableForAuth = async (email, providerColumn, providerId) => {
+const resetRecreatedAccountSecurity = async (userId) => {
+  const tables = [
+    "user_sessions",
+    "user_security_login_attempts",
+    "user_passkeys",
+    "webauthn_challenges",
+    "login_factor_challenges",
+    "user_security",
+    "account_recovery_requests",
+  ];
+  for (const table of tables) {
+    const exists = await query("SELECT to_regclass($1) AS table_name", [`public.${table}`]);
+    if (exists.rows[0]?.table_name) {
+      await query(`DELETE FROM ${table} WHERE user_id = $1`, [userId]);
+    }
+  }
+};
+
+const buildDeletedAccountAuthError = async (account, profile = null) => {
+  const marked = await query(
+    `UPDATE users
+        SET deletion_notice_shown_at = NOW(), updated_at = NOW()
+      WHERE id = $1 AND deleted_at IS NOT NULL
+        AND deletion_notice_shown_at IS NULL
+      RETURNING id`,
+    [account.id],
+  );
+  const firstNotice = Boolean(marked.rowCount);
+  const error = new Error(firstNotice
+    ? "Your previous Altuvera account was removed. You can create a fresh account using this same email address."
+    : "We couldn't find an active Altuvera account for these details. Create an account to continue.");
+  error.status = firstNotice ? 410 : 404;
+  error.code = firstNotice ? "ACCOUNT_REMOVED" : "ACCOUNT_RECREATE_REQUIRED";
+  if (profile) error.data = { profile };
+  return error;
+};
+
+const assertAccountAvailableForAuth = async (email, providerColumn, providerId, profile = null) => {
   await ensureDeletedAtColumn();
   const normalizedEmail = String(email || "").trim().toLowerCase();
   const values = [normalizedEmail];
@@ -277,29 +318,26 @@ const assertAccountAvailableForAuth = async (email, providerColumn, providerId) 
     where += ` OR ${providerColumn} = $2`;
   }
   const found = await query(
-    `SELECT id, email, is_active, deleted_at FROM users WHERE ${where} LIMIT 1`,
+    `SELECT id, email, is_active, deleted_at, deletion_notice_shown_at
+       FROM users WHERE ${where} LIMIT 1`,
     values,
   );
   const account = found.rows[0];
   if (!account) return null;
 
-  if (account.deleted_at) {
-    const error = new Error("This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support.");
-    error.status = 410;
-    error.code = "ACCOUNT_REMOVED";
-    throw error;
-  }
+  if (account.deleted_at) throw await buildDeletedAccountAuthError(account, profile);
   if (account.is_active === false) {
     const error = new Error("This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access.");
     error.status = 403;
     error.code = "ACCOUNT_DEACTIVATED";
+    if (profile) error.data = { profile };
     throw error;
   }
   return account;
 };
 
 const upsertSocialUser = async ({
-  provider, providerId, email, name, avatar, phone, bio,
+  provider, providerId, email, name, avatar, phone, bio, allowRecreate = false,
 }) => {
   const col = { google: "google_id", github: "github_id" }[provider];
   if (!col) throw Object.assign(new Error(`Unsupported provider: ${provider}`), { status: 400 });
@@ -313,9 +351,45 @@ const upsertSocialUser = async ({
   if (!e || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e))
     throw Object.assign(new Error("Valid email required from OAuth provider"), { status: 400 });
 
-  // Never let OAuth silently reuse or overwrite a soft-deleted/deactivated
-  // account. Apply the same account-state checks to Google and GitHub.
-  await assertAccountAvailableForAuth(e, col, pid);
+  await ensureDeletedAtColumn();
+  const profile = { email: e, fullName: n, avatar: avatar || "", provider };
+
+  // Account recreation is permitted only from an explicit provider sign-up
+  // completion, never from a sign-in attempt. Reuse the user row so historical
+  // booking/message references remain valid, but revoke all prior credentials.
+  if (allowRecreate) {
+    const prior = await query(
+      `SELECT * FROM users
+        WHERE LOWER(email) = $1 OR ${col} = $2
+        LIMIT 1`,
+      [e, pid],
+    );
+    if (prior.rows[0]?.deleted_at) {
+      const restored = await query(
+        `UPDATE users SET
+           deleted_at = NULL, deletion_notice_shown_at = NULL,
+           is_active = TRUE, is_verified = FALSE,
+           verification_code = NULL, code_expiry = NULL,
+           code_attempts = 0, last_code_sent_at = NULL,
+           google_id = CASE WHEN $1 = 'google' THEN $2 ELSE NULL END,
+           github_id = CASE WHEN $1 = 'github' THEN $2 ELSE NULL END,
+           full_name = COALESCE(NULLIF($3,''), full_name),
+           avatar_url = COALESCE(NULLIF($4,''), avatar_url),
+           phone = COALESCE(NULLIF($5,''), phone),
+           bio = COALESCE(NULLIF($6,''), bio),
+           auth_provider = $1, login_counter = 0, last_login = NULL,
+           updated_at = NOW()
+         WHERE id = $7
+         RETURNING *`,
+        [provider, pid, n, avatar || "", phone || "", bio || "", prior.rows[0].id],
+      );
+      const recreated = restored.rows[0];
+      await resetRecreatedAccountSecurity(recreated.id);
+      return { user: recreated, isNew: true };
+    }
+  }
+
+  await assertAccountAvailableForAuth(e, col, pid, profile);
 
   const result = await query(
     `INSERT INTO users (
@@ -399,8 +473,11 @@ exports.register = async (req, res) => {
       if (user.deleted_at) {
         const restored = await query(
           `UPDATE users SET
-             deleted_at = NULL, is_active = true, is_verified = false,
+             deleted_at = NULL, deletion_notice_shown_at = NULL,
+             is_active = true, is_verified = false,
              verification_code = NULL, code_expiry = NULL, code_attempts = 0,
+             last_code_sent_at = NULL, login_counter = 0, last_login = NULL,
+             google_id = NULL, github_id = NULL,
              full_name = COALESCE(NULLIF($1,''), full_name),
              phone = COALESCE(NULLIF($2,''), phone),
              bio = COALESCE(NULLIF($3,''), bio),
@@ -412,6 +489,7 @@ exports.register = async (req, res) => {
           [name, phone || null, bio || null, avatar || null, onboardingJson, user.id],
         );
         user = restored.rows[0];
+        await resetRecreatedAccountSecurity(user.id);
       } else if (user.is_active === false) {
         return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
       }
@@ -505,31 +583,25 @@ exports.login = async (req, res) => {
     if (validateEmail && !validateEmail(nEmail))
       return res.status(400).json({ success: false, message: "Invalid email address." });
 
-    let result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
-    let isNew  = false;
-
+    const result = await query("SELECT * FROM users WHERE email = $1", [nEmail]);
     if (!result.rows.length) {
-      result = await query(
-        `INSERT INTO users (email, full_name, is_verified, auth_provider, login_counter)
-         VALUES ($1,$2,false,'email',0) RETURNING *`,
-        [nEmail, name || null],
-      );
-      isNew = true;
+      return res.status(404).json({
+        success: false,
+        code: "ACCOUNT_NOT_FOUND",
+        message: "We couldn't find an Altuvera account for this email. Create an account to continue.",
+        data: { profile: { email: nEmail, fullName: name } },
+      });
     }
 
-    let user = result.rows[0];
-
+    const user = result.rows[0];
     if (user.deleted_at) {
-      const restored = await query(
-        `UPDATE users SET deleted_at = NULL, is_active = true, is_verified = false,
-           verification_code = NULL, code_expiry = NULL, code_attempts = 0,
-           auth_provider = 'email', full_name = COALESCE(NULLIF($1,''), full_name),
-           updated_at = NOW() WHERE id = $2 RETURNING *`,
-        [name, user.id],
-      );
-      user = restored.rows[0];
-      isNew = true;
-    } else if (user.is_active === false) {
+      const error = await buildDeletedAccountAuthError(user, { email: nEmail, fullName: user.full_name || name });
+      return res.status(error.status).json({
+        success: false, code: error.code, message: error.message,
+        ...(error.data ? { data: error.data } : {}),
+      });
+    }
+    if (user.is_active === false) {
       return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
     }
 
@@ -540,7 +612,7 @@ exports.login = async (req, res) => {
       });
 
     const otp     = generateOTP();
-    const purpose = isNew ? "verify" : "login";
+    const purpose = user.is_verified ? "login" : "verify";
 
     const otpResult = await setOtp(user.id, otp);
     const codeExpiresAt = otpResult.rows[0]?.code_expiry || new Date(Date.now() + OTP_EXPIRY_MINUTES * 60 * 1000);
@@ -592,7 +664,13 @@ exports.verifyCode = async (req, res) => {
       return res.status(404).json({ success: false, message: "Account not found." });
 
     const user = result.rows[0];
-    if (user.deleted_at) return res.status(410).json({ success: false, code: "ACCOUNT_REMOVED", message: "This Altuvera account has been removed and is no longer available. If you believe this is a mistake, contact Altuvera support." });
+    if (user.deleted_at) {
+      const error = await buildDeletedAccountAuthError(user, { email: nEmail, fullName: user.full_name || "" });
+      return res.status(error.status).json({
+        success: false, code: error.code, message: error.message,
+        ...(error.data ? { data: error.data } : {}),
+      });
+    }
     if (user.is_active === false) return res.status(403).json({ success: false, code: "ACCOUNT_DEACTIVATED", message: "This Altuvera account is currently deactivated. Contact Altuvera support if you need help restoring access." });
 
     if ((user.code_attempts ?? 0) >= OTP_MAX_ATTEMPTS) {
@@ -1075,6 +1153,7 @@ exports.completeGoogleSignUp = async (req, res) => {
       avatar:     req.body.avatar || payload.picture,
       phone:      req.body.phone  || null,
       bio:        req.body.bio    || null,
+      allowRecreate: true,
     });
 
     // Store optional travel/profile answers in the existing JSONB preferences
@@ -1114,7 +1193,7 @@ exports.completeGoogleSignUp = async (req, res) => {
 ════════════════════════════════════════════════════════════════ */
 exports.githubAuth = async (req, res) => {
   try {
-    const { code, phone, bio } = req.body;
+    const { code, phone, bio, mode = "signin" } = req.body;
     if (!code)
       return res.status(400).json({ success: false, message: "GitHub code is required." });
     if (!process.env.GITHUB_CLIENT_ID || !process.env.GITHUB_CLIENT_SECRET)
@@ -1167,6 +1246,24 @@ exports.githubAuth = async (req, res) => {
         message: "Could not retrieve email from GitHub.",
       });
 
+    const githubProfile = {
+      email: ghEmail.toLowerCase(),
+      fullName: gh.name || gh.login || ghEmail.split("@")[0],
+      avatar: gh.avatar_url || "",
+      provider: "github",
+    };
+    const matched = await query(
+      "SELECT id FROM users WHERE LOWER(email) = $1 OR github_id = $2 LIMIT 1",
+      [ghEmail.toLowerCase(), String(gh.id)],
+    );
+    if (!matched.rows.length && mode !== "signup") {
+      const error = new Error("We couldn't find an Altuvera account for this GitHub identity. Create an account to continue.");
+      error.status = 404;
+      error.code = "ACCOUNT_NOT_FOUND";
+      error.data = { profile: githubProfile };
+      throw error;
+    }
+
     const { user, isNew } = await upsertSocialUser({
       provider:   "github",
       providerId: String(gh.id),
@@ -1175,6 +1272,7 @@ exports.githubAuth = async (req, res) => {
       avatar:     gh.avatar_url,
       phone:      phone || null,
       bio:        bio || gh.bio || null,
+      allowRecreate: mode === "signup",
     });
 
     logger.info("[GitHub Auth] Provider verified; email OTP required:", { email: user.email, isNew });
