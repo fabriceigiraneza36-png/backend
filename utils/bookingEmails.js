@@ -206,12 +206,31 @@ const tripName = (b) =>
   safe(b.destination_name || b.service_name || b.package_name || b.package_title ||
     b.destination || b.service || b.package, "Your Trip");
 
-const bookingEmailIdentity = (booking = {}) => ({
-  recipientName: booking.full_name || booking.user_full_name || booking.name || "",
-  recipientEmail: booking.email || booking.user_email || "",
-  recipientAvatarUrl: booking.user_avatar_url || booking.avatar_url ||
-    booking.user?.avatar_url || booking.user?.avatarUrl || "",
-});
+const bookingEmailIdentity = async (booking = {}) => {
+  let recipientName = booking.full_name || booking.user_full_name || booking.name || "";
+  const recipientEmail = booking.email || booking.user_email || "";
+  let recipientAvatarUrl = booking.user_avatar_url || booking.avatar_url ||
+    booking.user?.avatar_url || booking.user?.avatarUrl || "";
+
+  // Some booking sources do not join the user profile. Resolve the saved avatar
+  // once here so every traveller-facing booking email uses the same circular
+  // profile treatment without changing the booking flow itself.
+  if (!recipientAvatarUrl && recipientEmail) {
+    try {
+      const result = await query(
+        "SELECT full_name, avatar_url FROM users WHERE LOWER(email) = LOWER($1) LIMIT 1",
+        [recipientEmail],
+      );
+      const profile = result.rows?.[0] || {};
+      recipientName = recipientName || profile.full_name || "";
+      recipientAvatarUrl = profile.avatar_url || "";
+    } catch (err) {
+      logger.debug("[BookingEmails] Profile avatar lookup skipped:", err.message);
+    }
+  }
+
+  return { recipientName, recipientEmail, recipientAvatarUrl };
+};
 
 const bookingAvatarInitials = (name, email) => {
   const words = String(name || "").trim().split(/\s+/).filter(Boolean);
@@ -235,9 +254,10 @@ const buildBookingEmailHeader = ({ recipientName = "", recipientEmail = "", reci
     ? '<img src="' + esc(avatarUrl) + '" width="64" height="64" alt="' + esc(recipientName || "Traveller profile") + '" style="display:block;width:64px;height:64px;border-radius:50%;object-fit:cover;border:3px solid rgba(255,255,255,.88);background:#ffffff;" />'
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="64" height="64" style="width:64px;height:64px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.88);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:17px;font-weight:800;color:#065f46;">' + esc(bookingAvatarInitials(recipientName, recipientEmail)) + '</td></tr></table>';
 
-  return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;"><tr>' +
-    '<td align="left" valign="middle" width="124"><img src="' + esc(ENV.logoUrl) + '" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" /></td>' +
-    '<td align="right" valign="middle" width="70">' + avatar + '</td></tr></table>';
+  return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 14px;"><tr>' +
+    '<td align="left" valign="middle" width="94" style="width:94px;"><img src="' + esc(ENV.logoUrl) + '" width="86" height="44" alt="Altuvera Safaris logo" style="display:block;width:86px;height:44px;object-fit:contain;border-radius:8px;background:#ffffff;padding:3px;" /></td>' +
+    '<td align="left" valign="middle" style="padding:0 8px 0 10px;"><p style="margin:0;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;line-height:1.25;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-family:Arial,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:.8px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
+    '<td align="right" valign="middle" width="54" style="width:54px;">' + avatar.replace(/width="64" height="64"/g, 'width="48" height="48"').replace(/width:64px;height:64px/g, 'width:48px;height:48px').replace(/font-size:17px/g, 'font-size:14px') + '</td></tr></table>';
 };
 
 /* ════════════════════════════════════════════════════════════════════════════
@@ -383,8 +403,8 @@ const shell = ({
     @media only screen and (max-width:620px) {
       .wrap { padding:0 !important; }
       .card { border-radius:0 !important; }
-      .content { padding:28px 20px !important; }
-      .hero-inner { padding:40px 20px !important; }
+      .content { padding:23px 17px !important; }
+      .hero-inner { padding:27px 17px !important; }
       .hero-title { font-size:26px !important; }
       .info-tbl .lbl { display:block; width:auto !important; padding-bottom:2px !important; }
       .info-tbl .val { display:block; padding-top:0 !important; }
@@ -406,16 +426,9 @@ const shell = ({
       <div class="hero" style="background-image:url('${esc(heroImage || ENV.heroImage)}');
         background-size:cover;background-position:center;background-color:#022c22;">
         <div class="hero-overlay">
-          <div class="hero-inner" style="padding:56px 40px;text-align:center;">
+          <div class="hero-inner" style="padding:32px 30px;text-align:center;">
             ${buildBookingEmailHeader({ recipientName, recipientEmail, recipientAvatarUrl })}
-            <h1 style="margin:0;color:#ffffff;font-family:'Playfair Display',Georgia,serif;
-              font-size:32px;font-weight:700;letter-spacing:-.5px;line-height:1.2;">
-              ${esc(ENV.appName)}
-            </h1>
-            <p style="margin:6px 0 0;color:#a7f3d0;font-size:11px;font-weight:600;
-              letter-spacing:3px;text-transform:uppercase;font-family:'Inter',sans-serif;">
-              Premium East African Safaris
-            </p>
+
             ${heroBadge ? `<div style="margin-top:24px;">${heroBadge}</div>` : ""}
             ${heroTitle ? `
             <h2 class="hero-title" style="margin:28px 0 8px;color:#ffffff;
@@ -739,7 +752,7 @@ const sendBookingReceivedEmail = async (booking) => {
   const confirmationUrl = booking.verification_token ? buildVerificationLink(booking.verification_token) : null;
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `Action required: confirm your booking request for ${dest}.`,
     heroBadge: statusPill("pending"),
     heroTitle: "Please confirm your booking request",
@@ -798,7 +811,7 @@ const sendAdminBookingNotification = async (booking) => {
   const travelers = Number(booking.number_of_travelers) || 1;
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `${name} has confirmed their booking for ${dest} (${safe(booking.booking_number)})`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(245,158,11,.25);border:1.5px solid rgba(251,191,36,.6);
@@ -907,7 +920,7 @@ const sendBookingConfirmation = async (booking) => {
   const days = daysUntil(booking.travel_date);
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `Your ${dest} adventure is confirmed! ${days !== null ? humanCountdown(booking.travel_date) : ""}`,
     heroBadge: statusPill("confirmed"),
     heroTitle: "Your adventure is confirmed",
@@ -973,7 +986,7 @@ const sendBookingStatusUpdate = async (booking, fromStatus, toStatus, reason = "
   };
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `Booking ${safe(booking.booking_number)}: ${st.label}`,
     heroBadge: statusPill(toStatus),
     heroTitle: `Status Updated: ${st.label}`,
@@ -1012,7 +1025,7 @@ const sendBookingCancellation = async (booking, reason = "") => {
   const dest = tripName(booking);
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `Booking ${safe(booking.booking_number)} cancelled.`,
     heroBadge: statusPill("cancelled"),
     heroTitle: "Booking Cancelled",
@@ -1155,7 +1168,7 @@ const sendTripCountdownEmail = async (booking) => {
   const c = CONTENT[days] || CONTENT[7];
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `${c.urgency} — Your ${dest} adventure. ${c.sub}`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(52,211,153,.25);border:1.5px solid rgba(52,211,153,.5);
@@ -1203,7 +1216,7 @@ const sendCancellationRequestAck = async (booking, requestType = "cancellation")
   const label = requestType === "refund" ? "Refund" : "Cancellation";
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `${label} request received for ${safe(booking.booking_number)}.`,
     heroBadge: `<span style="display:inline-block;padding:7px 18px;
       background:rgba(255,255,255,.18);border:1.5px solid rgba(255,255,255,.35);
@@ -1250,7 +1263,7 @@ const sendItineraryEmail = async (booking, itinerary = {}, delivery = {}) => {
       return { success: false, error: "A valid HTTPS itinerary image URL is required." };
     }
     const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
       preheader: `Your image itinerary for ${destination} is ready.`,
       heroBadge: statusPill("confirmed"),
       heroTitle: "Your itinerary image",
@@ -1287,7 +1300,7 @@ const sendItineraryEmail = async (booking, itinerary = {}, delivery = {}) => {
   }).join("");
 
   const html = shell({
-    ...bookingEmailIdentity(booking),
+    ...(await bookingEmailIdentity(booking)),
     preheader: `Your personalized itinerary for ${destination} is ready.`,
     heroBadge: statusPill("confirmed"),
     heroTitle: "Your personalized itinerary is ready",
@@ -1323,7 +1336,7 @@ const sendAdminItineraryNotification = async (booking, itinerary = {}) => {
   const days = Array.isArray(itinerary.days) ? itinerary.days : [];
   const body = greet("Altuvera Admin") + para("A new itinerary has been sent to <strong style='color:"+T.g700+";'>"+esc(booking.full_name)+"</strong> for "+esc(destination)+".") + infoTable("Itinerary delivery", [row("Booking", booking.booking_number, true),row("Traveller", booking.full_name),row("Email", booking.email),row("Destination", destination),row("Version", booking.itinerary_version),row("Days", days.length)]) + ctaBlock("Review Booking", (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app").replace(/\/$/, "")+"/bookings?bookingId="+encodeURIComponent(booking.id || booking.booking_number || ""), "Open Itinerary Builder", (process.env.ADMIN_FRONTEND_URL || "https://altuverapanel.vercel.app").replace(/\/$/, "")+"/itineraries/"+encodeURIComponent(booking.id || booking.booking_number || ""));
   const html = shell({
-    ...bookingEmailIdentity(booking),preheader:"Itinerary sent — "+destination,heroBadge:statusPill("confirmed"),heroTitle:"Itinerary sent to traveller",heroSubtitle:"Planned journey: "+destination,heroImage:image,body});
+    ...(await bookingEmailIdentity(booking)),preheader:"Itinerary sent — "+destination,heroBadge:statusPill("confirmed"),heroTitle:"Itinerary sent to traveller",heroSubtitle:"Planned journey: "+destination,heroImage:image,body});
   return safeSend(adminEmail, "Itinerary Sent — "+safe(booking.booking_number)+" | "+ENV.appName, html, "sendAdminItineraryNotification");
 };
 
