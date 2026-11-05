@@ -46,7 +46,7 @@ test("Posta sends through the documented API and returns its queue ID", async ()
     subject: "Test only",
     html: "<p>Test</p>",
     text: "Test",
-    from: "Altuvera Safaris <info@altuverasafaris.com>",
+    from: "Altuvera <info@altuverasafaris.com>",
     replyTo: "support@example.net",
   });
 
