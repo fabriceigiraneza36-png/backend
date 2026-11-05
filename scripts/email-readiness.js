@@ -26,7 +26,7 @@ const checks = [
   ["business sender address is configured", /@altuverasafaris\.com$/i.test(env.EMAIL_FROM_ADDRESS || "info@altuverasafaris.com")],
 ];
 
-console.log("Altuvera Safaris email readiness — no messages sent; secret values hidden");
+console.log("Altuvera email readiness — no messages sent; secret values hidden");
 console.log("Selected provider:", selectedProvider);
 console.log("Configured transports:", Object.entries(providers).filter(([, configured]) => configured).map(([name]) => name).join(", ") || "none");
 if (providers.posta && providerSetting === "auto") {
