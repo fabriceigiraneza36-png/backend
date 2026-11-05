@@ -1,4 +1,4 @@
-# Altuvera Safaris — Email delivery architecture and migration plan
+# Altuvera — Email delivery architecture and migration plan
 
 Last reviewed: 2026-11-01
 
