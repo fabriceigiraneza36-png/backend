@@ -169,8 +169,8 @@ const buildBanner = (emoji, title, subtitle, recipientName = "", recipientEmail 
     <td style="background:${sharedStyles.bannerGradient};padding:36px 32px;text-align:center;">
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;">
         <tr>
-          <td align="left" valign="middle" width="124">
-            <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
+          <td align="left" valign="middle" width="86">
+            <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="70" height="35" alt="Altuvera logo" style="display:block;width:70px;height:35px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
           </td>
           <td align="right" valign="middle" width="64">${avatar}</td>
         </tr>
@@ -286,50 +286,84 @@ const buildSectionLabel = (text) => `
 // EMAIL TEMPLATES
 // ============================================================
 
+
 const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail = "", recipientAvatarUrl = "") => {
   const safeName = fullName || "Traveler";
-  const siteUrl = String(getEnvVar("SITE_URL", "https://www.altuverasafaris.com")).replace(/\/+$/, "");
-  const copyCodeUrl = `${siteUrl}/copy-code.html#${safeEncodeURI(code)}`;
+  const siteUrl = String(getEnvVar("SITE_URL", "https://www.altuverasafaris.com")).replace(/[/]+$/g, "");
+  const copyCodeUrl = siteUrl + "/copy-code.html#" + safeEncodeURI(code);
+  const avatarUrl = safeProfileImage(recipientAvatarUrl);
+  const avatarMarkup = avatarUrl
+    ? '<img src="' + escapeHtml(avatarUrl) + '" width="38" height="38" alt="' + escapeHtml(safeName) + '" style="display:block;width:38px;height:38px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.85);" />'
+    : "";
 
   const content = `
-    ${buildBanner("🔐", "Altuvera", "Secure Travel Platform", safeName, recipientEmail, recipientAvatarUrl)}
+    <tr>
+      <td style="background:linear-gradient(135deg,#022c22 0%,#064e3b 58%,#047857 100%);padding:22px 28px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%">
+          <tr>
+            <td align="left" valign="middle" width="82" style="width:82px;">
+              <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="70" height="35" alt="Altuvera logo" style="display:block;width:70px;height:35px;object-fit:contain;border-radius:7px;background:#ffffff;padding:2px;" />
+            </td>
+            <td align="right" valign="middle" style="font-family:Arial,sans-serif;font-size:10px;font-weight:800;letter-spacing:1.5px;color:#a7f3d0;text-transform:uppercase;">
+              Secure account access
+            </td>
+            ${avatarMarkup ? '<td align="right" valign="middle" width="48" style="width:48px;padding-left:10px;">' + avatarMarkup + '</td>' : ""}
+          </tr>
+        </table>
+      </td>
+    </tr>
 
     <tr>
-      <td style="padding:48px 44px 36px;text-align:center;">
-        ${buildIconCircle("✉️", 80)}
-        <h2 style="margin:0 0 14px;font-size:26px;font-weight:700;color:${sharedStyles.textPrimary};line-height:1.3;">
-          Hello${safeName !== "Traveler" ? `, ${escapeHtml(safeName)}` : ""}!
-        </h2>
-        <p style="margin:0;font-size:16px;color:${sharedStyles.textSecondary};line-height:1.75;max-width:440px;display:inline-block;">
-          We received a request to access your account. Use the verification code below to continue securely.
+      <td style="padding:34px 30px 12px;text-align:center;">
+        <p style="margin:0 0 14px;font-family:Arial,sans-serif;font-size:11px;font-weight:800;letter-spacing:1.7px;color:#047857;text-transform:uppercase;">
+          Altuvera verification code
         </p>
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 18px;">
+          <tr>
+            <td align="center" style="padding:20px 28px;background:linear-gradient(135deg,#f0fdf4,#dcfce7);border:1px solid #a7f3d0;border-radius:16px;box-shadow:0 5px 18px rgba(5,150,105,.08);">
+              <p style="margin:0;font-family:'Courier New',Courier,monospace;font-size:40px;line-height:1.15;font-weight:800;letter-spacing:8px;color:#047857;">
+                ${escapeHtml(code)}
+              </p>
+            </td>
+          </tr>
+        </table>
+        <h1 style="margin:0 0 9px;font-family:Arial,sans-serif;font-size:23px;line-height:1.3;font-weight:800;color:#0f172a;">
+          Your sign-in code
+        </h1>
+        <p style="margin:0 auto;max-width:440px;font-family:Arial,sans-serif;font-size:14px;line-height:1.7;color:#475569;">
+          Hello${safeName !== "Traveler" ? ", " + escapeHtml(safeName) : ""}. Enter this one-time code to continue securely with your Altuvera account.
+        </p>
+      </td>
+    </tr>
+
+    <tr>
+      <td style="padding:18px 30px 28px;text-align:center;">
+        ${buildCtaButton(copyCodeUrl, "Copy verification code")}
+        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:16px auto 0;">
+          <tr>
+            <td style="padding:10px 17px;background:#fffbeb;border:1px solid #fde68a;border-radius:999px;">
+              <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;font-weight:700;color:#92400e;">
+                This code expires in 10 minutes
+              </p>
+            </td>
+          </tr>
+        </table>
       </td>
     </tr>
 
     ${buildDivider()}
 
     <tr>
-      <td style="padding:36px 44px;text-align:center;">
-        ${buildSectionLabel("Your Verification Code")}
-
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
+      <td style="padding:26px 30px 8px;">
+        <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:14px;">
           <tr>
-            <td style="background:linear-gradient(135deg,${sharedStyles.greenPale},${sharedStyles.greenMint});border-radius:20px;padding:28px 56px;border:2px solid ${sharedStyles.greenBorder};box-shadow:0 4px 20px rgba(22,163,74,0.08);">
-              <p style="margin:0;font-family:'Courier New',monospace;font-size:44px;font-weight:800;color:${sharedStyles.greenMid};letter-spacing:10px;">
-                ${escapeHtml(code)}
-              </p>
+            <td valign="top" width="42" style="padding:17px 0 17px 17px;width:42px;">
+              <div style="width:27px;height:27px;border-radius:9px;background:#dcfce7;color:#047857;text-align:center;line-height:27px;font-family:Arial,sans-serif;font-size:15px;font-weight:800;">!</div>
             </td>
-          </tr>
-        </table>
-
-        ${buildCtaButton(copyCodeUrl, "Copy code")}
-        <p style="margin:10px 0 0;font-size:12px;color:${sharedStyles.textMuted};line-height:1.5;text-align:center;">Opens a secure Altuvera page where you can copy your code.</p>
-
-        <table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 auto;">
-          <tr>
-            <td style="padding:12px 28px;background-color:${sharedStyles.warningBg};border-radius:28px;border:1px solid ${sharedStyles.warningBorder};">
-              <p style="margin:0;font-size:14px;color:${sharedStyles.warningText};font-weight:600;">
-                ⏱️ This code expires in 10 minutes
+            <td style="padding:16px 17px 16px 10px;">
+              <p style="margin:0 0 4px;font-family:Arial,sans-serif;font-size:13px;font-weight:800;color:#0f172a;">Keep your account secure</p>
+              <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;line-height:1.65;color:#64748b;">
+                Never share this code. Altuvera will never ask you to disclose it by phone, SMS, or email.
               </p>
             </td>
           </tr>
@@ -338,32 +372,22 @@ const buildVerificationEmailHtml = (code, fullName, supportEmail, recipientEmail
     </tr>
 
     <tr>
-      <td style="padding:0 44px 36px;">
-        ${buildInfoCard("🔒", "Security Reminder", "Never share this code with anyone. Altuvera will never ask for your code via phone, SMS, or email.")}
-      </td>
-    </tr>
-
-    <tr>
-      <td style="background:linear-gradient(135deg,${sharedStyles.greenPale},rgba(255,255,255,0.95));padding:32px 44px;text-align:center;">
-        <p style="margin:0 0 8px;font-size:15px;font-weight:700;color:${sharedStyles.greenDark};">
-          Didn't request this code?
+      <td style="padding:22px 30px 30px;text-align:center;">
+        <p style="margin:0 0 5px;font-family:Arial,sans-serif;font-size:13px;font-weight:800;color:#0f172a;">Did not request this code?</p>
+        <p style="margin:0;font-family:Arial,sans-serif;font-size:12px;line-height:1.65;color:#64748b;">
+          You can ignore this message. The code will expire automatically and your account will remain secure.
         </p>
-        <p style="margin:0;font-size:14px;color:${sharedStyles.textSecondary};line-height:1.65;">
-          If you didn't request this verification, simply ignore this email. The code will expire automatically.
+        <p style="margin:14px 0 0;font-family:Arial,sans-serif;font-size:12px;color:#64748b;">
+          Need help? <a href="mailto:${escapeHtml(supportEmail)}" style="color:#047857;font-weight:700;text-decoration:none;">${escapeHtml(supportEmail)}</a>
         </p>
-      </td>
-    </tr>
-
-    <tr>
-      <td style="padding:32px 44px;">
-        ${buildInfoCard("💬", "Need Help?", `Contact our support team at <a href="mailto:${supportEmail}" style="color:${sharedStyles.greenMid};font-weight:700;text-decoration:none;">${supportEmail}</a>`)}
       </td>
     </tr>
 
     ${buildFooter([
-      "This verification code was requested for your Altuvera account.",
+      "This code was requested for your Altuvera account.",
       "This is an automated message — please do not reply.",
-    ])}`;
+    ])}
+  `;
 
   return buildOuterWrapper(content);
 };
