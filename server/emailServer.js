@@ -228,7 +228,7 @@ app.post('/api/contact', async (req, res) => {
           <!-- Footer -->
           <div style="background: #064e3b; padding: 20px; text-align: center;">
             <p style="color: rgba(255,255,255,0.8); margin: 0; font-size: 12px;">
-              Submitted via Altuvera Safaris Contact Form
+              Submitted via Altuvera Contact Form
             </p>
             <p style="color: rgba(255,255,255,0.6); margin: 8px 0 0; font-size: 11px;">
               ${new Date().toLocaleString('en-US', { 
@@ -255,7 +255,7 @@ app.post('/api/contact', async (req, res) => {
           
           <!-- Header -->
           <div style="background: linear-gradient(135deg, #059669 0%, #10B981 100%); padding: 40px; text-align: center;">
-            <h1 style="color: white; margin: 0; font-size: 28px;">🌍 Altuvera Safaris</h1>
+            <h1 style="color: white; margin: 0; font-size: 28px;">🌍 Altuvera</h1>
             <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0; font-size: 16px;">
               Your African Adventure Awaits!
             </p>
@@ -268,7 +268,7 @@ app.post('/api/contact', async (req, res) => {
             </h2>
             
             <p style="color: #4b5563; line-height: 1.8; margin: 0 0 20px;">
-              Thank you for reaching out to us! We're thrilled that you're considering an African safari adventure with Altuvera Safaris.
+              Thank you for reaching out to us! We're thrilled that you're considering an African safari adventure with Altuvera.
             </p>
             
             <p style="color: #4b5563; line-height: 1.8; margin: 0 0 30px;">
@@ -334,7 +334,7 @@ app.post('/api/contact', async (req, res) => {
               <a href="#" style="color: #059669; text-decoration: none; margin: 0 8px; font-size: 13px;">Twitter</a>
             </p>
             <p style="color: #9ca3af; margin: 15px 0 0; font-size: 11px;">
-               © ${new Date().getFullYear()} Altuvera Safaris. All rights reserved.<br>
+               © ${new Date().getFullYear()} Altuvera. All rights reserved.<br>
                Musanze, Rwanda
             </p>
           </div>
@@ -347,7 +347,7 @@ app.post('/api/contact', async (req, res) => {
     
     // Send admin email
     const adminResult = await transporter.sendMail({
-      from: '"Altuvera Safaris" <info@altuverasafaris.com>',
+      from: '"Altuvera" <info@altuverasafaris.com>',
       to: 'info@altuverasafaris.com',
       subject: `🦒 New Safari Inquiry: ${subject}`,
       html: adminEmailHtml,
@@ -359,9 +359,9 @@ app.post('/api/contact', async (req, res) => {
     
     // Send customer confirmation
     const customerResult = await transporter.sendMail({
-      from: '"Altuvera Safaris" <info@altuverasafaris.com>',
+      from: '"Altuvera" <info@altuverasafaris.com>',
       to: email,
-      subject: 'Thank You for Contacting Altuvera Safaris! 🌍',
+      subject: 'Thank You for Contacting Altuvera! 🌍',
       html: customerEmailHtml
     });
     
