@@ -7,7 +7,7 @@ const logger = require("./logger");
 
 const FRONTEND_URL = (process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "");
 const BACKEND_URL = (process.env.BACKEND_URL || "https://backend-jd8f.onrender.com").replace(/\/+$/, "");
-const APP_NAME = process.env.APP_NAME || "Altuvera Safaris";
+const APP_NAME = process.env.APP_NAME || "Altuvera";
 const DEFAULT_HERO = process.env.EMAIL_HERO_URL || "";
 
 const DEFAULT_TEMPLATES = [
@@ -188,8 +188,8 @@ function renderHtml(options) {
     '<table role="presentation" width="600" cellpadding="0" cellspacing="0" class="al-campaign-card" style="width:100%;max-width:600px;background:#fff;border:1px solid #dbe7e1;border-radius:18px;overflow:hidden;box-shadow:0 8px 30px rgba(15,23,42,.07)">' +
     '<tr><td bgcolor="#064e3b" style="padding:14px 19px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e,#087a50)">' +
     '<table data-altuvera-email-header="true" role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>' +
-    '<td width="79" valign="middle" style="width:79px"><img class="al-campaign-logo" src="' + escapeHtml(logoUrl) + '" width="72" height="40" alt="Altuvera Safaris logo" style="display:block;width:72px;height:40px;object-fit:contain;border-radius:7px;background:#fff;padding:3px"/></td>' +
-    '<td valign="middle" style="padding:0 9px"><p style="margin:0;color:#fff;font:800 15px/1.25 Arial,sans-serif">Altuvera Safaris</p><p style="margin:4px 0 0;color:#b9f2d4;font:700 8px/1.4 Arial,sans-serif;letter-spacing:.85px;text-transform:uppercase">True adventure in high places &amp; deep culture</p></td>' +
+    '<td width="79" valign="middle" style="width:79px"><img class="al-campaign-logo" src="' + escapeHtml(logoUrl) + '" width="72" height="40" alt="Altuvera logo" style="display:block;width:72px;height:40px;object-fit:contain;border-radius:7px;background:#fff;padding:3px"/></td>' +
+    '<td valign="middle" style="padding:0 9px"><p style="margin:0;color:#fff;font:800 15px/1.25 Arial,sans-serif">Altuvera</p><p style="margin:4px 0 0;color:#b9f2d4;font:700 8px/1.4 Arial,sans-serif;letter-spacing:.85px;text-transform:uppercase">True adventure in high places &amp; deep culture</p></td>' +
     '<td align="right" valign="middle" width="48" style="width:48px">' + avatarMarkup + '</td></tr></table></td></tr>' +
     '<tr><td class="al-campaign-content" style="padding:28px 32px 27px">' + celebration +
     '<h1 class="al-campaign-heading" style="margin:0 0 11px;color:#123b2c;font:800 29px/1.2 Arial,sans-serif;letter-spacing:-.5px">' + escapeHtml(title) + '</h1>' +
@@ -199,8 +199,8 @@ function renderHtml(options) {
     '<p style="margin:15px 0 0;color:#82938a;text-align:center;font:11px/1.6 Arial,sans-serif">Our team is happy to help shape the details around your interests and dates.</p></td></tr>' +
     '<tr><td style="padding:16px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:center"><p style="margin:0;color:#64748b;font:11px/1.6 Arial,sans-serif">' + escapeHtml(APP_NAME) + ' · East Africa</p>' +
     '<p style="margin:5px 0 0;color:#94a3b8;font:10px/1.6 Arial,sans-serif">You are receiving travel updates because you opted in. <a href="' + escapeHtml(unsubscribeUrl) + '" style="color:' + accent + ';text-decoration:underline">Unsubscribe</a></p>' +
-    '<p style="margin:6px 0 0"><a href="' + escapeHtml(FRONTEND_URL) + '" style="color:' + accent + ';font:10px Arial,sans-serif">Visit Altuvera Safaris</a></p>' +
-    '<p style="margin:7px 0 0;color:#a5b1a9;font:9px Arial,sans-serif">© ' + new Date().getFullYear() + ' Altuvera Safaris. All rights reserved.</p></td></tr></table></td></tr></table></body></html>';
+    '<p style="margin:6px 0 0"><a href="' + escapeHtml(FRONTEND_URL) + '" style="color:' + accent + ';font:10px Arial,sans-serif">Visit Altuvera</a></p>' +
+    '<p style="margin:7px 0 0;color:#a5b1a9;font:9px Arial,sans-serif">© ' + new Date().getFullYear() + ' Altuvera. All rights reserved.</p></td></tr></table></td></tr></table></body></html>';
 }
 
 async function listTemplates() {
