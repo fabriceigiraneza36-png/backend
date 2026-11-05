@@ -6,6 +6,7 @@ const jwt = require("jsonwebtoken");
 const { query } = require("../config/db");
 const upload = require("../middleware/upload");
 const logger = require("../utils/logger");
+const { cloudinary } = require("../config/cloudinary");
 
 let protect;
 try { const m=require("../middleware/authMiddleware"); protect=m.protect||m.authenticate||m.verifyToken||m.auth; } catch {}
@@ -69,6 +70,34 @@ const actionOrUserProtect = (req,res,next) => {
   }
 };
 
+
+// Check one-time eligibility before Multer sends anything to Cloudinary.
+// The database update in the handler is also conditional, so parallel requests
+// cannot both complete this action.
+const preparePortraitUpload = async (req,res,next) => {
+  try {
+    const id=Number(req.params.id);
+    if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({success:false,message:"Invalid booking link."});
+    await ensureSchema();
+    const booking=await getBooking(id);
+    if(!booking)return res.status(404).json({success:false,message:"Booking not found."});
+    if(!userCanAccess(req,booking))return res.status(403).json({success:false,code:"BOOKING_ACCOUNT_MISMATCH",message:"You do not have access to this booking."});
+
+    const status=String(booking.identity_portrait_status||"not_requested").toLowerCase();
+    if(status==="uploaded"||status==="verified"||booking.identity_portrait_url) {
+      return res.status(409).json({success:false,code:"ACTION_ALREADY_COMPLETED",message:"A portrait has already been submitted for this booking. This one-time action cannot be repeated."});
+    }
+    if(status!=="requested") {
+      return res.status(409).json({success:false,code:"ACTION_NOT_AVAILABLE",message:"A portrait has not been requested for this booking."});
+    }
+    req.identityBooking=booking;
+    return next();
+  } catch(error) {
+    logger.error("[Identity] portrait preflight:",error.message);
+    return res.status(500).json({success:false,message:"Could not verify portrait upload eligibility."});
+  }
+};
+
 router.post("/:id/action-token",protect,async(req,res)=>{
  try {
   await ensureSchema();
@@ -79,8 +108,12 @@ router.post("/:id/action-token",protect,async(req,res)=>{
   const role=String(req.user?.role||req.user?.type||req.userType||"").toLowerCase();
   if(["admin","manager","super_admin"].includes(role))return res.status(403).json({success:false,message:"Sign in with the traveller account that received this request."});
   if(!userCanAccess(req,b))return res.status(403).json({success:false,code:"BOOKING_ACCOUNT_MISMATCH",message:"This booking belongs to a different Altuvera account."});
-  if(!["requested","uploaded"].includes(b.identity_portrait_status||"not_requested")) {
-    return res.status(409).json({success:false,message:"A portrait has not been requested for this booking."});
+  const portraitStatus=String(b.identity_portrait_status||"not_requested").toLowerCase();
+  if(portraitStatus==="uploaded"||portraitStatus==="verified"||b.identity_portrait_url) {
+    return res.status(409).json({success:false,code:"ACTION_ALREADY_COMPLETED",message:"A portrait has already been submitted for this booking. This one-time action cannot be repeated."});
+  }
+  if(portraitStatus!=="requested") {
+    return res.status(409).json({success:false,code:"ACTION_NOT_AVAILABLE",message:"A portrait has not been requested for this booking."});
   }
   if(!ACTION_TOKEN_SECRET)return res.status(503).json({success:false,message:"Secure portrait links are temporarily unavailable."});
   const expiresAt=Date.now()+5*60*1000;
@@ -105,24 +138,59 @@ router.post("/:id/request",protect,adminOnly,async(req,res)=>{
  try{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
-  await query("UPDATE bookings SET identity_portrait_status='requested',identity_portrait_requested_at=NOW(),identity_portrait_requested_by=$2,updated_at=NOW() WHERE id=$1",[id,req.admin?.id||req.user?.id||null]);
-  const full=await getBooking(id), url="/booking-verification/"+id;
+  const currentStatus=String(b.identity_portrait_status||"not_requested").toLowerCase();
+  if(currentStatus==="requested") {
+    return res.json({success:true,data:b,alreadyRequested:true,message:"The portrait request has already been sent. It will not be sent again."});
+  }
+  if(currentStatus==="uploaded"||currentStatus==="verified"||b.identity_portrait_url) {
+    return res.status(409).json({success:false,code:"ACTION_ALREADY_COMPLETED",data:b,message:"The traveller has already submitted this portrait. A duplicate request is not allowed."});
+  }
+  const requestWrite=await query(
+    "UPDATE bookings SET identity_portrait_status='requested',identity_portrait_requested_at=NOW(),identity_portrait_requested_by=$2,updated_at=NOW() WHERE id=$1 AND COALESCE(identity_portrait_status,'not_requested') NOT IN ('requested','uploaded','verified') RETURNING id",
+    [id,req.admin?.id||req.user?.id||null]
+  );
+  if(!requestWrite.rows[0]) {
+    const latest=await getBooking(id);
+    if(String(latest?.identity_portrait_status||"").toLowerCase()==="requested") {
+      return res.json({success:true,data:latest,alreadyRequested:true,message:"The portrait request has already been sent."});
+    }
+    return res.status(409).json({success:false,code:"ACTION_ALREADY_COMPLETED",data:latest,message:"This portrait action is no longer available."});
+  }  const full=await getBooking(id), url="/booking-verification/"+id;
   await notifyUser(full,"Altuvera needs a quick identity portrait","Before we confirm your "+(full.destination_name||"trip")+", please upload a clear short face portrait from your device.",url,"Upload portrait");
   await email(full.email,"Identity confirmation needed — "+(full.booking_number||"Your Altuvera booking"),"<div style='font-family:Arial,sans-serif;max-width:620px;margin:auto;padding:24px;color:#0f172a'><div style='padding:28px;border-radius:18px;background:#064e3b;color:#fff'><h2 style='margin:0 0 8px'>One quick step before confirmation</h2><p style='margin:0;opacity:.9'>We need a short face portrait to confirm the traveller details for your planned journey to "+esc(full.destination_name)+".</p></div><p style='line-height:1.6'>Please use the secure button below to upload it.</p><a href='"+(process.env.FRONTEND_URL||"https://www.altuverasafaris.com")+url+"' style='display:inline-block;padding:13px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:10px;font-weight:700'>Upload portrait securely</a></div>");
   return res.json({success:true,data:full,message:"Portrait request sent to the traveller."});
  }catch(e){logger.error("[Identity] request:",e.message);return res.status(500).json({success:false,message:"Failed to request portrait"})}
 });
 
-router.post("/:id/upload",actionOrUserProtect,upload.single("portrait"),async(req,res)=>{
+router.post("/:id/upload",actionOrUserProtect,preparePortraitUpload,upload.single("portrait"),async(req,res)=>{
  try{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
   if(!userCanAccess(req,b))return res.status(403).json({success:false,message:"You do not have access to this booking"});
-  if(!["requested","uploaded"].includes(b.identity_portrait_status||"not_requested"))return res.status(409).json({success:false,message:"A portrait has not been requested for this booking."});
   if(!req.file?.secure_url)return res.status(400).json({success:false,message:"Please choose a portrait image."});
-  if(!/^image\//.test(req.file.mimetype||""))return res.status(400).json({success:false,message:"Portrait must be an image."});
-  await query("UPDATE bookings SET identity_portrait_url=$1,identity_portrait_public_id=$2,identity_portrait_status='uploaded',identity_portrait_uploaded_at=NOW(),updated_at=NOW() WHERE id=$3",[req.file.secure_url,req.file.cloudinary?.public_id||null,id]);
-  const full=await getBooking(id);
+  if(!/^image\\//.test(req.file.mimetype||""))return res.status(400).json({success:false,message:"Portrait must be an image."});
+
+  // Atomic compare-and-set: even parallel upload requests can only produce one
+  // successful portrait submission for this booking.
+  const saved=await query(
+    "UPDATE bookings SET identity_portrait_url=$1,identity_portrait_public_id=$2,identity_portrait_status='uploaded',identity_portrait_uploaded_at=NOW(),updated_at=NOW() WHERE id=$3 AND identity_portrait_status='requested' AND identity_portrait_url IS NULL RETURNING id",
+    [req.file.secure_url,req.file.cloudinary?.public_id||null,id]
+  );
+  if(!saved.rows[0]) {
+    if(req.file.cloudinary?.public_id) {
+      await cloudinary.uploader.destroy(req.file.cloudinary.public_id,{resource_type:req.file.cloudinary.resource_type||"image"}).catch(cleanupError=>logger.warn("[Identity] duplicate portrait cleanup:",cleanupError.message));
+    }
+    const latest=await getBooking(id);
+    const latestStatus=String(latest?.identity_portrait_status||"").toLowerCase();
+    const completed=latestStatus==="uploaded"||latestStatus==="verified"||Boolean(latest?.identity_portrait_url);
+    return res.status(409).json({
+      success:false,
+      code:completed?"ACTION_ALREADY_COMPLETED":"ACTION_NOT_AVAILABLE",
+      data:latest,
+      message:completed?"A portrait has already been submitted for this booking. This one-time action cannot be repeated.":"This portrait request is no longer available."
+    });
+  }
+    const full=await getBooking(id);
   await notifyAdmins(full,"Traveller portrait received",(full.full_name||"A traveller")+" uploaded the requested portrait for "+(full.booking_number||"a booking"),"/bookings/"+id,"Review traveller");
   try { req.app?.get?.("io")?.to?.("admins")?.emit?.("notification:new", { type:"identity_portrait_received", category:"booking", title:"Traveller portrait received", message:(full.full_name||"A traveller")+" uploaded the requested portrait for "+(full.booking_number||"a booking"), action_url:"/bookings/"+id, action_label:"Review traveller", priority:"high", metadata:{bookingId:id,bookingNumber:full.booking_number} }); } catch {}
   const adminEmail=process.env.ADMIN_EMAIL||process.env.SUPPORT_EMAIL||"info@altuverasafaris.com";
@@ -135,14 +203,23 @@ router.post("/:id/confirm",protect,adminOnly,async(req,res)=>{
  try{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
+  if(String(b.status||"").toLowerCase()==="confirmed")return res.json({success:true,data:b,alreadyConfirmed:true,message:"This booking has already been confirmed."});
   if(!b.email_verified)return res.status(409).json({success:false,message:"Traveller must first confirm the booking from their real email inbox."});
   const portraitProvided = b.identity_portrait_status==="uploaded" && Boolean(b.identity_portrait_url);
   const code=b.confirmation_code||("ALT-"+Math.random().toString(36).slice(2,10).toUpperCase());
   if (portraitProvided) {
-    await query("UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+    const confirmedWrite=await query("UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",[id,code]);
+    if(!confirmedWrite.rows[0]) {
+      const latest=await getBooking(id);
+      return res.json({success:true,data:latest,alreadyConfirmed:true,message:"This booking has already been confirmed."});
+    },identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
   } else {
     // The portrait is optional; do not change its state when none was requested.
-    await query("UPDATE bookings SET status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+    const confirmedWrite=await query("UPDATE bookings SET status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",[id,code]);
+    if(!confirmedWrite.rows[0]) {
+      const latest=await getBooking(id);
+      return res.json({success:true,data:latest,alreadyConfirmed:true,message:"This booking has already been confirmed."});
+    }
   }
   const full=await getBooking(id);
   try{const emails=require("../utils/bookingEmails");if(typeof emails.sendBookingConfirmation==="function")await emails.sendBookingConfirmation(full)}catch{}
