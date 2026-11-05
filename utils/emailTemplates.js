@@ -1,5 +1,5 @@
 /**
- * Welcome subscriber email — Altuvera Safaris branded
+ * Welcome subscriber email — Altuvera branded
  */
 const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAvatarUrl = "") => {
   const escapeHtml = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[char]));
@@ -27,7 +27,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Welcome to Altuvera Safaris</title>
+  <title>Welcome to Altuvera</title>
 </head>
 <body style="margin:0;padding:0;background-color:#F0FDF4;font-family:'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
 
@@ -43,10 +43,10 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
               <table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%">
                 <tr>
                   <td align="left" valign="middle" width="124">
-                    <img src="${escapeHtml(logoUrl)}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#fff;padding:3px;" />
+                    <img src="${escapeHtml(logoUrl)}" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#fff;padding:3px;" />
                   </td>
                   <td align="center" valign="middle">
-                    <h1 style="margin:0 0 6px;font-size:25px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">Altuvera Safaris</h1>
+                    <h1 style="margin:0 0 6px;font-size:25px;font-weight:800;color:#FFFFFF;letter-spacing:-0.5px;">Altuvera</h1>
                     <p style="margin:0;font-size:11px;color:#a7f3d0;letter-spacing:1.2px;text-transform:uppercase;font-weight:700;">True Adventures In High Places &amp; Deep Culture</p>
                   </td>
                   <td align="right" valign="middle" width="66">${avatarMarkup}</td>
@@ -63,7 +63,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
                 ${greeting}
               </h2>
               <p style="margin:0 0 12px;font-size:16px;color:#5A7A5A;line-height:1.7;">
-                Thank you for subscribing to the Altuvera Safaris newsletter.
+                Thank you for subscribing to the Altuvera newsletter.
               </p>
               <p style="margin:0;font-size:16px;color:#5A7A5A;line-height:1.7;">
                 We'll share occasional destination inspiration, practical safari-planning tips, and useful updates to help you plan your next African adventure.
@@ -145,7 +145,7 @@ const welcomeSubscriberEmail = (email, name = null, interests = [], recipientAva
                 Questions? <a href="mailto:info@altuverasafaris.com" style="color:#86EFAC;text-decoration:underline;">info@altuverasafaris.com</a>
               </p>
               <p style="margin:20px 0 0;font-size:11px;color:rgba(255,255,255,0.3);">
-                © ${currentYear} Altuvera Safaris. All rights reserved.
+                © ${currentYear} Altuvera. All rights reserved.
               </p>
             </td>
           </tr>
