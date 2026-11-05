@@ -1,6 +1,8 @@
 "use strict";
 
 const express = require("express");
+const crypto = require("crypto");
+const jwt = require("jsonwebtoken");
 const { query } = require("../config/db");
 const upload = require("../middleware/upload");
 const logger = require("../utils/logger");
@@ -40,6 +42,63 @@ const userCanAccess=(req,b)=>Number(req.user?.id)===Number(b.user_id)||String(re
 
 const router=express.Router();
 
+const ACTION_TOKEN_SECRET = process.env.JWT_SECRET
+  ? crypto.createHash("sha256").update(String(process.env.JWT_SECRET) + ":altuvera:booking-identity-upload").digest("hex")
+  : null;
+const ACTION_TOKEN_ISSUER = "altuvera-api";
+const ACTION_TOKEN_AUDIENCE = "altuvera:booking-identity-upload";
+const ACTION_TOKEN_SCOPE = "booking_identity_upload";
+
+const actionOrUserProtect = (req,res,next) => {
+  const raw=String(req.headers.authorization||"").replace(/^Bearer\\s+/i,"").trim();
+  if(!raw || !ACTION_TOKEN_SECRET) return protect(req,res,next);
+  try {
+    const claims=jwt.verify(raw,ACTION_TOKEN_SECRET,{
+      issuer:ACTION_TOKEN_ISSUER,
+      audience:ACTION_TOKEN_AUDIENCE
+    });
+    if(claims.scope!==ACTION_TOKEN_SCOPE || String(claims.bookingId)!==String(req.params.id) || !claims.id) {
+      return res.status(403).json({success:false,code:"ACTION_SCOPE_MISMATCH",message:"This secure link is not valid for this booking."});
+    }
+    req.user={id:claims.id,email:claims.email||"",role:"user",type:"user"};
+    req.actionScope=ACTION_TOKEN_SCOPE;
+    return next();
+  } catch (error) {
+    // Ordinary Altuvera access tokens continue to use the standard middleware.
+    return protect(req,res,next);
+  }
+};
+
+router.post("/:id/action-token",protect,async(req,res)=>{
+ try {
+  await ensureSchema();
+  const id=Number(req.params.id);
+  if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({success:false,message:"Invalid booking link."});
+  const b=await getBooking(id);
+  if(!b)return res.status(404).json({success:false,message:"Booking not found"});
+  if(!userCanAccess(req,b))return res.status(403).json({success:false,code:"BOOKING_ACCOUNT_MISMATCH",message:"This booking belongs to a different Altuvera account."});
+  if(!["requested","uploaded"].includes(b.identity_portrait_status||"not_requested")) {
+    return res.status(409).json({success:false,message:"A portrait has not been requested for this booking."});
+  }
+  if(!ACTION_TOKEN_SECRET)return res.status(503).json({success:false,message:"Secure portrait links are temporarily unavailable."});
+  const expiresAt=Date.now()+5*60*1000;
+  const token=jwt.sign({
+    id:req.user.id,
+    email:req.user.email||"",
+    bookingId:id,
+    scope:ACTION_TOKEN_SCOPE
+  },ACTION_TOKEN_SECRET,{
+    expiresIn:"5m",
+    issuer:ACTION_TOKEN_ISSUER,
+    audience:ACTION_TOKEN_AUDIENCE
+  });
+  return res.json({success:true,data:{token,expiresAt,scope:ACTION_TOKEN_SCOPE,bookingId:id}});
+ } catch(e) {
+  logger.error("[Identity] action token:",e.message);
+  return res.status(500).json({success:false,message:"Could not prepare the secure portrait session."});
+ }
+});
+
 router.post("/:id/request",protect,adminOnly,async(req,res)=>{
  try{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
@@ -52,7 +111,7 @@ router.post("/:id/request",protect,adminOnly,async(req,res)=>{
  }catch(e){logger.error("[Identity] request:",e.message);return res.status(500).json({success:false,message:"Failed to request portrait"})}
 });
 
-router.post("/:id/upload",protect,upload.single("portrait"),async(req,res)=>{
+router.post("/:id/upload",actionOrUserProtect,upload.single("portrait"),async(req,res)=>{
  try{
   await ensureSchema(); const id=Number(req.params.id); const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
