@@ -50,7 +50,7 @@ const ACTION_TOKEN_AUDIENCE = "altuvera:booking-identity-upload";
 const ACTION_TOKEN_SCOPE = "booking_identity_upload";
 
 const actionOrUserProtect = (req,res,next) => {
-  const raw=String(req.headers.authorization||"").replace(/^Bearer\\s+/i,"").trim();
+  const raw=String(req.headers.authorization||"").replace(/^Bearer\s+/i,"").trim();
   if(!raw || !ACTION_TOKEN_SECRET) return protect(req,res,next);
   try {
     const claims=jwt.verify(raw,ACTION_TOKEN_SECRET,{
