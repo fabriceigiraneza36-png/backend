@@ -1,6 +1,6 @@
 // server.js
 // -------------------------------------------------------------------------------
-// Altuvera Safaris � ENTERPRISE BACKEND SERVER v7.1
+// Altuvera � ENTERPRISE BACKEND SERVER v7.1
 // "True Adventures In High Places & Deep Culture"
 //
 // Changes from v7.0:
@@ -748,7 +748,7 @@ app.get('/health', (_req, res) =>
   res.json({
     success:     true,
     status:      'healthy',
-    service:     'Altuvera Safaris API',
+    service:     'Altuvera API',
     version:     '7.1',
     environment: NODE_ENV,
     uptime:      Math.floor(process.uptime()),
@@ -774,7 +774,7 @@ app.get('/api/health', (_req, res) =>
 app.get('/api', (_req, res) =>
   res.json({
     success: true,
-    name:    'Altuvera Safaris API',
+    name:    'Altuvera API',
     version: '7.1',
     tagline: 'True Adventures In High Places & Deep Culture',
     health:  '/health',
@@ -2263,7 +2263,7 @@ async function initializeServer () {
       httpServer.listen(PORT,'0.0.0.0', () => {
         const line = '-'.repeat(67)
         logger.info(`\n${line}`)
-        logger.info('??  ALTUVERA Safaris Enterprise Backend v7.1')
+        logger.info('??  ALTUVERA Enterprise Backend v7.1')
         logger.info('     "True Adventures In High Places & Deep Culture"')
         logger.info(line)
         logger.info(`  Env          : ${NODE_ENV}`)
