@@ -38,7 +38,7 @@ function listUrls() {
     if (Array.isArray(value)) return value.forEach(add);
     if (typeof value === "object") return add(value.url || value.image_url || value.imageUrl || value.secure_url);
     const url = String(value).trim();
-    if (/^https:\/\//i.test(url) && !found.some((item) => item.url === url)) found.push({ url, alt: "Altuvera Safaris travel image" });
+    if (/^https:\/\//i.test(url) && !found.some((item) => item.url === url)) found.push({ url, alt: "Altuvera travel image" });
   };
   for (const value of arguments) add(value);
   return found;
@@ -369,7 +369,7 @@ exports.send = async (req,res,next) => {
       const fromItem = contentItems.flatMap((item)=>item.images || []).find((image)=>image.url===url);
       return {
         url,
-        alt:String(typeof entry==="object" ? entry.alt || entry.title || fromItem?.alt || "Altuvera Safaris" : fromItem?.alt || "Altuvera Safaris"),
+        alt:String(typeof entry==="object" ? entry.alt || entry.title || fromItem?.alt || "Altuvera" : fromItem?.alt || "Altuvera"),
         title:String(typeof entry==="object" ? entry.title || entry.caption || "" : ""),
         caption:String(typeof entry==="object" ? entry.caption || entry.title || "" : ""),
         contentUrl:contentItems.find((item)=>item.images?.some((image)=>image.url===url))?.contentUrl || contextData.contentUrl,
@@ -427,7 +427,7 @@ exports.send = async (req,res,next) => {
           type:"travel_update",category:"travel_updates",title:notificationTitle,message:notificationMessage,
           actionUrl,actionLabel:String(payload.notificationActionLabel || template.cta_label || "Explore update").slice(0,80),
           imageUrl:notificationImage,priority:String(payload.priority || "normal"),targetScope:"all",
-          senderType:"admin",senderName:"Altuvera Safaris",
+          senderType:"admin",senderName:"Altuvera",
           metadata:{campaign:true,context,contentItems:contentItems.map(({id,type,title,contentUrl})=>({id,type,title,contentUrl})),imageCount:mediaGallery.length},
           req,skipUserEmail:true,
         });
@@ -442,7 +442,7 @@ exports.send = async (req,res,next) => {
             type:"travel_update",category:"travel_updates",title:notificationTitle,message:notificationMessage,
             actionUrl,actionLabel:String(payload.notificationActionLabel || template.cta_label || "Explore update").slice(0,80),
             imageUrl:notificationImage,priority:String(payload.priority || "normal"),targetScope:"individual",
-            senderType:"admin",senderName:"Altuvera Safaris",
+            senderType:"admin",senderName:"Altuvera",
             metadata:{campaign:true,context,contentItems:contentItems.map(({id,type,title,contentUrl})=>({id,type,title,contentUrl})),imageCount:mediaGallery.length},
             req,skipUserEmail:true,
           });
