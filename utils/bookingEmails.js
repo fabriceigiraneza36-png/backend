@@ -255,7 +255,7 @@ const buildBookingEmailHeader = ({ recipientName = "", recipientEmail = "", reci
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="64" height="64" style="width:64px;height:64px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.88);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:17px;font-weight:800;color:#065f46;">' + esc(bookingAvatarInitials(recipientName, recipientEmail)) + '</td></tr></table>';
 
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 14px;"><tr>' +
-    '<td align="left" valign="middle" width="94" style="width:94px;"><img src="' + esc(ENV.logoUrl) + '" width="86" height="44" alt="Altuvera logo" style="display:block;width:86px;height:44px;object-fit:contain;border-radius:8px;background:#ffffff;padding:3px;" /></td>' +
+    '<td align="left" valign="middle" width="76" style="width:76px;"><img src="' + esc(ENV.logoUrl) + '" width="68" height="34" alt="Altuvera logo" style="display:block;width:68px;height:34px;object-fit:contain;border-radius:8px;background:#ffffff;padding:3px;" /></td>' +
     '<td align="left" valign="middle" style="padding:0 8px 0 10px;"><p style="margin:0;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;line-height:1.25;font-weight:800;">Altuvera</p><p style="margin:4px 0 0;color:#a7f3d0;font-family:Arial,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:.8px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
     '<td align="right" valign="middle" width="54" style="width:54px;">' + avatar.replace(/width="64" height="64"/g, 'width="48" height="48"').replace(/width:64px;height:64px/g, 'width:48px;height:48px').replace(/font-size:17px/g, 'font-size:14px') + '</td></tr></table>';
 };
@@ -565,6 +565,179 @@ const bookingSummary = (b) => {
   ]);
 };
 
+
+const safeDestinationImageUrl = (value) => {
+  try {
+    const url = new URL(String(value || "").trim());
+    return url.protocol === "https:" ? url.toString() : "";
+  } catch {
+    return "";
+  }
+};
+
+const collectDestinationImageValues = (value, output) => {
+  if (!value) return;
+  if (Array.isArray(value)) {
+    value.forEach((item) => collectDestinationImageValues(item, output));
+    return;
+  }
+  if (typeof value === "object") {
+    const direct = value.image_url || value.url || value.src || value.secure_url;
+    if (direct) collectDestinationImageValues(direct, output);
+    ["images", "image_urls", "hero_images", "image_gallery", "gallery_images"].forEach((key) => {
+      if (value[key]) collectDestinationImageValues(value[key], output);
+    });
+    return;
+  }
+  if (typeof value !== "string") return;
+  const text = value.trim();
+  if (!text) return;
+  if (text[0] === "[" || text[0] === "{") {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && parsed !== value) {
+        collectDestinationImageValues(parsed, output);
+        return;
+      }
+    } catch { /* Treat non-JSON strings as image URLs below. */ }
+  }
+  const safeUrl = safeDestinationImageUrl(text);
+  if (safeUrl) output.push(safeUrl);
+};
+
+const loadDestinationImagesForBooking = async (booking = {}) => {
+  const positiveId = (value) => {
+    const number = Number(value);
+    return Number.isInteger(number) && number > 0 ? number : null;
+  };
+
+  let destinationId = positiveId(
+    booking.destination_id ||
+    booking.destinationId ||
+    booking.destination?.id ||
+    booking.destination?.destination_id
+  );
+
+  // Package requests are linked through packages.destination_id. Resolve that
+  // relationship when older booking payloads do not include destination_id.
+  const packageId = positiveId(booking.package_id || booking.packageId);
+  if (!destinationId && packageId) {
+    try {
+      const result = await query(
+        "SELECT destination_id FROM packages WHERE id = $1 LIMIT 1",
+        [packageId]
+      );
+      destinationId = positiveId(result.rows?.[0]?.destination_id);
+    } catch (error) {
+      logger.debug("[BookingEmails] Package destination lookup skipped:", error.message);
+    }
+  }
+
+  const destinationSlug = String(booking.destination_slug || booking.destinationSlug || "").trim();
+  const destinationName = String(
+    booking.destination_name ||
+    (typeof booking.destination === "string" ? booking.destination : "") ||
+    ""
+  ).trim();
+
+  if (!destinationId && (destinationSlug || destinationName)) {
+    try {
+      const result = await query(
+        "SELECT id FROM destinations " +
+        "WHERE ($1 <> '' AND LOWER(COALESCE(slug, '')) = LOWER($1)) " +
+        "OR ($2 <> '' AND LOWER(COALESCE(name, '')) = LOWER($2)) " +
+        "ORDER BY CASE WHEN $1 <> '' AND LOWER(COALESCE(slug, '')) = LOWER($1) " +
+        "THEN 0 ELSE 1 END LIMIT 1",
+        [destinationSlug, destinationName]
+      );
+      destinationId = positiveId(result.rows?.[0]?.id);
+    } catch (error) {
+      logger.debug("[BookingEmails] Destination name lookup skipped:", error.message);
+    }
+  }
+
+  if (!destinationId) return [];
+
+  const destinationResult = await query(
+    "SELECT to_jsonb(d) AS destination_record FROM destinations d WHERE d.id = $1 LIMIT 1",
+    [destinationId]
+  ).catch((error) => {
+    logger.debug("[BookingEmails] Destination image fields lookup skipped:", error.message);
+    return { rows: [] };
+  });
+
+  const storedImageRows = await query(
+    "SELECT image_url FROM destination_images " +
+    "WHERE destination_id = $1 AND is_active = true " +
+    "AND NULLIF(TRIM(COALESCE(image_url, '')), '') IS NOT NULL " +
+    "ORDER BY is_primary DESC, sort_order ASC, id ASC LIMIT 10",
+    [destinationId]
+  ).catch((error) => {
+    logger.debug("[BookingEmails] Destination image records lookup skipped:", error.message);
+    return { rows: [] };
+  });
+
+  const candidates = [];
+  (storedImageRows.rows || []).forEach((row) => {
+    collectDestinationImageValues(row.image_url, candidates);
+  });
+
+  const record = destinationResult.rows?.[0]?.destination_record || {};
+  [
+    "image_url",
+    "cover_image_url",
+    "hero_image",
+    "hero_images",
+    "image_urls",
+    "images",
+    "gallery_images"
+  ].forEach((key) => collectDestinationImageValues(record[key], candidates));
+
+  return [...new Set(candidates)].slice(0, 10);
+};
+
+const buildDestinationImageCarousel = async (booking = {}, destination = "your destination") => {
+  let images = [];
+  try {
+    images = await loadDestinationImagesForBooking(booking);
+  } catch (error) {
+    logger.warn("[BookingEmails] Destination image carousel skipped:", error.message);
+    return "";
+  }
+  if (!images.length) return "";
+
+  const slug = booking.destination_slug || booking.destinationSlug || "";
+  const destinationUrl = slug
+    ? ENV.frontendUrl + "/destinations/" + encodeURIComponent(String(slug))
+    : ENV.frontendUrl + "/destinations";
+  const imageItems = images.map((src, index) => (
+    '<a href="' + esc(destinationUrl) + '" target="_blank" ' +
+      'style="display:inline-block;vertical-align:top;width:214px;margin:0 10px 0 0;' +
+      'text-decoration:none;scroll-snap-align:start;">' +
+      '<img src="' + esc(src) + '" width="214" height="138" ' +
+        'alt="' + esc(destination) + ' — photo ' + (index + 1) + '" ' +
+        'style="display:block;width:214px;height:138px;object-fit:cover;border-radius:13px;' +
+        'border:1px solid #d1fae5;background:#f0fdf4;" />' +
+    '</a>'
+  )).join("");
+
+  return '<div style="margin:26px 0 24px;padding:18px 0 14px;border-top:1px solid #e2e8f0;border-bottom:1px solid #e2e8f0;">' +
+    '<p style="margin:0 0 5px;font-family:Inter,Arial,sans-serif;font-size:11px;font-weight:800;' +
+      'letter-spacing:.12em;text-transform:uppercase;color:#047857;">Your destination</p>' +
+    '<p style="margin:0 0 14px;font-family:Georgia,serif;font-size:20px;font-weight:700;color:#0f172a;">' +
+      esc(destination) + '</p>' +
+    '<div role="region" aria-label="' + esc(destination) + ' destination photos" ' +
+      'style="max-width:100%;overflow-x:auto;overflow-y:hidden;white-space:nowrap;' +
+      '-webkit-overflow-scrolling:touch;scrollbar-width:thin;scroll-snap-type:x mandatory;padding-bottom:8px;">' +
+      '<div style="white-space:nowrap;font-size:0;line-height:0;">' + imageItems + '</div>' +
+    '</div>' +
+    '<p style="margin:7px 0 0;font-family:Inter,Arial,sans-serif;font-size:11px;color:#64748b;">' +
+      'Swipe or scroll horizontally to view ' + images.length + ' destination photo' +
+      (images.length === 1 ? '' : 's') + '.</p>' +
+  '</div>';
+};
+
+
 const heading = (text) => `
   <h1 class="headline" style="margin:0 0 14px;font-family:'Playfair Display',Georgia,serif;
     font-size:26px;font-weight:700;color:#0f172a;line-height:1.3;letter-spacing:-.3px;">
@@ -750,6 +923,7 @@ const sendBookingReceivedEmail = async (booking) => {
   if (!booking?.email) return { success: false };
   const dest = tripName(booking);
   const confirmationUrl = booking.verification_token ? buildVerificationLink(booking.verification_token) : null;
+  const destinationGallery = await buildDestinationImageCarousel(booking, dest);
 
   const html = shell({
     ...(await bookingEmailIdentity(booking)),
@@ -763,6 +937,7 @@ const sendBookingReceivedEmail = async (booking) => {
         for your <strong>${esc(dest)}</strong> adventure. Our travel experts will contact you
         within <strong style="color:${T.g600};">24 hours</strong> to craft your perfect itinerary.`)}
       ${bookingSummary(booking)}
+      ${destinationGallery}
       ${confirmationUrl ? `
         <div style="margin:28px 0;padding:22px 20px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:16px;text-align:center;">
           <p style="margin:0 0 12px;color:#065f46;font-weight:800;font-size:14px;">Confirm from your real inbox</p>
@@ -918,6 +1093,7 @@ const sendBookingConfirmation = async (booking) => {
   if (!booking?.email) return { success: false };
   const dest = tripName(booking);
   const days = daysUntil(booking.travel_date);
+  const destinationGallery = await buildDestinationImageCarousel(booking, dest);
 
   const html = shell({
     ...(await bookingEmailIdentity(booking)),
@@ -932,6 +1108,7 @@ const sendBookingConfirmation = async (booking) => {
         has been <strong>officially confirmed</strong>. We're excited to be part of your journey.`)}
       ${days !== null && days >= 0 ? countdownBox(days, dest, booking.travel_date) : ""}
       ${bookingSummary({ ...booking, status: "confirmed" })}
+      ${destinationGallery}
       ${booking.confirmation_code ? `
       <div style="background:${T.g50};border:2px solid ${T.g400};border-radius:14px;
         padding:22px;text-align:center;margin:20px 0;">
