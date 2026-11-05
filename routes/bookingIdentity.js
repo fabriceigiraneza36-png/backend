@@ -76,6 +76,8 @@ router.post("/:id/action-token",protect,async(req,res)=>{
   if(!Number.isSafeInteger(id)||id<=0)return res.status(400).json({success:false,message:"Invalid booking link."});
   const b=await getBooking(id);
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
+  const role=String(req.user?.role||req.user?.type||req.userType||"").toLowerCase();
+  if(["admin","manager","super_admin"].includes(role))return res.status(403).json({success:false,message:"Sign in with the traveller account that received this request."});
   if(!userCanAccess(req,b))return res.status(403).json({success:false,code:"BOOKING_ACCOUNT_MISMATCH",message:"This booking belongs to a different Altuvera account."});
   if(!["requested","uploaded"].includes(b.identity_portrait_status||"not_requested")) {
     return res.status(409).json({success:false,message:"A portrait has not been requested for this booking."});
