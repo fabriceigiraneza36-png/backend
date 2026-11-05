@@ -178,7 +178,7 @@ async function seedContacts() {
 async function seedSiteSettings() {
   console.log("⚙️ Seeding Site Settings...");
   const settings = [
-    { key: "company_name", value: "Altuvera Safaris" },
+    { key: "company_name", value: "Altuvera" },
     { key: "company_tagline", value: "True Adventures In High Places & Deep Culture" },
     { key: "whatsapp_number", value: "+250788123456" },
     { key: "support_email", value: "info@altuverasafaris.com" },
