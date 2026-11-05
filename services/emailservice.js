@@ -338,7 +338,7 @@ function shell({
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 16px;position:relative;">
       <tr>
         <td align="left" valign="middle" width="124">
-          <img src="${esc(cfg.logoUrl)}" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
+          <img src="${esc(cfg.logoUrl)}" width="70" height="35" alt="Altuvera logo" style="display:block;width:70px;height:35px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
         </td>
         <td align="center" valign="middle">
           <div class="logo-txt"><em>Altuvera</em> Safaris</div>
