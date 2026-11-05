@@ -14,13 +14,13 @@ const cfg = {
     pass:   process.env.SMTP_PASS   || "",
   },
   from: {
-    name:    "Altuvera Safaris",
+    name:    "Altuvera",
     address: "info@altuverasafaris.com",
   },
   adminEmail:   "info@altuverasafaris.com",
   supportEmail: "info@altuverasafaris.com",
   replyTo:      "info@altuverasafaris.com",
-  appName:      process.env.APP_NAME      || "Altuvera Safaris",
+  appName:      process.env.APP_NAME      || "Altuvera",
   appUrl:       process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   frontendUrl:  process.env.FRONTEND_URL  || "https://www.altuverasafaris.com",
   logoUrl:      process.env.EMAIL_LOGO_URL || "https://www.altuverasafaris.com/altuvera.png",
@@ -338,7 +338,7 @@ function shell({
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 16px;position:relative;">
       <tr>
         <td align="left" valign="middle" width="124">
-          <img src="${esc(cfg.logoUrl)}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
+          <img src="${esc(cfg.logoUrl)}" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
         </td>
         <td align="center" valign="middle">
           <div class="logo-txt"><em>Altuvera</em> Safaris</div>
@@ -360,7 +360,7 @@ function shell({
       <a href="mailto:${cfg.supportEmail}">Support</a> &nbsp;·&nbsp;
       <a href="https://wa.me/250785751391">WhatsApp</a>
     </p>
-    <p style="margin-top:8px">© ${new Date().getFullYear()} Altuvera Safaris · All rights reserved</p>
+    <p style="margin-top:8px">© ${new Date().getFullYear()} Altuvera · All rights reserved</p>
   </div>
 </div></div></div>
 </body></html>`;
@@ -414,7 +414,7 @@ async function sendBookingReceivedEmail(booking) {
 
   return sendEmail({
     to: booking.email,
-    subject: `📬 Booking Received — #${booking_number} | Altuvera Safaris`,
+    subject: `📬 Booking Received — #${booking_number} | Altuvera`,
     idempotencyKey: `booking-received/${String(booking_number)}`,
     html,
   });
@@ -490,8 +490,8 @@ async function sendDestinationAlertEmail(destination) {
           recipientEmail: sub.email,
           recipientAvatarUrl: sub.avatar_url || "",
           title: `A new destination to explore: ${name}`,
-          preheader: `Discover ${name} with Altuvera Safaris.`,
-          footer: `You received this update because you subscribed to Altuvera Safaris emails. <a href="${esc(unsubscribeUrl)}" style="color:#047857;text-decoration:underline;">Unsubscribe</a> at any time.`,
+          preheader: `Discover ${name} with Altuvera.`,
+          footer: `You received this update because you subscribed to Altuvera emails. <a href="${esc(unsubscribeUrl)}" style="color:#047857;text-decoration:underline;">Unsubscribe</a> at any time.`,
           body: `
             <p style="margin:0 0 16px;color:#334155;font-size:15px;line-height:1.7;">${greeting}</p>
             <div style="border-radius:14px;overflow:hidden;margin-bottom:16px;">
@@ -510,7 +510,7 @@ async function sendDestinationAlertEmail(destination) {
 
         await sendEmail({
           to: sub.email,
-          subject: `New destination: ${name} | Altuvera Safaris`,
+          subject: `New destination: ${name} | Altuvera`,
           html,
         });
         sent++;
