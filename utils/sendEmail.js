@@ -170,7 +170,7 @@ const buildBanner = (emoji, title, subtitle, recipientName = "", recipientEmail 
       <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 20px;">
         <tr>
           <td align="left" valign="middle" width="124">
-            <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
+            <img src="${escapeHtml(EMAIL_LOGO_URL)}" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;border-radius:10px;background:#ffffff;padding:3px;" />
           </td>
           <td align="right" valign="middle" width="64">${avatar}</td>
         </tr>
@@ -254,7 +254,7 @@ const buildFooter = (lines, showUnsubscribe = false, unsubscribeUrl = "") => {
 
   footerContent += `
     <p style="margin:24px 0 0;font-size:11px;color:rgba(255,255,255,0.25);letter-spacing:0.3px;">
-      © ${currentYear} Altuvera Safaris. All rights reserved.
+      © ${currentYear} Altuvera. All rights reserved.
     </p>`;
 
   return `
@@ -375,7 +375,7 @@ const buildWelcomeSubscriberEmailHtml = (email) => {
   const exploreUrl     = `${siteUrl}/explore`;
 
   const content = `
-    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures", "", validatedEmail)}
+    ${buildBanner("🌿", "Altuvera", "Premium Safari & Adventures", "", validatedEmail)}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -454,7 +454,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
   const supportEmail   = "info@altuverasafaris.com";
 
   const content = `
-    ${buildBanner("🌿", "Altuvera Safaris", "Premium Safari & Adventures", "", validatedEmail)}
+    ${buildBanner("🌿", "Altuvera", "Premium Safari & Adventures", "", validatedEmail)}
 
     <tr>
       <td style="padding:48px 44px 36px;text-align:center;">
@@ -517,7 +517,7 @@ const buildUnsubscribeConfirmationEmailHtml = (email) => {
 
     ${buildQuoteSection(
       "Until we meet again on the savanna...",
-      "The Altuvera Safaris Team"
+      "The Altuvera Team"
     )}
 
     ${buildFooter([
@@ -561,7 +561,7 @@ async function sendEmail(mailOptions, logMessage) {
 
   const fromAddress =
     mailOptions.from ||
-    `Altuvera Safaris <info@altuverasafaris.com>`;
+    `Altuvera <info@altuverasafaris.com>`;
 
   // ── Retry loop (3 attempts) ──────────────────────────────
   const MAX_ATTEMPTS = 3;
@@ -663,11 +663,11 @@ async function sendWelcomeEmail(email) {
 
   return sendEmail(
     {
-      from:    `Altuvera Safaris <info@altuverasafaris.com>`,
+      from:    `Altuvera <info@altuverasafaris.com>`,
       to:      validatedEmail,
-      subject: "Welcome to Altuvera Safaris",
+      subject: "Welcome to Altuvera",
       html:    buildWelcomeSubscriberEmailHtml(validatedEmail),
-      text:    `Welcome to Altuvera Safaris! Visit us at ${getEnvVar("SITE_URL", "https://www.altuverasafaris.com")}/explore`,
+      text:    `Welcome to Altuvera! Visit us at ${getEnvVar("SITE_URL", "https://www.altuverasafaris.com")}/explore`,
     },
     `✅ Welcome email sent to ${validatedEmail}`
   );
@@ -678,11 +678,11 @@ async function sendUnsubscribeConfirmation(email) {
 
   return sendEmail(
     {
-      from:    `Altuvera Safaris <info@altuverasafaris.com>`,
+      from:    `Altuvera <info@altuverasafaris.com>`,
       to:      validatedEmail,
-      subject: "Newsletter Unsubscribe Confirmed | Altuvera Safaris",
+      subject: "Newsletter Unsubscribe Confirmed | Altuvera",
       html:    buildUnsubscribeConfirmationEmailHtml(validatedEmail),
-      text:    "You have been successfully unsubscribed from Altuvera Safaris emails.",
+      text:    "You have been successfully unsubscribed from Altuvera emails.",
     },
     `✅ Unsubscribe confirmation sent to ${validatedEmail}`
   );
