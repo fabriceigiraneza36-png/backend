@@ -19,7 +19,7 @@ async function deliverNotificationPush(notification, {
   userId = notification?.user_id || notification?.userId || null,
   userEmail = notification?.user_email || notification?.userEmail || null,
   actionUrl = notification?.action_url || notification?.actionUrl || "/notifications",
-  title = notification?.title || "Altuvera Safaris",
+  title = notification?.title || "Altuvera",
   message = notification?.message || "",
   priority = notification?.priority || "normal",
 } = {}) {
@@ -91,7 +91,7 @@ async function deliverNotificationPush(notification, {
   for (const [base, subscriptions] of groups.entries()) {
     const isAdminAudience = base === adminBase;
     const payload = {
-      title: title || "Altuvera Safaris",
+      title: title || "Altuvera",
       body: message || "You have a new update from Altuvera.",
       icon: "/favicon.ico",
       badge: "/favicon.ico",
