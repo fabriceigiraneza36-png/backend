@@ -1,4 +1,4 @@
-# Altuvera Safaris — durable email delivery architecture
+# Altuvera — durable email delivery architecture
 
 Status: staged migration plan, 2026-11-01
 

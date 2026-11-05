@@ -1114,7 +1114,7 @@ router.patch('/:id/bookings/:bId', requireAdmin, async (req, res) => {
       if (booking.user_id || email) asyncNoThrow(createNotificationInternal({
         userId: booking.user_id || user.id || null, userEmail: email, type: 'package_request_confirmed', category: 'package',
         title: 'Good news, ' + String(traveller).split(' ')[0] + ' — your trip is confirmed!',
-        message: 'Your request for "' + pkgTitle + '" has been confirmed by Altuvera Safaris. Open your booking for the dates, guest details, and next steps.',
+        message: 'Your request for "' + pkgTitle + '" has been confirmed by Altuvera. Open your booking for the dates, guest details, and next steps.',
         actionUrl: '/my-bookings?bookingId=' + encodeURIComponent(booking.id) + '&packageId=' + encodeURIComponent(id),
         actionLabel: 'View confirmed booking', priority: 'high', req,
         metadata: { bookingId: booking.id, packageId: Number(id), bookingNumber: booking.booking_number || null },
@@ -1366,10 +1366,10 @@ router.post('/:id/info-requests', requireAdmin, async (req, res) => {
     const request = normalizeInfoRequest(inserted.rows[0]);
     await createNotificationInternal({
       userId, userEmail: email, senderType: 'admin', senderId: req.user?.id || null,
-      senderName: req.user?.full_name || req.user?.name || 'Altuvera Safaris',
+      senderName: req.user?.full_name || req.user?.name || 'Altuvera',
       type: 'package_info_request', category: 'package',
       title: 'Additional information requested',
-      message: 'Altuvera Safaris needs a few more details for your request for ' + pkg.title + '. Open your package requests to complete the form.',
+      message: 'Altuvera needs a few more details for your request for ' + pkg.title + '. Open your package requests to complete the form.',
       actionUrl: '/my-bookings?packageId=' + encodeURIComponent(packageId) + '&infoRequestId=' + encodeURIComponent(request.id),
       actionLabel: 'Complete information form', priority: 'high',
       metadata: { packageId, packageTitle: pkg.title, infoRequestId: request.id },

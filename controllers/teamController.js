@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * TEAM CONTROLLER - Altuvera Safaris
+ * TEAM CONTROLLER - Altuvera
  * ═══════════════════════════════════════════════════════════════════════════════
  *
  * Full CRUD operations for team members.

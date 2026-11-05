@@ -77,7 +77,7 @@ const FRONTEND_URL = (
   process.env.FRONTEND_URL || "https://www.altuverasafaris.com"
 ).replace(/\/+$/, "");
 
-const APP_NAME = process.env.APP_NAME || "Altuvera Safaris";
+const APP_NAME = process.env.APP_NAME || "Altuvera";
 
 /* ── Helpers ────────────────────────────────────────────────────────────────── */
 const isValidEmail = (e) =>

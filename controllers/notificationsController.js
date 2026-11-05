@@ -68,8 +68,8 @@ const profileHeader = (name, email, avatarUrl) => {
     ? '<img src="' + safeAvatar + '" width="54" height="54" alt="Recipient profile" style="display:block;width:54px;height:54px;border-radius:50%;object-fit:cover;border:2px solid rgba(255,255,255,.85);" />'
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="54" height="54" style="width:54px;height:54px;border-radius:50%;background:#d1fae5;"><tr><td align="center" valign="middle" style="font-weight:800;color:#065f46;font-family:Arial,sans-serif;">' + initials + '</td></tr></table>';
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%"><tr>' +
-    '<td width="124"><img src="' + escapeEmailAttribute(EMAIL_LOGO_URL) + '" width="112" height="56" alt="Altuvera Safaris logo" style="display:block;width:112px;height:56px;object-fit:contain;background:#fff;padding:3px;border-radius:10px;" /></td>' +
-    '<td style="padding:0 10px;color:#fff;font-family:Arial,sans-serif;"><p style="margin:0;font-size:18px;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-size:10px;letter-spacing:1px;">AFRICAN ADVENTURES</p></td>' +
+    '<td width="124"><img src="' + escapeEmailAttribute(EMAIL_LOGO_URL) + '" width="112" height="56" alt="Altuvera logo" style="display:block;width:112px;height:56px;object-fit:contain;background:#fff;padding:3px;border-radius:10px;" /></td>' +
+    '<td style="padding:0 10px;color:#fff;font-family:Arial,sans-serif;"><p style="margin:0;font-size:18px;font-weight:800;">Altuvera</p><p style="margin:4px 0 0;color:#a7f3d0;font-size:10px;letter-spacing:1px;">AFRICAN ADVENTURES</p></td>' +
     '<td align="right" width="58">' + avatar + '</td></tr></table>';
 };
 
@@ -140,20 +140,20 @@ const buildSignInSuccessEmailHtml = ({
   '<html lang="en"><head><meta charset="utf-8">' +
   '<meta name="viewport" content="width=device-width,initial-scale=1">' +
   '<meta name="x-apple-disable-message-reformatting">' +
-  '<title>Sign-in successful | Altuvera Safaris</title>' +
+  '<title>Sign-in successful | Altuvera</title>' +
   '<style>' +
   'body{margin:0!important;padding:0!important;width:100%!important;background:#f3f7f4;color:#173326;font-family:Arial,Helvetica,sans-serif;-webkit-text-size-adjust:100%;}' +
   'table{border-collapse:collapse;mso-table-lspace:0pt;mso-table-rspace:0pt;}img{border:0;outline:none;text-decoration:none;-ms-interpolation-mode:bicubic;}' +
   'a{color:#087a50;}' +
   '@media only screen and (max-width:620px){.outer-pad{padding:10px 6px!important;}.card{width:100%!important;border-radius:15px!important;}.header-pad{padding:13px 14px!important;}.content-pad{padding:19px 17px!important;}.footer-pad{padding:13px 16px!important;}.brand-logo{width:70px!important;height:36px!important;}.brand-name{font-size:15px!important;}.brand-tagline{font-size:8px!important;letter-spacing:.7px!important;}.avatar-cell{width:48px!important;}.main-title{font-size:24px!important;}.session-pad{padding-left:12px!important;padding-right:12px!important;}.cta-link{display:block!important;text-align:center!important;}}' +
   '</style></head><body>' +
-  '<div style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;max-height:0;max-width:0;overflow:hidden;mso-hide:all;">Your Altuvera Safaris account was signed in successfully. Review your recent session details.</div>' +
+  '<div style="display:none!important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;max-height:0;max-width:0;overflow:hidden;mso-hide:all;">Your Altuvera account was signed in successfully. Review your recent session details.</div>' +
   '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;background:#f3f7f4;"><tr><td align="center" class="outer-pad" style="padding:22px 12px;">' +
   '<table role="presentation" width="560" cellpadding="0" cellspacing="0" border="0" class="card" style="width:100%;max-width:560px;background:#ffffff;border:1px solid #e1ebe4;border-radius:18px;overflow:hidden;">' +
   '<tr><td class="header-pad" bgcolor="#064e3b" style="padding:15px 21px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e 0%,#087a50 100%);">' +
   '<table data-altuvera-email-header="true" role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>' +
-  '<td width="84" valign="middle" style="width:84px;"><a href="' + esc(baseUrl) + '" style="text-decoration:none;"><img class="brand-logo" src="' + logoUrl + '" width="78" height="42" alt="Altuvera Safaris logo" style="display:block;width:78px;height:42px;object-fit:contain;background:#ffffff;border-radius:8px;padding:3px;"></a></td>' +
-  '<td valign="middle" style="padding:0 8px 0 10px;"><p class="brand-name" style="margin:0;color:#ffffff;font-size:16px;line-height:1.25;font-weight:800;">Altuvera Safaris</p><p class="brand-tagline" style="margin:4px 0 0;color:#b9f2d4;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:1px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
+  '<td width="84" valign="middle" style="width:84px;"><a href="' + esc(baseUrl) + '" style="text-decoration:none;"><img class="brand-logo" src="' + logoUrl + '" width="78" height="42" alt="Altuvera logo" style="display:block;width:78px;height:42px;object-fit:contain;background:#ffffff;border-radius:8px;padding:3px;"></a></td>' +
+  '<td valign="middle" style="padding:0 8px 0 10px;"><p class="brand-name" style="margin:0;color:#ffffff;font-size:16px;line-height:1.25;font-weight:800;">Altuvera</p><p class="brand-tagline" style="margin:4px 0 0;color:#b9f2d4;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:1px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
   '<td class="avatar-cell" align="right" valign="middle" width="52" style="width:52px;">' + avatar + '</td>' +
   '</tr></table></td></tr>' +
   '<tr><td class="content-pad" style="padding:25px 30px 22px;">' +
@@ -163,7 +163,7 @@ const buildSignInSuccessEmailHtml = ({
   '</tr></table>' +
   '<h1 class="main-title" style="margin:0 0 8px;color:#123b2c;font-size:27px;line-height:1.2;font-weight:800;letter-spacing:-.4px;">You’re signed in</h1>' +
   '<p style="margin:0 0 7px;color:#344f42;font-size:14px;line-height:1.5;">Hello' + (firstName ? ', <strong>' + esc(firstName) + '</strong>' : '') + ',</p>' +
-  '<p style="margin:0;color:#52685d;font-size:13px;line-height:1.65;overflow-wrap:anywhere;">Your Altuvera Safaris account was signed in successfully. You can continue exploring your account and travel plans.</p>' +
+  '<p style="margin:0;color:#52685d;font-size:13px;line-height:1.65;overflow-wrap:anywhere;">Your Altuvera account was signed in successfully. You can continue exploring your account and travel plans.</p>' +
   '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="width:100%;margin:18px 0 0;background:#f7fbf8;border:1px solid #dcebe1;border-radius:13px;">' +
   '<tr><td class="session-pad" colspan="2" style="padding:12px 15px 5px;color:#174b35;font-size:10px;font-weight:800;letter-spacing:1.1px;text-transform:uppercase;">Recent session</td></tr>' +
   '<tr><td width="33" valign="middle" align="center" style="width:33px;padding:8px 0 10px 13px;color:#087a50;font-size:16px;line-height:1;">&#8599;</td><td valign="middle" style="padding:8px 14px 10px 8px;"><p style="margin:0 0 2px;color:#64796d;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;">Sign-in time</p><p style="margin:0;color:#183d2d;font-size:13px;line-height:1.45;overflow-wrap:anywhere;">' + loginTimeLabel + '</p></td></tr>' +
@@ -174,8 +174,8 @@ const buildSignInSuccessEmailHtml = ({
   '</td></tr>' +
   '<tr><td class="footer-pad" style="padding:14px 24px;background:#f7faf8;border-top:1px solid #e5eee8;">' +
   '<p style="margin:0 0 4px;color:#546b5e;font-size:11px;line-height:1.5;">Need help? Contact <a href="mailto:info@altuverasafaris.com" style="color:#087a50;font-weight:700;text-decoration:none;">info@altuverasafaris.com</a>.</p>' +
-  '<p style="margin:0;color:#82938a;font-size:10px;line-height:1.5;">This is an automated account-security message from Altuvera Safaris. Please do not reply.</p>' +
-  '<p style="margin:7px 0 0;color:#9aa79f;font-size:9px;line-height:1.4;">© ' + new Date().getFullYear() + ' Altuvera Safaris. All rights reserved.</p>' +
+  '<p style="margin:0;color:#82938a;font-size:10px;line-height:1.5;">This is an automated account-security message from Altuvera. Please do not reply.</p>' +
+  '<p style="margin:7px 0 0;color:#9aa79f;font-size:9px;line-height:1.4;">© ' + new Date().getFullYear() + ' Altuvera. All rights reserved.</p>' +
   '</td></tr></table></td></tr></table></body></html>';
 };
 
@@ -239,7 +239,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
     const escapeHtml = (value) => String(value ?? "").replace(/[&<>"]/g, (char) => ({
       "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
     }[char]));
-    const title = escapeHtml(notif.title || "A message from Altuvera Safaris");
+    const title = escapeHtml(notif.title || "A message from Altuvera");
     const message = escapeHtml(notif.message || "").replace(/\n/g, "<br>");
     const actionUrl = String(notif.action_url || "");
     const isTravelContext = category === "booking" || category === "travel_updates" ||
@@ -266,10 +266,10 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
       : null;
     const loginText = isSignInSuccess
       ? [
-          "You’re signed in to Altuvera Safaris.",
+          "You’re signed in to Altuvera.",
           "",
           recipient.full_name || recipientName ? "Hello " + (recipient.full_name || recipientName) + "," : "Hello,",
-          "Your Altuvera Safaris account was signed in successfully.",
+          "Your Altuvera account was signed in successfully.",
           "Sign-in time: " + formatLoginEmailDate(notif.metadata?.lastLoginAt),
           "Session scheduled to expire: " + formatLoginEmailDate(notif.metadata?.sessionExpiresAt),
           "",
@@ -283,7 +283,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
 
     await sendEmail({
       to: recipientEmail,
-      subject: isSignInSuccess ? "You’re signed in — Altuvera Safaris" : (notif.title || "A message from Altuvera Safaris"),
+      subject: isSignInSuccess ? "You’re signed in — Altuvera" : (notif.title || "A message from Altuvera"),
       replyTo: "info@altuverasafaris.com",
       recipientName: recipient.full_name || recipientName || "",
       ...(isSignInSuccess ? { text: loginText, html: loginHtml } : {
@@ -292,7 +292,7 @@ const sendUserEmail = async (notif, recipientEmail, recipientName) => {
           <main style="max-width:600px;margin:0 auto;background:#fff;border:1px solid #e2e8f0;border-radius:14px;overflow:hidden">
             <header style="background:#064e3b;padding:18px 22px;color:#fff">${profileHeader(recipient.full_name || recipientName, recipientEmail, recipient.avatar_url)}<h1 style="margin:16px 0 0;font-size:22px">${title}</h1></header>
             <section style="padding:26px;line-height:1.7;font-size:15px"><p style="margin-top:0">${recipient.full_name ? `Hello ${escapeHtml(recipient.full_name)},` : "Hello,"}</p><p>${message}</p>${personalization}${action}</section>
-            <footer style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6">This is an important account or travel message from Altuvera Safaris. Manage email preferences in your account settings.<br><a href="mailto:info@altuverasafaris.com" style="color:#047857">info@altuverasafaris.com</a></footer>
+            <footer style="padding:18px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;font-size:12px;color:#64748b;line-height:1.6">This is an important account or travel message from Altuvera. Manage email preferences in your account settings.<br><a href="mailto:info@altuverasafaris.com" style="color:#047857">info@altuverasafaris.com</a></footer>
           </main></body></html>`,
       }),
     });
@@ -515,7 +515,7 @@ const notifyAdminsImmediately = async ({
     title,
     `<div style="font-family:Arial,sans-serif;max-width:640px;margin:0 auto;padding:24px;color:#0f172a;">
       <div style="border-radius:14px;background:#ecfdf5;padding:20px;border:1px solid #a7f3d0;">
-        <p style="margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#059669;">Altuvera Safaris Admin</p>
+        <p style="margin:0 0 6px;font-size:12px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#059669;">Altuvera Admin</p>
         <h2 style="margin:0 0 10px;color:#047857;">${escapeAdminHtml(title)}</h2>
         <p style="margin:0;font-size:15px;line-height:1.6;color:#334155;">${escapeAdminHtml(message)}</p>
       </div>
@@ -654,7 +654,7 @@ const notif = await insertNotification({
         <h2 style="color:#059669;">{{name}}, ${title}</h2>
         <p style="font-size:16px;line-height:1.6;">${message}</p>
         <hr style="border:none;border-top:1px solid #e2e8f0;margin:24px 0;"/>
-        <p style="font-size:12px;color:#94a3b8;">Altuvera Safaris — Admin Activity Digest</p>
+        <p style="font-size:12px;color:#94a3b8;">Altuvera — Admin Activity Digest</p>
       </div>`,
     ).catch(() => {});
   } catch (err) {
@@ -910,7 +910,7 @@ const notifyPackageBookingCreated = async (booking, pkg, req = null) => {
         <p><strong>Special requests:</strong> ${hasSpecialRequests ? escapeHtml(booking.special_requests) : "None"}</p>
       </div>
       <a href="${escapeHtml(actionUrl)}" style="display:inline-block;padding:12px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:9px;font-weight:700;">Open package request</a>
-      <p style="margin-top:24px;font-size:12px;color:#94a3b8;">Altuvera Safaris — Admin notification</p>
+      <p style="margin-top:24px;font-size:12px;color:#94a3b8;">Altuvera — Admin notification</p>
     </div>`,
   ).catch((err) => logger.warn("[Notifications] package admin email failed:", err.message));
 

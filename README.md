@@ -1,4 +1,4 @@
-# Altuvera Safaris - Backend (Node.js + PostgreSQL)
+# Altuvera - Backend (Node.js + PostgreSQL)
 
 A production-ready Express backend with advanced security, monitoring, and resiliency features.
 

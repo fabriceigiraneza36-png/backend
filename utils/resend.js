@@ -58,7 +58,7 @@ async function send({ to, subject, html, text, from, replyTo, cc, idempotencyKey
     : "info@altuverasafaris.com";
 
   const payload = {
-    from: `${process.env.EMAIL_FROM_NAME || "Altuvera Safaris"} <${fromEmail}>`,
+    from: `${process.env.EMAIL_FROM_NAME || "Altuvera"} <${fromEmail}>`,
     to: Array.isArray(to) ? to : [to],
     subject,
     html: html || '',

@@ -60,7 +60,7 @@ function createClient({
       const headers = {};
       if (replyTo) headers["Reply-To"] = String(replyTo);
       const payload = {
-        from: String(from || "Altuvera Safaris <info@altuverasafaris.com>"),
+        from: String(from || "Altuvera <info@altuverasafaris.com>"),
         to: Array.isArray(to) ? to : [to],
         subject: String(subject),
         ...(html ? { html: String(html) } : {}),

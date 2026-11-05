@@ -1,7 +1,7 @@
 // utils/bookingEmails.js
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- * ALTUVERA SAFARIS — Premium Email Templates (v2.1)
+ * ALTUVERA — Premium Email Templates (v2.1)
  * ═══════════════════════════════════════════════════════════════════════════════
  * Fixes in v2.1:
  *  • sendBookingVerificationLink now uses _send (was calling undefined `sendEmail`)
@@ -107,7 +107,7 @@ const API_URL = sanitiseUrl(
 const API_ROOT = API_URL.replace(/\/api$/i, "");
 
 const ENV = {
-  appName:      process.env.APP_NAME       || "Altuvera Safaris",
+  appName:      process.env.APP_NAME       || "Altuvera",
   frontendUrl:  FRONTEND_URL,
   backendUrl:   API_ROOT,
   adminEmail:   "info@altuverasafaris.com",
@@ -255,8 +255,8 @@ const buildBookingEmailHeader = ({ recipientName = "", recipientEmail = "", reci
     : '<table role="presentation" cellpadding="0" cellspacing="0" width="64" height="64" style="width:64px;height:64px;border-radius:50%;background:#d1fae5;border:3px solid rgba(255,255,255,.88);"><tr><td align="center" valign="middle" style="font-family:Arial,sans-serif;font-size:17px;font-weight:800;color:#065f46;">' + esc(bookingAvatarInitials(recipientName, recipientEmail)) + '</td></tr></table>';
 
   return '<table data-altuvera-email-header="true" role="presentation" cellpadding="0" cellspacing="0" width="100%" style="margin:0 auto 14px;"><tr>' +
-    '<td align="left" valign="middle" width="94" style="width:94px;"><img src="' + esc(ENV.logoUrl) + '" width="86" height="44" alt="Altuvera Safaris logo" style="display:block;width:86px;height:44px;object-fit:contain;border-radius:8px;background:#ffffff;padding:3px;" /></td>' +
-    '<td align="left" valign="middle" style="padding:0 8px 0 10px;"><p style="margin:0;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;line-height:1.25;font-weight:800;">Altuvera Safaris</p><p style="margin:4px 0 0;color:#a7f3d0;font-family:Arial,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:.8px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
+    '<td align="left" valign="middle" width="94" style="width:94px;"><img src="' + esc(ENV.logoUrl) + '" width="86" height="44" alt="Altuvera logo" style="display:block;width:86px;height:44px;object-fit:contain;border-radius:8px;background:#ffffff;padding:3px;" /></td>' +
+    '<td align="left" valign="middle" style="padding:0 8px 0 10px;"><p style="margin:0;color:#ffffff;font-family:Arial,sans-serif;font-size:16px;line-height:1.25;font-weight:800;">Altuvera</p><p style="margin:4px 0 0;color:#a7f3d0;font-family:Arial,sans-serif;font-size:9px;line-height:1.4;font-weight:700;letter-spacing:.8px;text-transform:uppercase;">True adventure in high places &amp; deep culture</p></td>' +
     '<td align="right" valign="middle" width="54" style="width:54px;">' + avatar.replace(/width="64" height="64"/g, 'width="48" height="48"').replace(/width:64px;height:64px/g, 'width:48px;height:48px').replace(/font-size:17px/g, 'font-size:14px') + '</td></tr></table>';
 };
 
