@@ -381,7 +381,7 @@ const notifyUserBookingEvent = async ({
       imageUrl: destinationImage,
       priority,
       senderType: "system",
-      senderName: "Altuvera Safaris",
+      senderName: "Altuvera",
       metadata: {
         bookingId: booking?.id || booking?.booking_id || null,
         bookingNumber: booking?.booking_number || null,
