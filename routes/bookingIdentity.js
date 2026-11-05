@@ -155,7 +155,8 @@ router.post("/:id/request",protect,adminOnly,async(req,res)=>{
       return res.json({success:true,data:latest,alreadyRequested:true,message:"The portrait request has already been sent."});
     }
     return res.status(409).json({success:false,code:"ACTION_ALREADY_COMPLETED",data:latest,message:"This portrait action is no longer available."});
-  }  const full=await getBooking(id), url="/booking-verification/"+id;
+  }
+  const full=await getBooking(id), url="/booking-verification/"+id;
   await notifyUser(full,"Altuvera needs a quick identity portrait","Before we confirm your "+(full.destination_name||"trip")+", please upload a clear short face portrait from your device.",url,"Upload portrait");
   await email(full.email,"Identity confirmation needed — "+(full.booking_number||"Your Altuvera booking"),"<div style='font-family:Arial,sans-serif;max-width:620px;margin:auto;padding:24px;color:#0f172a'><div style='padding:28px;border-radius:18px;background:#064e3b;color:#fff'><h2 style='margin:0 0 8px'>One quick step before confirmation</h2><p style='margin:0;opacity:.9'>We need a short face portrait to confirm the traveller details for your planned journey to "+esc(full.destination_name)+".</p></div><p style='line-height:1.6'>Please use the secure button below to upload it.</p><a href='"+(process.env.FRONTEND_URL||"https://www.altuverasafaris.com")+url+"' style='display:inline-block;padding:13px 20px;background:#059669;color:#fff;text-decoration:none;border-radius:10px;font-weight:700'>Upload portrait securely</a></div>");
   return res.json({success:true,data:full,message:"Portrait request sent to the traveller."});
@@ -168,7 +169,7 @@ router.post("/:id/upload",actionOrUserProtect,preparePortraitUpload,upload.singl
   if(!b)return res.status(404).json({success:false,message:"Booking not found"});
   if(!userCanAccess(req,b))return res.status(403).json({success:false,message:"You do not have access to this booking"});
   if(!req.file?.secure_url)return res.status(400).json({success:false,message:"Please choose a portrait image."});
-  if(!/^image\\//.test(req.file.mimetype||""))return res.status(400).json({success:false,message:"Portrait must be an image."});
+  if(!/^image\//.test(req.file.mimetype||""))return res.status(400).json({success:false,message:"Portrait must be an image."});
 
   // Atomic compare-and-set: even parallel upload requests can only produce one
   // successful portrait submission for this booking.
@@ -208,14 +209,20 @@ router.post("/:id/confirm",protect,adminOnly,async(req,res)=>{
   const portraitProvided = b.identity_portrait_status==="uploaded" && Boolean(b.identity_portrait_url);
   const code=b.confirmation_code||("ALT-"+Math.random().toString(36).slice(2,10).toUpperCase());
   if (portraitProvided) {
-    const confirmedWrite=await query("UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",[id,code]);
+    const confirmedWrite=await query(
+      "UPDATE bookings SET identity_portrait_status='verified',identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",
+      [id,code]
+    );
     if(!confirmedWrite.rows[0]) {
       const latest=await getBooking(id);
       return res.json({success:true,data:latest,alreadyConfirmed:true,message:"This booking has already been confirmed."});
-    },identity_portrait_verified_at=NOW(),status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1",[id,code]);
+    }
   } else {
     // The portrait is optional; do not change its state when none was requested.
-    const confirmedWrite=await query("UPDATE bookings SET status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",[id,code]);
+    const confirmedWrite=await query(
+      "UPDATE bookings SET status='confirmed',confirmed_at=COALESCE(confirmed_at,NOW()),confirmation_code=$2,updated_at=NOW() WHERE id=$1 AND LOWER(COALESCE(status,''))<>'confirmed' RETURNING id",
+      [id,code]
+    );
     if(!confirmedWrite.rows[0]) {
       const latest=await getBooking(id);
       return res.json({success:true,data:latest,alreadyConfirmed:true,message:"This booking has already been confirmed."});
