@@ -79,6 +79,9 @@ router.get("/_routes", (req, res) => {
 // ② NAMED GET ROUTES — before /:id wildcard
 // ═══════════════════════════════════════════════════════════════════════════
 
+/** GET /api/testimonials/context-search?q=... */
+router.get("/context-search", ctrl.searchReviewContexts);
+
 /** GET /api/testimonials/featured */
 router.get("/featured", ctrl.getFeatured);
 
