@@ -909,7 +909,7 @@ app.use((req, res, next) => {
     const isDelete = method === 'DELETE'
     const role = String(req.user?.role || req.user?.type || req.admin?.role || '').toLowerCase()
     const isAdminAction = ['admin', 'manager', 'superadmin', 'super_admin', 'moderator', 'editor'].includes(role)
-    const isNotificationMaintenance = /^\\/api\\/(?:admin\\/)?notifications(?:\\/|$)/i.test(endpoint)
+    const isNotificationMaintenance = /^\/api\/(?:admin\/)?notifications(?:\/|$)/i.test(endpoint)
 
     if (isDelete && isAdminAction && !isNotificationMaintenance
         && res.statusCode >= 200 && res.statusCode < 300
