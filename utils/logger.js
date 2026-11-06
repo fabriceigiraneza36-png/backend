@@ -9,6 +9,9 @@ if (!fs.existsSync(logsDir)) {
 
 const consoleFormat = format.combine(
   format.timestamp({ format: "HH:mm:ss" }),
+  // Preserve details passed as logger.warn("message", err.message). Without
+  // splat(), Winston's printf formatter silently discarded those diagnostics.
+  format.splat(),
   format.colorize({ all: true }),
   format.printf(({ level, message, timestamp, ...meta }) => {
     const metaStr = Object.keys(meta).length > 0 && Object.keys(meta).some(k => k !== 'service') 
