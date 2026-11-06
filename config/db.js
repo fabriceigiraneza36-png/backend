@@ -104,7 +104,7 @@ const query = async (text, params = []) => {
     // This measures end-to-end pool/network round-trip, not server execution
     // time alone. Keep SQL compact and include pool pressure for diagnosis.
     if (duration >= slowQueryThresholdMs) {
-      const sqlSummary = String(text).replace(/\\s+/g, " ").trim().slice(0, 160);
+      const sqlSummary = String(text).replace(/\s+/g, " ").trim().slice(0, 160);
       logger.warn(
         `[DB] Slow database round-trip (${duration}ms; pool=${pool.totalCount}/${poolOptions.max}; waiting=${pool.waitingCount}): ${sqlSummary}`,
       );

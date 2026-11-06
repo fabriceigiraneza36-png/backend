@@ -409,17 +409,6 @@ const ensureCountriesSchema = async () => {
     await query(`
       DO $$
       BEGIN
-        IF EXISTS (
-          SELECT 1 FROM information_schema.columns
-           WHERE table_schema = 'public'
-             AND table_name = 'countries'
-             AND column_name = 'id'
-             AND data_type = 'integer'
-        ) THEN
-          ALTER TABLE countries ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
-          ALTER SEQUENCE countries_id_seq AS BIGINT;
-        END IF;
-
         IF NOT EXISTS (
           SELECT 1 FROM information_schema.columns
            WHERE table_schema = 'public'
