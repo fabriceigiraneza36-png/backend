@@ -410,10 +410,10 @@ const pingAdminNewRequest = (booking) => {
       category: category,
       title: "New booking request",
       message: `Booking ${booking?.booking_number || ""} from ${booking?.full_name || "a traveller"}${booking?.attraction_name ? ` for ${booking.attraction_name}` : ""}.`,
-      actionUrl: "/bookings",
-      actionLabel: "Review",
+      actionUrl: booking?.id ? "/bookings?bookingId=" + encodeURIComponent(booking.id) : "/bookings",
+      actionLabel: "Review booking",
       priority: "high",
-      metadata: { bookingNumber: booking?.booking_number || null, bookingType, attractionName: booking?.attraction_name || null },
+      metadata: { bookingId: booking?.id || null, bookingNumber: booking?.booking_number || null, bookingType, attractionName: booking?.attraction_name || null },
     }).catch(() => {});
   } catch {
     // non-fatal
