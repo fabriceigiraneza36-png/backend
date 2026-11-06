@@ -896,6 +896,7 @@ const ensureDestinationsSchema = async () => {
     await pool.query(
       `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS is_active BOOLEAN DEFAULT true`,
     );
+    await pool.query(`ALTER TABLE destinations ADD COLUMN IF NOT EXISTS review_questions JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
     logger.info("[DB] ✅ Destinations table schema verified & updated");
   } catch (err) {
     logger.warn(
