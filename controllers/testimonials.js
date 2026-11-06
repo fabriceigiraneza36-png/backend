@@ -246,7 +246,7 @@ exports.submitPublic = async (req, res, next) => {
       });
     }
 
-    const ratingNum = parseInt(String(rawRating ?? "5"), 10);
+    const ratingNum = parseInt(String(rawRating ?? ""), 10);
     if (!Number.isFinite(ratingNum) || ratingNum < 1 || ratingNum > 5) {
       return res.status(400).json({
         success: false,
