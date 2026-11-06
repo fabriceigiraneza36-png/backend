@@ -43,13 +43,10 @@ function getVapidPublicKey () {
   return vapidPublicKey
 }
 
-async function sendPushToSubscription (subscription, payload) {
+async function sendPushToSubscription (subscription, payload, sendOptions = {}) {
   if (!pushReady) throw new Error('Web Push is not initialized. Configure stable VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY on the backend.')
   if (!subscription?.endpoint) throw new Error('Push subscription endpoint is missing.')
 
-  // PostgreSQL stores p256dh/auth as columns, while web-push requires them
-  // under subscription.keys. Accept either shape so every caller uses the
-  // same safe normalization before encrypting and sending a payload.
   const keys = subscription.keys || {
     p256dh: subscription.p256dh,
     auth: subscription.auth,
@@ -66,24 +63,39 @@ async function sendPushToSubscription (subscription, payload) {
     },
   }
 
+  const ttl = Number.isInteger(sendOptions.TTL) && sendOptions.TTL >= 0
+    ? sendOptions.TTL
+    : 300
+  const allowedUrgencies = ['very-low', 'low', 'normal', 'high']
+  const urgency = allowedUrgencies.includes(sendOptions.urgency)
+    ? sendOptions.urgency
+    : 'normal'
+  const options = { TTL: ttl, urgency }
+  if (typeof sendOptions.topic === 'string' && /^[A-Za-z0-9_-]{1,32}$/.test(sendOptions.topic)) {
+    options.topic = sendOptions.topic
+  }
+
   try {
-    const result = await webpush.sendNotification(normalizedSubscription, JSON.stringify(payload))
-    return result
+    return await webpush.sendNotification(normalizedSubscription, JSON.stringify(payload), options)
   } catch (err) {
     if (err.statusCode === 410 || err.statusCode === 404) {
-      logger.info('[Push] Subscription expired/gone, will be cleaned by retry')
+      logger.info('[Push] Subscription expired/gone; the delivery layer will remove it.')
     } else {
-      logger.warn('[Push] sendNotification failed:', { statusCode: err.statusCode || null, message: err.message, endpoint: String(subscription.endpoint || '').slice(0, 90) })
+      logger.warn('[Push] sendNotification failed:', {
+        statusCode: err.statusCode || null,
+        message: err.message,
+        endpoint: String(subscription.endpoint || '').slice(0, 90),
+      })
     }
     throw err
   }
 }
 
-async function sendPushToSubscriptions (subscriptions, payload) {
+async function sendPushToSubscriptions (subscriptions, payload, sendOptions = {}) {
   const results = []
   for (const sub of subscriptions) {
     try {
-      const res = await sendPushToSubscription(sub, payload)
+      const res = await sendPushToSubscription(sub, payload, sendOptions)
       results.push({ endpoint: sub.endpoint, success: true, result: res })
     } catch (err) {
       results.push({
