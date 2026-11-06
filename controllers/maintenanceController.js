@@ -5,6 +5,7 @@
 const { query } = require('../config/db')
 const logger = require('../utils/logger')
 const { destroyCloudinaryUrls } = require('../utils/cloudinaryCleanup')
+const { createNotificationInternal } = require('../routes/notifications')
 
 const CATEGORY_TABLES = {
   destinations: [
@@ -211,7 +212,7 @@ const processPurgeJob = async (jobId) => {
     if (!claimed.rows.length) return
 
     const { rows: jobs } = await query(
-      'SELECT category, tables, total_records, deleted_records, table_results FROM maintenance_purge_jobs WHERE id = $1',
+      'SELECT category, tables, total_records, deleted_records, table_results, requested_by FROM maintenance_purge_jobs WHERE id = $1',
       [jobId],
     )
     const job = jobs[0]
@@ -284,6 +285,40 @@ const processPurgeJob = async (jobId) => {
     logger.warn(
       `[Maintenance] PURGE COMPLETE category="${job.category}" job=${jobId} deleted=${deletedRecords}`,
     )
+
+    // Persist a single, detailed admin alert after the entire multi-table purge
+    // has finished. A notification failure must never mark a successful purge
+    // as failed or trigger a duplicate destructive retry.
+    try {
+      const categoryLabel = String(job.category).replace(/[_-]+/g, ' ');
+      await createNotificationInternal({
+        senderType: 'system',
+        senderName: 'Altuvera Maintenance',
+        type: 'alert',
+        category: 'admin_activity',
+        title: categoryLabel.charAt(0).toUpperCase() + categoryLabel.slice(1) + ' data purge completed',
+        message: 'The ' + categoryLabel + ' purge completed successfully. '
+          + Number(deletedRecords || 0).toLocaleString() + ' records were deleted across '
+          + tables.length + ' table(s). Requested by '
+          + (job.requested_by || 'an administrator') + '.',
+        actionUrl: '/maintenance',
+        actionLabel: 'View purge report',
+        priority: 'high',
+        targetScope: 'admin',
+        metadata: {
+          action: 'table_purge',
+          category: job.category,
+          purge_job_id: jobId,
+          tables,
+          deleted_records: Number(deletedRecords || 0),
+          total_records: Number(totalRecords || 0),
+          table_results: results,
+          requested_by: job.requested_by || null,
+        },
+      });
+    } catch (notificationError) {
+      logger.error('[Maintenance] Could not notify admins about completed purge:', notificationError.message);
+    }
   } catch (err) {
     logger.error(`[Maintenance] purge job ${jobId} failed:`, err.message)
     await updateJob(jobId, {
