@@ -414,6 +414,7 @@ exports.submitPublic = async (req, res, next) => {
         question_id: questionId,
         prompt: String(question.prompt || "").slice(0, 300),
         type,
+        unit: String(question.unit || "").slice(0, 24),
         answer,
       });
     }
