@@ -63,6 +63,10 @@ const ensureSchema = async () => {
     await query(
       `ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS approval_email_sent_at TIMESTAMPTZ`,
     ).catch(() => {});
+    await query(`ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS trip_entity_type VARCHAR(24)`).catch(() => {});
+    await query(`ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS trip_entity_id BIGINT`).catch(() => {});
+    await query(`ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS expectations_met VARCHAR(24)`).catch(() => {});
+    await query(`ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS review_answers JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
 
     // Indexes
     const indexes = [
@@ -196,6 +200,69 @@ exports.getStats = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+/**
+ * GET /api/testimonials/context-search?q=...
+ * Search only active African countries, published destinations and published packages.
+ * The browser receives real database IDs and the textual names shown to reviewers.
+ */
+exports.searchReviewContexts = async (req, res, next) => {
+  try {
+    const term = String(req.query.q || "").trim().slice(0, 60);
+    if (term.length < 2) return res.json({ success: true, data: [] });
+
+    const pattern = `%${term}%`;
+    const prefix = `${term}%`;
+    const result = await query(
+      `SELECT id, type, title, slug, country_name, review_questions
+       FROM (
+         SELECT d.id::TEXT AS id, 'destination'::TEXT AS type,
+                d.name AS title, d.slug, c.name AS country_name,
+                COALESCE(d.review_questions, '[]'::jsonb) AS review_questions
+         FROM destinations d
+         LEFT JOIN countries c ON c.id = d.country_id
+         WHERE d.is_active = true
+           AND d.status = 'published'
+           AND d.name ILIKE $1
+
+         UNION ALL
+
+         SELECT c.id::TEXT AS id, 'country'::TEXT AS type,
+                c.name AS title, c.slug, c.name AS country_name,
+                '[]'::jsonb AS review_questions
+         FROM countries c
+         WHERE c.is_active = true
+           AND LOWER(COALESCE(c.continent, '')) = 'africa'
+           AND c.name ILIKE $1
+
+         UNION ALL
+
+         SELECT p.id::TEXT AS id, 'package'::TEXT AS type,
+                p.title AS title, p.slug, c.name AS country_name,
+                COALESCE(p.review_questions, '[]'::jsonb) AS review_questions
+         FROM packages p
+         LEFT JOIN destinations d ON d.id = p.destination_id
+         LEFT JOIN countries c ON c.id = d.country_id
+         WHERE COALESCE(p.is_published, true) = true
+           AND p.title ILIKE $1
+       ) AS matches
+       ORDER BY CASE WHEN title ILIKE $2 THEN 0 ELSE 1 END, LOWER(title)
+       LIMIT 18`,
+      [pattern, prefix],
+    );
+
+    return res.json({
+      success: true,
+      data: result.rows.map((row) => ({
+        ...row,
+        review_questions: Array.isArray(row.review_questions) ? row.review_questions : [],
+      })),
+    });
+  } catch (err) {
+    logger.error("[Testimonials] context search failed:", err.message);
+    return next(err);
+  }
+};
+
 /** GET /api/testimonials/:id */
 exports.getOne = async (req, res, next) => {
   try {
@@ -238,6 +305,116 @@ exports.submitPublic = async (req, res, next) => {
     const rawRating   = req.body.rating;
     const rawTrip     = String(req.body.trip     || "").trim();
     const rawLocation = String(req.body.location || "").trim();
+    const rawEntityType = String(req.body.trip_entity_type || "").trim().toLowerCase();
+    const rawEntityId = String(req.body.trip_entity_id || "").trim();
+    const rawExpectations = String(req.body.expectations_met || "").trim().toLowerCase();
+    let selectedContext = null;
+
+    if (rawTrip && (!rawEntityType || !rawEntityId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Please choose a matching destination, country or package from the suggestions.",
+        code: "REVIEW_CONTEXT_NOT_SELECTED",
+      });
+    }
+
+    if (rawEntityType || rawEntityId) {
+      if (!["destination", "country", "package"].includes(rawEntityType) || !/^\\d+$/.test(rawEntityId) || Number(rawEntityId) < 1) {
+        return res.status(400).json({
+          success: false,
+          error: "Please select a valid destination, country or package from the search results.",
+          code: "INVALID_REVIEW_CONTEXT",
+        });
+      }
+
+      let contextResult;
+      if (rawEntityType === "destination") {
+        contextResult = await query(
+          `SELECT d.id, d.name AS title, COALESCE(d.review_questions, '[]'::jsonb) AS review_questions
+           FROM destinations d
+           WHERE d.id = $1 AND d.is_active = true AND d.status = 'published'
+           LIMIT 1`,
+          [rawEntityId],
+        );
+      } else if (rawEntityType === "country") {
+        contextResult = await query(
+          `SELECT c.id, c.name AS title, '[]'::jsonb AS review_questions
+           FROM countries c
+           WHERE c.id = $1 AND c.is_active = true
+             AND LOWER(COALESCE(c.continent, '')) = 'africa'
+           LIMIT 1`,
+          [rawEntityId],
+        );
+      } else {
+        contextResult = await query(
+          `SELECT p.id, p.title, COALESCE(p.review_questions, '[]'::jsonb) AS review_questions
+           FROM packages p
+           WHERE p.id = $1 AND COALESCE(p.is_published, true) = true
+           LIMIT 1`,
+          [rawEntityId],
+        );
+      }
+
+      selectedContext = contextResult.rows[0] || null;
+      if (!selectedContext) {
+        return res.status(400).json({
+          success: false,
+          error: "That experience is no longer available. Please search and select another item.",
+          code: "REVIEW_CONTEXT_UNAVAILABLE",
+        });
+      }
+    }
+
+    if (rawExpectations && !["met", "partly_met", "not_met"].includes(rawExpectations)) {
+      return res.status(400).json({
+        success: false,
+        error: "Please choose a valid expectations response.",
+      });
+    }
+
+    const configuredQuestions = Array.isArray(selectedContext?.review_questions)
+      ? selectedContext.review_questions
+      : [];
+    const submittedAnswers = Array.isArray(req.body.review_answers) ? req.body.review_answers : [];
+    const answerById = new Map(submittedAnswers.map((item) => [
+      String(item?.question_id || item?.id || ""),
+      item?.value,
+    ]));
+    const reviewAnswers = [];
+
+    for (const question of configuredQuestions) {
+      const questionId = String(question?.id || "");
+      if (!questionId || !answerById.has(questionId)) continue;
+      const rawAnswer = answerById.get(questionId);
+      if (rawAnswer === null || rawAnswer === undefined || String(rawAnswer).trim() === "") continue;
+
+      const type = String(question.type || "short_text");
+      let answer = rawAnswer;
+      if (type === "number" || type === "rating") {
+        answer = Number(rawAnswer);
+        if (!Number.isFinite(answer) || (type === "rating" && (answer < 1 || answer > 5))) continue;
+      } else if (type === "yes_no") {
+        answer = String(rawAnswer).toLowerCase();
+        if (!["yes", "no"].includes(answer)) continue;
+      } else if (type === "date") {
+        answer = String(rawAnswer);
+        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(answer) || Number.isNaN(Date.parse(answer))) continue;
+      } else if (type === "choice") {
+        answer = String(rawAnswer).slice(0, 160);
+        const options = Array.isArray(question.options) ? question.options.map(String) : [];
+        if (!options.includes(answer)) continue;
+      } else {
+        answer = String(rawAnswer).trim().slice(0, type === "long_text" ? 2000 : 500);
+        if (!answer) continue;
+      }
+
+      reviewAnswers.push({
+        question_id: questionId,
+        prompt: String(question.prompt || "").slice(0, 300),
+        type,
+        answer,
+      });
+    }
 
     if (!rawText) {
       return res.status(400).json({
@@ -297,19 +474,24 @@ exports.submitPublic = async (req, res, next) => {
     const result = await query(
       `INSERT INTO testimonials
          (name, location, avatar_url, rating, trip, date_text,
-          testimonial_text, is_featured, is_active, sort_order,
-          user_id, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,false,false,0,$8,NOW(),NOW())
-       RETURNING ${COLS}, user_id`,
+          testimonial_text, is_featured, is_active, sort_order, user_id,
+          trip_entity_type, trip_entity_id, expectations_met, review_answers,
+          created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,false,false,0,$8,$9,$10,$11,$12::jsonb,NOW(),NOW())
+       RETURNING ${COLS}, user_id, trip_entity_type, trip_entity_id, expectations_met, review_answers`,
       [
         displayName,
         rawLocation || null,
-        user.avatar  || null,
+        user.avatar || null,
         ratingNum,
-        rawTrip      || null,
+        selectedContext?.title || null,
         dateText,
         rawText,
         user.id,
+        selectedContext ? rawEntityType : null,
+        selectedContext ? rawEntityId : null,
+        rawExpectations || null,
+        JSON.stringify(reviewAnswers),
       ],
     );
 
@@ -406,7 +588,7 @@ exports.adminGetAll = async (req, res, next) => {
 
     params.push(pagination.limit, pagination.offset);
     const result = await query(
-      `SELECT ${COLS}, user_id FROM testimonials ${where}
+      `SELECT ${COLS}, user_id, trip_entity_type, trip_entity_id, expectations_met, review_answers FROM testimonials ${where}
        ORDER BY ${sortCol} ${sortDir}
        LIMIT $${idx++} OFFSET $${idx}`,
       params,
