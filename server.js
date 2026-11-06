@@ -733,11 +733,15 @@ app.set('io', io)
 // queued in PostgreSQL: a live admin gets a 10-second retouch window; otherwise
 // the worker sends them promptly and records the outcome for the admin panel.
 const emailCampaignWorker = require('./controllers/emailBroadcastController')
+const emailCampaignPollMs = Math.max(
+  1_000,
+  Number(process.env.EMAIL_CAMPAIGN_POLL_MS) || 5_000,
+)
 setInterval(() => {
   emailCampaignWorker.processDueCampaigns(io).catch((err) => {
     logger.error('[EmailCampaignQueue] scheduled worker error:', err.message)
   })
-}, 2_000)
+}, emailCampaignPollMs)
 
 // Durable encrypted email outbox worker. Job claims use PostgreSQL row updates,
 // so multiple backend instances can safely run this pump without double-claiming.
@@ -762,7 +766,7 @@ const emailOutboxWorker = setInterval(async () => {
   } finally {
     emailOutboxWorkerBusy = false
   }
-}, Math.max(1_000, Number(process.env.EMAIL_OUTBOX_POLL_MS) || 2_000))
+}, Math.max(1_000, Number(process.env.EMAIL_OUTBOX_POLL_MS) || 5_000))
 emailOutboxWorker.unref()
 
 // -------------------------------------------------------------------------------

@@ -32,7 +32,8 @@ const RECOMMENDED = [
   { key: "BACKEND_URL",    hint: "Your backend public URL" },
   { key: "CORS_ORIGINS",   hint: "Comma-separated extra allowed origins" },
   { key: "EMAIL_PROVIDER", hint: "auto, resend, sendgrid, smtp, or posta; keep production pinned to resend until a migration is approved" },
-  { key: "EMAIL_OUTBOX_POLL_MS", hint: "Email outbox worker interval in milliseconds (default 2000)" },
+  { key: "EMAIL_OUTBOX_POLL_MS", hint: "Email outbox worker interval in milliseconds (default 5000; minimum 1000)" },
+  { key: "EMAIL_CAMPAIGN_POLL_MS", hint: "Automatic email campaign worker interval in milliseconds (default 5000; minimum 1000)" },
 ];
 
 const OPTIONAL = [

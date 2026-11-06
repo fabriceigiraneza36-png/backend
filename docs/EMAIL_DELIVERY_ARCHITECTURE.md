@@ -47,7 +47,8 @@ Required production secret:
 Operational settings:
 - `EMAIL_PROVIDER=resend`
 - `EMAIL_FAILOVER_ENABLED=false`
-- `EMAIL_OUTBOX_POLL_MS=2000`
+- `EMAIL_OUTBOX_POLL_MS=5000` (default; lower bound 1000 ms)
+- `EMAIL_CAMPAIGN_POLL_MS=5000` (default; lower bound 1000 ms)
 
 Operator diagnostics:
 - `npm run check:email` checks provider/key/webhook readiness without sending a message or printing secret values.
