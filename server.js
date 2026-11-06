@@ -2398,6 +2398,30 @@ async function initializeServer () {
           updated_at  TIMESTAMP DEFAULT NOW()
         )
       `)
+
+      // Clean up historical duplicate browser endpoints before enforcing one
+      // row per endpoint. The most recently refreshed account ownership wins.
+      await query(
+        "DELETE FROM push_subscriptions older USING push_subscriptions newer " +
+          "WHERE older.endpoint = newer.endpoint AND (" +
+          "COALESCE(older.updated_at, older.created_at, 'epoch'::timestamp) < " +
+          "COALESCE(newer.updated_at, newer.created_at, 'epoch'::timestamp) " +
+          "OR (COALESCE(older.updated_at, older.created_at, 'epoch'::timestamp) = " +
+          "COALESCE(newer.updated_at, newer.created_at, 'epoch'::timestamp) AND older.id < newer.id))"
+      )
+      await query(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_push_subscriptions_endpoint_unique " +
+          "ON push_subscriptions (endpoint)"
+      )
+      // Persistent per-notification/per-browser receipts make delivery
+      // idempotent across duplicated requests and backend restarts.
+      await query(
+        "CREATE TABLE IF NOT EXISTS push_delivery_receipts (" +
+          "notification_id TEXT NOT NULL, endpoint_hash CHAR(64) NOT NULL, " +
+          "delivery_state VARCHAR(12) NOT NULL DEFAULT 'pending', " +
+          "claimed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), sent_at TIMESTAMPTZ, " +
+          "last_error TEXT, PRIMARY KEY (notification_id, endpoint_hash))"
+      )
       logger.info('? Push Subscriptions table ready')
     } catch (err) {
       logger.warn('??  Push Subscriptions table (non-fatal):', err.message)
