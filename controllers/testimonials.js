@@ -18,7 +18,7 @@ const ALLOWED_FIELDS = [
   "date_text", "testimonial_text", "is_featured", "is_active", "sort_order",
 ];
 
-const MAX_WORDS               = 60;
+const MAX_WORDS               = 150;
 const RATE_LIMIT_HOURS        = parseInt(process.env.REVIEW_RATE_LIMIT_HOURS || "24", 10);
 const RATE_LIMIT_INTERVAL     = `${RATE_LIMIT_HOURS} hours`;
 
@@ -112,23 +112,16 @@ const extractUser = (req) => {
 /**
  * GET /api/testimonials — paginated list
  *   ?active=true  (default) → only active testimonials (public default)
- *   ?active=all   → every testimonial regardless of active flag
- *                  (used by the Home page so all approved/submitted stories
- *                   show; admin can still hide individual ones via is_active)
+ *   Public requests always return active/approved testimonials only.
+ *   Admins use /admin/all to review pending submissions.
  *   ?featured=true → additionally filter by is_featured
  */
 exports.getAll = async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, featured, active = "true" } = req.query;
+    const { page = 1, limit = 20, featured } = req.query;
     const params  = [];
-    const clauses = [];
+    const clauses = ["is_active = true"];
     let   idx     = 1;
-
-    if (active === "all") {
-      // Show every testimonial; admins hide individual ones with is_active.
-    } else {
-      clauses.push(`is_active = ${active === "false" ? "false" : "true"}`);
-    }
 
     if (featured !== undefined) {
       clauses.push(`is_featured = $${idx++}`);
@@ -203,7 +196,7 @@ exports.getOne = async (req, res, next) => {
       });
 
     const result = await query(
-      `SELECT ${COLS} FROM testimonials WHERE id = $1`, [id],
+      `SELECT ${COLS} FROM testimonials WHERE id = $1 AND is_active = true`, [id],
     );
     if (!result.rows[0])
       return res.status(404).json({
