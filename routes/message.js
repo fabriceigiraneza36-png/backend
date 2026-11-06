@@ -89,7 +89,8 @@ try {
     }
   }
 } catch (err) {
-  logger.warn("[Messages] Could not load utils/messaging:", err.message, "— all inline fallbacks active");
+  logger.warn(`[Messages] Could not load utils/messaging: ${err.message}${err.code ? ` (code=${err.code})` : ""}`);
+  if (err.stack) logger.debug(err.stack);
 }
 
 /* ── Inline fallback: listConversations ─────────────────────────────────── */

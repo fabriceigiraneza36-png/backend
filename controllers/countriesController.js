@@ -7,67 +7,6 @@ const { slugify } = require("../utils/slugify");
 const { normalizeImages, urlsOnly } = require("../utils/media");
 const { destroyCloudinaryUrls, extractCloudinaryUrlsFromValue } = require("../utils/cloudinaryCleanup");
 
-/* ═══════════════════════════════════════════════════════════════════════════
-    SAFE REQUIRE: HELPERS & SERVICE RESOLUTION
-═══════════════════════════════════════════════════════════════════════════ */
-
-let getCountryService;
-let sanitizeInput;
-
-try {
-  ({
-    getCountryService,
-    sanitizeInput,
-  } = require("../services/countryService"));
-} catch (err) {
-  logger.warn("[Countries] countryService not found — trying legacy paths:", err.message);
-
-  const LEGACY_PATHS = [
-    "../services/country",
-    "../utils/countryService",
-    "../services/countryService",
-    "../utils/country",
-  ];
-
-  for (const p of LEGACY_PATHS) {
-    try {
-      const mod = require(p);
-      if (typeof mod.getCountryService === "function") {
-        getCountryService = mod.getCountryService;
-        logger.info(`[Countries] ✅ Using getCountryService from: ${p}`);
-        break;
-      }
-      if (typeof mod.default === "object" && mod.default.getCountryService) {
-        getCountryService = mod.default.getCountryService;
-        logger.info(`[Countries] ✅ Using getCountryService from: ${p} (default export)`);
-        break;
-      }
-    } catch {/* try next */}
-  }
-
-  if (!getCountryService) {
-    logger.warn("[Countries] No countryService found — using stub");
-    getCountryService = () => ({});
-  }
-
-  try {
-    const mod = require("../utils/helpers");
-    if (typeof mod.sanitizeInput === "function") {
-      sanitizeInput = mod.sanitizeInput;
-      logger.info("[Countries] ✅ Using sanitizeInput from: ../utils/helpers");
-    }
-  } catch (err) {
-    logger.warn("[Countries] helpers not found — using basic sanitize", err.message);
-    sanitizeInput = (input) => {
-      if (typeof input !== "string") return "";
-      return input
-        .replace(/[<>]/g, "")
-        .replace(/['"]/g, "")
-        .trim();
-    };
-  }
-}
-
 let countryMediaSchemaPromise = null;
 const ensureCountryMediaSchema = async () => {
   if (countryMediaSchemaPromise) return countryMediaSchemaPromise;

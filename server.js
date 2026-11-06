@@ -187,6 +187,9 @@ const isOriginAllowed = (origin) => {
   if (!origin)  return true          // same-origin / Postman / curl
   if (!IS_PROD) return true          // allow all in development
   if (ALLOWED_ORIGINS.includes(origin)) return true
+  // Permit previews for the two trusted Altuvera Vercel projects only.
+  // The project and team suffix are pinned; arbitrary *.vercel.app origins remain blocked.
+  if (/^https:\/\/(?:altuvera|altuverapanel)-[a-z0-9]+-fabrice-igiranezas-projects\.vercel\.app$/i.test(origin)) return true
   if (/^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin)) return true
   return false
 }
@@ -369,65 +372,94 @@ const ensurePackagesSchema = async () => {
 // -- Countries -----------------------------------------------------------------
 const ensureCountriesSchema = async () => {
   try {
+    // Keep table creation and catalog/column upgrades as separate statements.
+    // PostgreSQL cannot execute CREATE TABLE followed by DO in one unterminated command.
     await query(`
-CREATE TABLE IF NOT EXISTS countries (
-         id               BIGSERIAL PRIMARY KEY,
-         name             VARCHAR(150)  NOT NULL,
-         slug             VARCHAR(150)  UNIQUE,
-         code             VARCHAR(10)   UNIQUE,
-         capital          VARCHAR(150),
-         region           VARCHAR(100),
-         continent        VARCHAR(100),
-         flag_url         TEXT,
-         image_url        TEXT,
-         cover_image_url  TEXT,
-         description      TEXT,
-         highlights       JSONB         DEFAULT '[]'::JSONB,
-         facts            JSONB         DEFAULT '{}'::JSONB,
-         tags             TEXT[]        DEFAULT ARRAY[]::TEXT[],
-         currency         VARCHAR(50),
-         language         VARCHAR(100),
-         timezone         VARCHAR(100),
-         visa_info        TEXT,
-         best_time        VARCHAR(255),
-         is_active        BOOLEAN       NOT NULL DEFAULT TRUE,
-         is_featured      BOOLEAN       NOT NULL DEFAULT FALSE,
-         sort_order       INTEGER       DEFAULT 0,
-         view_count       INTEGER       DEFAULT 0,
-         meta_title       VARCHAR(255),
-         meta_description TEXT,
-         created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
-         updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
-       )
-       -- Ensure id is bigint for existing tables
-       DO $$
-       BEGIN
-          IF EXISTS (SELECT 1 FROM information_schema.columns 
-                     WHERE table_name='countries' AND column_name='id' 
-                     AND data_type = 'integer') THEN
-              ALTER TABLE countries ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
-              ALTER SEQUENCE countries_id_seq AS BIGINT;
-          END IF;
-    -- Add code column if missing
-    IF NOT EXISTS (SELECT 1 FROM information_schema.columns 
-                   WHERE table_name='countries' AND column_name='code') THEN
-        ALTER TABLE countries ADD COLUMN code VARCHAR(10) UNIQUE;
-    END IF;
-       END $$;
-    `)
+      CREATE TABLE IF NOT EXISTS countries (
+        id               BIGSERIAL PRIMARY KEY,
+        name             VARCHAR(150)  NOT NULL,
+        slug             VARCHAR(150)  UNIQUE,
+        code             VARCHAR(10)   UNIQUE,
+        capital          VARCHAR(150),
+        region           VARCHAR(100),
+        continent        VARCHAR(100),
+        flag_url         TEXT,
+        image_url        TEXT,
+        cover_image_url  TEXT,
+        description      TEXT,
+        highlights       JSONB         DEFAULT '[]'::JSONB,
+        facts            JSONB         DEFAULT '{}'::JSONB,
+        tags             TEXT[]        DEFAULT ARRAY[]::TEXT[],
+        currency         VARCHAR(50),
+        language         VARCHAR(100),
+        timezone         VARCHAR(100),
+        visa_info        TEXT,
+        best_time        VARCHAR(255),
+        is_active        BOOLEAN       NOT NULL DEFAULT TRUE,
+        is_featured      BOOLEAN       NOT NULL DEFAULT FALSE,
+        sort_order       INTEGER       DEFAULT 0,
+        view_count       INTEGER       DEFAULT 0,
+        meta_title       VARCHAR(255),
+        meta_description TEXT,
+        created_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW(),
+        updated_at       TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+      )
+    `);
+
+    await query(`
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'countries'
+             AND column_name = 'id'
+             AND data_type = 'integer'
+        ) THEN
+          ALTER TABLE countries ALTER COLUMN id TYPE BIGINT USING id::BIGINT;
+          ALTER SEQUENCE countries_id_seq AS BIGINT;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'countries'
+             AND column_name = 'code'
+        ) THEN
+          ALTER TABLE countries ADD COLUMN code VARCHAR(10) UNIQUE;
+        END IF;
+
+        IF NOT EXISTS (
+          SELECT 1 FROM information_schema.columns
+           WHERE table_schema = 'public'
+             AND table_name = 'countries'
+             AND column_name = 'sort_order'
+        ) THEN
+          ALTER TABLE countries ADD COLUMN sort_order INTEGER DEFAULT 0;
+        END IF;
+      END $$;
+    `);
 
     const indexes = [
-      `CREATE INDEX IF NOT EXISTS idx_countries_slug     ON countries(slug)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_code     ON countries(code)`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_active   ON countries(is_active)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_slug ON countries(slug)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_code ON countries(code)`,
+      `CREATE INDEX IF NOT EXISTS idx_countries_active ON countries(is_active)`,
       `CREATE INDEX IF NOT EXISTS idx_countries_featured ON countries(is_featured) WHERE is_featured = true`,
-      `CREATE INDEX IF NOT EXISTS idx_countries_sort     ON countries(sort_order ASC)`,
-    ]
-    for (const idx of indexes) await query(idx).catch(() => {})
+      `CREATE INDEX IF NOT EXISTS idx_countries_sort ON countries(sort_order ASC)`,
+    ];
+    for (const indexSql of indexes) {
+      try {
+        await query(indexSql);
+      } catch (err) {
+        logger.warn(`[CountriesSchema] Index ensure failed: ${err.message}`);
+        throw err;
+      }
+    }
 
-    logger.info('? Countries schema ready')
+    logger.info('[CountriesSchema] Countries schema ready');
   } catch (err) {
-    logger.warn('[CountriesSchema] non-fatal:', err.message)
+    logger.warn(`[CountriesSchema] Startup schema ensure failed: ${err.message}`);
+    throw err;
   }
 }
 

@@ -250,7 +250,6 @@ async function listConversations({
   adminView = false,
 } = "") {
 
-  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   const offset     = (Math.max(1, page) - 1) * Math.max(1, limit);
   const conditions = ["c.deleted_at IS NULL"];
   const params     = [];
@@ -306,18 +305,16 @@ async function listConversations({
   const where = conditions.join(" AND ");
 
   /* Total count */
-  const countRes = await query(
+  const [countRes, rowsRes] = await Promise.all([
+    query(
     `SELECT COUNT(*)::INT AS total
        FROM conversations c
        LEFT JOIN users u ON u.id = c.user_id
        LEFT JOIN message_groups g ON g.id = c.group_id
       WHERE ${where}`,
     params
-  );
-  const total = countRes.rows[0]?.total || 0;
-
-  /* Paginated rows */
-  const rowsRes = await query(
+  ),
+    query(
     `SELECT
        c.*,
        g.name        AS group_name,
@@ -365,7 +362,9 @@ async function listConversations({
        c.created_at DESC
      LIMIT $${p} OFFSET $${p + 1}`,
     [...params, limit, offset]
-  );
+  ),
+  ]);
+  const total = countRes.rows[0]?.total || 0;
 
   /* Merge user info into each row for convenience */
   const rows = rowsRes.rows.map((row) => ({
@@ -396,7 +395,6 @@ async function listConversations({
    getConversationWithMessages
    ───────────────────────────────────────────────────────────────────────────── */
 async function getConversationWithMessages(conversationId, options = {}) {
-  await query("ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ");
   if (!conversationId) throw new Error("conversationId is required");
 
   /* Conversation + user info */

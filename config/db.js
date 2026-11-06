@@ -18,7 +18,16 @@ const logger        = require("../utils/logger");
 
 // ── Connection Configuration ─────────────────────────────────────────────────
 
-const connectionString = process.env.DATABASE_URL || null;
+const normalizeDatabaseUrl = (value) => {
+  if (!value) return null;
+  // node-postgres 8.18 warns on legacy SSL modes; Neon supports full certificate
+  // verification, so normalize these modes instead of weakening TLS checks.
+  return String(value).replace(
+    /([?&]sslmode=)(?:prefer|require|verify-ca)(?=(&|#|$))/i,
+    '$1verify-full',
+  );
+};
+const connectionString = normalizeDatabaseUrl(process.env.DATABASE_URL);
 
 const dbConfig = connectionString
   ? { connectionString }
@@ -36,8 +45,11 @@ const poolOptions = connectionString
   ? {
       connectionString,
       ssl:
-        process.env.DB_SSL === "false" ? false : { rejectUnauthorized: false },
-      max:                    parseInt(process.env.DB_POOL_MAX,        10) || 30,
+        process.env.DB_SSL === "false"
+          ? false
+          : { rejectUnauthorized: process.env.DB_SSL_REJECT_UNAUTHORIZED !== "false" },
+      // Keep the standalone pg pool bounded for a single small API service.
+      max:                    parseInt(process.env.DB_POOL_MAX,        10) || 12,
       idleTimeoutMillis:      parseInt(process.env.DB_IDLE_MS,         10) || 300_000,
       connectionTimeoutMillis:parseInt(process.env.DB_CONN_TIMEOUT_MS, 10) || 10_000,
       statement_timeout:       parseInt(process.env.DB_STATEMENT_TIMEOUT_MS, 10) || 30_000,
@@ -45,7 +57,7 @@ const poolOptions = connectionString
     }
   : {
       ...dbConfig,
-      max:                    parseInt(process.env.DB_POOL_MAX,         10) || 30,
+      max:                    parseInt(process.env.DB_POOL_MAX,         10) || 12,
       min:                    parseInt(process.env.DB_POOL_MIN,         10) || 5,
       idleTimeoutMillis:      parseInt(process.env.DB_IDLE_MS,          10) || 300_000,
       connectionTimeoutMillis:parseInt(process.env.DB_CONN_TIMEOUT_MS,  10) || 10_000,
@@ -79,13 +91,25 @@ const startHeartbeat = () => {
 
 // ── Query Wrapper with Auto-Retry ────────────────────────────────────────────
 
+const slowQueryThresholdMs = Math.max(
+  250,
+  Number.parseInt(process.env.DB_SLOW_QUERY_MS, 10) || 750,
+);
+
 const query = async (text, params = []) => {
   const start = Date.now();
   try {
     const result   = await pool.query(text, params);
     const duration = Date.now() - start;
-    if (duration > 200) {
-      logger.warn(`[DB] Slow query (${duration}ms): ${text.substring(0, 80)}...`);
+    // This measures end-to-end pool/network round-trip, not server execution
+    // time alone. Keep SQL compact and include pool pressure for diagnosis.
+    if (duration >= slowQueryThresholdMs) {
+      const sqlSummary = String(text).replace(/\\s+/g, " ").trim().slice(0, 160);
+      logger.warn(
+        `[DB] Slow database round-trip (${duration}ms; pool=${pool.totalCount}/${poolOptions.max}; waiting=${pool.waitingCount}): ${sqlSummary}`,
+      );
+    } else if (duration >= 250) {
+      logger.debug(`[DB] Database round-trip ${duration}ms`);
     }
     return result;
   } catch (err) {
@@ -135,7 +159,8 @@ const query = async (text, params = []) => {
 const sequelizeOptions = {
   dialect:  "postgres",
   logging:  false,
-  pool:     { max: 20, min: 3, acquire: 30_000, idle: 10_000 },
+  // Sequelize maintains a separate pool from pg; keep it modest and lazy.
+  pool:     { max: 6, min: 0, acquire: 30_000, idle: 10_000 },
   define:   { timestamps: true, underscored: true, freezeTableName: true },
   retry:    { max: 3 },
 };
