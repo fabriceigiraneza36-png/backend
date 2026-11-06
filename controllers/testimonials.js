@@ -222,6 +222,7 @@ exports.searchReviewContexts = async (req, res, next) => {
          LEFT JOIN countries c ON c.id = d.country_id
          WHERE d.is_active = true
            AND d.status = 'published'
+           AND LOWER(COALESCE(c.continent, '')) = 'africa'
            AND d.name ILIKE $1
 
          UNION ALL
@@ -243,6 +244,7 @@ exports.searchReviewContexts = async (req, res, next) => {
          LEFT JOIN destinations d ON d.id = p.destination_id
          LEFT JOIN countries c ON c.id = d.country_id
          WHERE COALESCE(p.is_published, true) = true
+           AND LOWER(COALESCE(c.continent, '')) = 'africa'
            AND p.title ILIKE $1
        ) AS matches
        ORDER BY CASE WHEN title ILIKE $2 THEN 0 ELSE 1 END, LOWER(title)
@@ -319,7 +321,7 @@ exports.submitPublic = async (req, res, next) => {
     }
 
     if (rawEntityType || rawEntityId) {
-      if (!["destination", "country", "package"].includes(rawEntityType) || !/^\\d+$/.test(rawEntityId) || Number(rawEntityId) < 1) {
+      if (!["destination", "country", "package"].includes(rawEntityType) || !/^\d+$/.test(rawEntityId) || Number(rawEntityId) < 1) {
         return res.status(400).json({
           success: false,
           error: "Please select a valid destination, country or package from the search results.",
@@ -398,7 +400,7 @@ exports.submitPublic = async (req, res, next) => {
         if (!["yes", "no"].includes(answer)) continue;
       } else if (type === "date") {
         answer = String(rawAnswer);
-        if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(answer) || Number.isNaN(Date.parse(answer))) continue;
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(answer) || Number.isNaN(Date.parse(answer))) continue;
       } else if (type === "choice") {
         answer = String(rawAnswer).slice(0, 160);
         const options = Array.isArray(question.options) ? question.options.map(String) : [];
