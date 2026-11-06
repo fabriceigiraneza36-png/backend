@@ -323,6 +323,7 @@ exports.ensureDestinationSchema = async () => {
        highlights               TEXT[] DEFAULT '{}'::TEXT[],
        activities               TEXT[] DEFAULT '{}'::TEXT[],
        attractions              JSONB DEFAULT '[]'::JSONB,
+       review_questions         JSONB DEFAULT '[]'::JSONB,
        wildlife                 TEXT[] DEFAULT '{}'::TEXT[],
        entrance_fee             TEXT,
        operating_hours          TEXT,
@@ -384,6 +385,7 @@ exports.ensureDestinationSchema = async () => {
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS highlights         TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS activities         TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS attractions        JSONB DEFAULT '[]'::JSONB`,
+    `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS review_questions   JSONB DEFAULT '[]'::JSONB`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS wildlife           TEXT[] DEFAULT '{}'::TEXT[]`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS entrance_fee       TEXT`,
     `ALTER TABLE destinations ADD COLUMN IF NOT EXISTS operating_hours    TEXT`,
@@ -683,6 +685,7 @@ const serialize = (row) => {
     highlights:      toArr(row.highlights),
     activities:      toArr(row.activities),
     attractions:     Array.isArray(row.attractions) ? row.attractions : (row.attractions || []),
+    review_questions: Array.isArray(row.review_questions) ? row.review_questions : (parseJson(row.review_questions, []) || []),
     wildlife:        toArr(row.wildlife),
     bestTimeToVisit: row.best_time_to_visit,
     gettingThere:    row.getting_there,
@@ -2180,6 +2183,7 @@ exports.create = async (req, res, next) => {
       highlights: toArr(data.highlights),
       activities: toArr(data.activities),
       attractions: JSON.stringify(Array.isArray(data.attractions) ? data.attractions : []),
+      review_questions: JSON.stringify(Array.isArray(data.review_questions) ? data.review_questions : []),
       wildlife: toArr(data.wildlife),
       entrance_fee: data.entrance_fee || null,
       operating_hours: data.operating_hours || null,
@@ -2342,6 +2346,10 @@ exports.update = async (req, res, next) => {
 
     if (fields.attractions !== undefined) {
       fields.attractions = JSON.stringify(Array.isArray(fields.attractions) ? fields.attractions : parseJson(fields.attractions, []))
+    }
+    if (fields.review_questions !== undefined) {
+      const prompts = Array.isArray(fields.review_questions) ? fields.review_questions : parseJson(fields.review_questions, [])
+      fields.review_questions = JSON.stringify(Array.isArray(prompts) ? prompts : [])
     }
 
     // A destination's public media can live in both destinations.image_urls
