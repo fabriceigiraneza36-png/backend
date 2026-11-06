@@ -892,7 +892,8 @@ app.get('/api/routes', (req, res) => {
 const pendingAdminDeletionAuditBatches = new Map()
 
 // ADMIN DELETION AUDIT — persist a clear admin notification after every
-// successful destructive admin API action, including bulk deletes and purges.
+// successful destructive admin API action, including bulk deletes. The
+// maintenance worker emits its own exact-count alert when a full purge finishes.
 // Notification deletion endpoints are excluded to avoid self-generating noise.
 // -------------------------------------------------------------------------------
 app.use((req, res, next) => {
@@ -929,8 +930,6 @@ app.use((req, res, next) => {
       const affectedCount = Number.isFinite(reportedCount) && reportedCount > 0
         ? reportedCount : 1
       const isWholeTable = /(?:purge|truncate|delete-all|clear-all)/i.test(endpoint)
-      const operation = isWholeTable ? 'table_purge' : affectedCount > 1 ? 'bulk_delete' : 'single_delete'
-      const actorName = req.user?.full_name || req.user?.name || req.user?.email || 'An administrator'
       const actionPaths = {
         bookings: '/bookings', package_bookings: '/bookings',
         packages: '/packages', destinations: '/destinations', countries: '/countries',
