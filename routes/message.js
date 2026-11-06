@@ -62,6 +62,7 @@ let _getOrCreateConversation,
     _markConversationRead,
     _listConversations,
     _getConversationWithMessages,
+    _getConversationByBookingId,
     _toggleReaction,
     _changeConversationStatus;
 
