@@ -903,8 +903,8 @@ app.use((req, res, next) => {
     const method = String(req.method || '').toUpperCase()
     const endpoint = String(req.originalUrl || req.url || '').split('?')[0]
     const isDelete = method === 'DELETE'
-    const role = String(req.user?.role || req.admin?.role || '').toLowerCase()
-    const isAdminAction = ['admin', 'manager'].includes(role)
+    const role = String(req.user?.role || req.user?.type || req.admin?.role || '').toLowerCase()
+    const isAdminAction = ['admin', 'manager', 'superadmin', 'super_admin', 'moderator', 'editor'].includes(role)
     const isNotificationMaintenance = /^\\/api\\/(?:admin\\/)?notifications(?:\\/|$)/i.test(endpoint)
 
     if (isDelete && isAdminAction && !isNotificationMaintenance
