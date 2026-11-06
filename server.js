@@ -125,6 +125,7 @@ const itineraryRouter = require('./routes/itineraries')
 const seoRouter                 = require('./routes/seo')
 const bookingIdentityRouter     = require('./routes/bookingIdentity')
 const accountActivityRouter      = require('./routes/accountActivity')
+const adminActivityRouter        = require('./routes/adminActivity')
 const { recordAccountActivity } = require('./utils/accountActivity')
 const resendWebhookHandler       = require('./routes/resendWebhook')
 
@@ -652,6 +653,9 @@ app.use(express.json({ limit: '10mb' }))
 app.use(express.urlencoded({ extended: true, limit: '10mb' }))
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')))
 
+// Silently journal successful write actions from authenticated admin panel sessions.
+app.use('/api', require('./middleware/adminActivityAudit'))
+
 // -- Logging -------------------------------------------------------------------
 const skipHealthLog = (req) =>
   req.url === '/health' || req.url === '/api/health'
@@ -1006,6 +1010,7 @@ app.use((req, res, next) => {
 // -------------------------------------------------------------------------------
 
 app.use('/api/admin/auth',           adminAuthRouter)
+app.use('/api/admin/activity',        adminActivityRouter)
 app.use('/api/users',                usersRouter)
 app.use('/api/bookings',             bookingsRouter)
 app.use('/api/itineraries',          itineraryRouter)
@@ -2347,6 +2352,35 @@ async function initializeServer () {
       try { await fn() } catch (err) {
         logger.warn(`??  ${name} schema (non-fatal):`, err.message)
       }
+    }
+
+    // -- Silent administrator activity journal -------------------------------
+    try {
+      await query(`
+        CREATE TABLE IF NOT EXISTS admin_activity_logs (
+          id            BIGSERIAL PRIMARY KEY,
+          actor_id      VARCHAR(120),
+          actor_name    VARCHAR(255) NOT NULL DEFAULT 'Administrator',
+          actor_email   VARCHAR(255),
+          actor_role    VARCHAR(80),
+          action        VARCHAR(60) NOT NULL,
+          resource      VARCHAR(120) NOT NULL,
+          resource_id   VARCHAR(160),
+          resource_name VARCHAR(255),
+          summary       TEXT NOT NULL,
+          method        VARCHAR(12) NOT NULL,
+          endpoint      VARCHAR(500) NOT NULL,
+          status_code   INTEGER,
+          metadata      JSONB NOT NULL DEFAULT '{}'::JSONB,
+          created_at    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        )
+      `)
+      await query('CREATE INDEX IF NOT EXISTS idx_admin_activity_created ON admin_activity_logs (created_at DESC, id DESC)')
+      await query('CREATE INDEX IF NOT EXISTS idx_admin_activity_action ON admin_activity_logs (action, created_at DESC)')
+      await query('CREATE INDEX IF NOT EXISTS idx_admin_activity_resource ON admin_activity_logs (resource, created_at DESC)')
+      logger.info('Admin activity journal schema ready')
+    } catch (err) {
+      logger.warn('Admin activity journal schema (non-fatal):', err.message)
     }
 
     // -- Push subscriptions table ---------------------------------------------
