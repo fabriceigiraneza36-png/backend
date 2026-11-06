@@ -901,18 +901,16 @@ app.use((req, res, next) => {
     const response = originalJson(body)
     const method = String(req.method || '').toUpperCase()
     const endpoint = String(req.originalUrl || req.url || '').split('?')[0]
-    const isPurge = method === 'POST' && /^\\/api\\/maintenance\\/purge\\/[^/]+/i.test(endpoint)
     const isDelete = method === 'DELETE'
     const role = String(req.user?.role || req.admin?.role || '').toLowerCase()
     const isAdminAction = ['admin', 'manager'].includes(role)
     const isNotificationMaintenance = /^\\/api\\/(?:admin\\/)?notifications(?:\\/|$)/i.test(endpoint)
 
-    if ((isDelete || isPurge) && isAdminAction && !isNotificationMaintenance
+    if (isDelete && isAdminAction && !isNotificationMaintenance
         && res.statusCode >= 200 && res.statusCode < 300
         && body?.success !== false) {
       const segments = endpoint.split('/').filter(Boolean)
-      const purgeCategory = isPurge ? segments[segments.length - 1] : ''
-      const routeKey = isPurge ? purgeCategory : (segments[1] || 'records')
+      const routeKey = segments[1] || 'records'
       const labelMap = {
         bookings: 'bookings', package_bookings: 'package bookings',
         packages: 'packages', destinations: 'destinations', countries: 'countries',
@@ -930,7 +928,7 @@ app.use((req, res, next) => {
       )
       const affectedCount = Number.isFinite(reportedCount) && reportedCount > 0
         ? reportedCount : 1
-      const isWholeTable = isPurge || /(?:purge|truncate|delete-all|clear-all)/i.test(endpoint)
+      const isWholeTable = /(?:purge|truncate|delete-all|clear-all)/i.test(endpoint)
       const operation = isWholeTable ? 'table_purge' : affectedCount > 1 ? 'bulk_delete' : 'single_delete'
       const actorName = req.user?.full_name || req.user?.name || req.user?.email || 'An administrator'
       const actionPaths = {
