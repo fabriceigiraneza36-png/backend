@@ -25,32 +25,23 @@ exports.subscribe = async (req, res) => {
       return res.status(400).json({ success: false, message: 'endpoint, p256dh, and auth are required.' })
     }
 
-    // A browser endpoint belongs to the currently signed-in admin only.
-    // Reassign it on account changes rather than leaving a previous admin subscribed.
-    await query(
-      `DELETE FROM push_subscriptions WHERE endpoint=$1 AND admin_id<>$2`,
-      [endpoint, accountId],
+    // One push endpoint represents one browser installation on this origin.
+    // A single atomic UPSERT prevents parallel app-shell/settings syncs from
+    // inserting duplicate rows and reassigns the endpoint on account changes.
+    const saved = await query(
+      "INSERT INTO push_subscriptions (admin_id, admin_email, endpoint, p256dh, auth, user_agent) " +
+        "VALUES ($1,$2,$3,$4,$5,$6) " +
+        "ON CONFLICT (endpoint) DO UPDATE SET " +
+        "admin_id = EXCLUDED.admin_id, " +
+        "admin_email = EXCLUDED.admin_email, " +
+        "p256dh = EXCLUDED.p256dh, " +
+        "auth = EXCLUDED.auth, " +
+        "user_agent = EXCLUDED.user_agent, " +
+        "updated_at = NOW() " +
+        "RETURNING id",
+      [accountId, accountEmail, endpoint, p256dh, auth, userAgent || null],
     )
-
-    const existing = await query(
-      `UPDATE push_subscriptions
-         SET admin_email=$1, p256dh=$2, auth=$3, user_agent=$4, updated_at=NOW()
-       WHERE endpoint=$5 AND admin_id=$6
-       RETURNING id`,
-      [accountEmail, p256dh, auth, userAgent || null, endpoint, accountId],
-    )
-
-    let subId
-    if (existing.rows[0]) {
-      subId = existing.rows[0].id
-    } else {
-      const inserted = await query(
-        `INSERT INTO push_subscriptions (admin_id, admin_email, endpoint, p256dh, auth, user_agent)
-         VALUES ($1,$2,$3,$4,$5,$6) RETURNING id`,
-        [accountId, accountEmail, endpoint, p256dh, auth, userAgent || null],
-      )
-      subId = inserted.rows[0]?.id
-    }
+    const subId = saved.rows[0]?.id
 
     logger.info(`[Push] Account ${accountId} subscribed (subId=${subId})`)
     return res.json({ success: true, id: subId })
