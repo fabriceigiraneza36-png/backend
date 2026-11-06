@@ -1249,6 +1249,10 @@ const ensureTestimonialsSchema = async () => {
     await addColumns("testimonials", [
       { name: "user_id",   type: "INTEGER" },
       { name: "is_active", type: "BOOLEAN DEFAULT false" },
+      { name: "trip_entity_type", type: "VARCHAR(24)" },
+      { name: "trip_entity_id", type: "BIGINT" },
+      { name: "expectations_met", type: "VARCHAR(24)" },
+      { name: "review_answers", type: "JSONB NOT NULL DEFAULT '[]'::jsonb" },
     ]);
 
     await pool.query(
