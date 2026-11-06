@@ -113,18 +113,45 @@ async function recordDiagnostic(input = {}) {
   const userAgent = clean(input.userAgent, 500) || null;
   const details = normalizeDetails(input.details);
 
-  await query(
+  const severity = category === "unexpected" || category === "invalid_credential" ? "error" : "warning"
+  const inserted = await query(
     `INSERT INTO auth_diagnostics
       (reference_id, provider, stage, category, error_code, source, severity,
        http_status, message, details, page_path, origin, user_agent)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)
-     ON CONFLICT (reference_id) DO NOTHING`,
+     ON CONFLICT (reference_id) DO NOTHING
+     RETURNING reference_id`,
     [
       referenceId, provider, stage, category, errorCode, source,
-      category === "unexpected" || category === "invalid_credential" ? "error" : "warning",
+      severity,
       httpStatus, message, JSON.stringify(details), pagePath, origin || null, userAgent,
     ],
   );
+
+  // Notify admins only for a newly stored reference. Client retries and
+  // duplicate server reports cannot generate duplicate alerts.
+  if (inserted.rows?.length) {
+    try {
+      const { notifyAdminsImmediately } = require("./notificationsController");
+      const title = "Authentication defect detected: " + provider;
+      const alertMessage = (severity === "error" ? "Error" : "Warning") + " in " + stage +
+        " (" + category + ") — " + message + ". Reference: " + referenceId;
+      notifyAdminsImmediately({
+        type: "auth_diagnostic_created",
+        category: "security",
+        title,
+        message: alertMessage,
+        actionUrl: "/auth-diagnostics?referenceId=" + encodeURIComponent(referenceId),
+        actionLabel: "Review authentication defect",
+        priority: severity === "error" ? "high" : "normal",
+        metadata: { referenceId, provider, stage, category, errorCode, source, severity, httpStatus, pagePath },
+      }).catch((notificationError) => {
+        console.warn("[AuthDiagnostics] Admin notification failed:", notificationError.message);
+      });
+    } catch (notificationError) {
+      console.warn("[AuthDiagnostics] Notification service unavailable:", notificationError.message);
+    }
+  }
   return referenceId;
 }
 
