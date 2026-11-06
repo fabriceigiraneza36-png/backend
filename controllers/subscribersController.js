@@ -205,6 +205,21 @@ exports.subscribe = async (req, res, next) => {
       );
       subscriberRow = result.rows[0];
       logger.info(`[Subscribers] New subscriber: ${cleanEmail}`);
+
+      // A new subscription is useful admin activity. Re-subscriptions do not
+      // create another alert, keeping the inbox free from repeat noise.
+      createNotificationInternal({
+        targetScope: 'role',
+        targetRole: 'admin',
+        type: 'subscriber_new',
+        category: 'subscriber',
+        title: 'New newsletter subscriber',
+        message: (name || cleanEmail) + ' subscribed to Altuvera updates.',
+        actionUrl: '/subscribers',
+        actionLabel: 'View subscribers',
+        priority: 'normal',
+        metadata: { subscriberId: subscriberRow.id, subscriberEmail: cleanEmail, subscriberName: name || null, source },
+      }).catch((notificationError) => logger.warn('[Subscribers] Admin notification failed:', notificationError.message));
     }
 
     // ── Update user subscribed flag ───────────────────────────────────────────
