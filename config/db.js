@@ -118,7 +118,7 @@ const query = async (text, params = [], retry = true) => {
     const statementMs = Date.now() - statementStartedAt;
     const totalMs = acquireMs + statementMs;
     const poolState = `pool=${pool.totalCount}/${poolOptions.max}; waiting=${pool.waitingCount}`;
-    const sqlSummary = String(text).replace(/\\s+/g, " ").trim().slice(0, 160);
+    const sqlSummary = String(text).replace(/\s+/g, " ").trim().slice(0, 160);
 
     if (acquireMs >= slowQueryThresholdMs) {
       logger.warn(
@@ -152,7 +152,7 @@ const query = async (text, params = [], retry = true) => {
     ) {
       const tableMatch = typeof err.message === "string"
         ? err.message.match(
-            /permission denied for (?:relation|table)\\s+"?([a-zA-Z0-9_]+)"?/i,
+            /permission denied for (?:relation|table)\s+"?([a-zA-Z0-9_]+)"?/i,
           )
         : null;
       const table = tableMatch?.[1] || null;
