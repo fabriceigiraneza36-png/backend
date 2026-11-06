@@ -584,6 +584,7 @@ const ensurePackagesSchema = async () => {
     `);
 
     await pool.query(`ALTER TABLE packages ADD COLUMN IF NOT EXISTS destination_id INTEGER`);
+    await pool.query(`ALTER TABLE packages ADD COLUMN IF NOT EXISTS review_questions JSONB NOT NULL DEFAULT '[]'::jsonb`).catch(() => {});
 
     // ── package_messages ──────────────────────────────────────────────────
     await pool.query(`
