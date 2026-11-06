@@ -244,6 +244,8 @@ exports.searchReviewContexts = async (req, res, next) => {
          LEFT JOIN destinations d ON d.id = p.destination_id
          LEFT JOIN countries c ON c.id = d.country_id
          WHERE COALESCE(p.is_published, true) = true
+           AND d.is_active = true
+           AND d.status = 'published'
            AND LOWER(COALESCE(c.continent, '')) = 'africa'
            AND p.title ILIKE $1
        ) AS matches
@@ -334,7 +336,9 @@ exports.submitPublic = async (req, res, next) => {
         contextResult = await query(
           `SELECT d.id, d.name AS title, COALESCE(d.review_questions, '[]'::jsonb) AS review_questions
            FROM destinations d
+           LEFT JOIN countries c ON c.id = d.country_id
            WHERE d.id = $1 AND d.is_active = true AND d.status = 'published'
+             AND LOWER(COALESCE(c.continent, '')) = 'africa'
            LIMIT 1`,
           [rawEntityId],
         );
@@ -351,7 +355,11 @@ exports.submitPublic = async (req, res, next) => {
         contextResult = await query(
           `SELECT p.id, p.title, COALESCE(p.review_questions, '[]'::jsonb) AS review_questions
            FROM packages p
+           INNER JOIN destinations d ON d.id = p.destination_id
+           INNER JOIN countries c ON c.id = d.country_id
            WHERE p.id = $1 AND COALESCE(p.is_published, true) = true
+             AND d.is_active = true AND d.status = 'published'
+             AND LOWER(COALESCE(c.continent, '')) = 'africa'
            LIMIT 1`,
           [rawEntityId],
         );
