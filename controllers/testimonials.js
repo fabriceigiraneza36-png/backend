@@ -5,6 +5,13 @@ const { paginate } = require("../utils/helpers");
 const logger       = require("../utils/logger");
 const { destroyCloudinaryUrls } = require("../utils/cloudinaryCleanup");
 
+let notifyAdminsImmediately = null;
+try { ({ notifyAdminsImmediately } = require("./notificationsController")); }
+catch (err) { logger.warn("[Testimonials] Admin notification service unavailable:", err.message); }
+let sendEmail = null;
+try { ({ sendEmail } = require("../utils/email")); }
+catch (err) { logger.warn("[Testimonials] Email service unavailable:", err.message); }
+
 // ── Column list ───────────────────────────────────────────────────────────
 const COLS = `
   id, name, location, avatar_url, rating, trip, date_text,
@@ -52,7 +59,10 @@ const ensureSchema = async () => {
     // Backfill user_id column for tables created before this version
     await query(
       `ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS user_id INTEGER`,
-    ).catch(() => {}); // no-op if already exists
+    ).catch(() => {});
+    await query(
+      `ALTER TABLE testimonials ADD COLUMN IF NOT EXISTS approval_email_sent_at TIMESTAMPTZ`,
+    ).catch(() => {});
 
     // Indexes
     const indexes = [
@@ -310,6 +320,22 @@ exports.submitPublic = async (req, res, next) => {
       words:  wc,
     });
 
+    if (typeof notifyAdminsImmediately === "function") {
+      notifyAdminsImmediately({
+        type: "testimonial_submitted",
+        category: "review",
+        title: "A new traveller review is awaiting approval",
+        message: `${displayName} submitted a ${ratingNum}-star review. Please review it before publication.`,
+        actionUrl: `/testimonials?testimonialId=${encodeURIComponent(result.rows[0].id)}`,
+        actionLabel: "Review submission",
+        priority: "high",
+        user: { id: user.id, email: user.email, name: displayName, avatar_url: user.avatar },
+        metadata: { testimonialId: result.rows[0].id, userId: user.id },
+      }).catch((notificationError) => logger.warn(
+        "[Testimonials] Admin notification failed:", notificationError.message,
+      ));
+    }
+
     return res.status(201).json({
       success: true,
       message:
@@ -533,6 +559,39 @@ exports.toggleFeatured = async (req, res, next) => {
   } catch (err) { next(err); }
 };
 
+const escapeReviewEmail = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+  "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+}[char]));
+
+const buildReviewApprovedEmail = (review, recipientName) => {
+  const esc = escapeReviewEmail;
+  const base = String(process.env.FRONTEND_URL || "https://www.altuverasafaris.com").replace(/\/+$/, "");
+  const firstName = String(recipientName || review.name || "there").trim().split(/\s+/)[0];
+  const stars = "★".repeat(Math.max(0, Math.min(5, Number(review.rating) || 0)));
+  const trip = review.trip ? '<div style="display:inline-block;margin-top:13px;padding:6px 11px;border-radius:99px;background:#edf7f1;border:1px solid #d8ecdf;color:#087d5a;font-size:11px;font-weight:700;">' + esc(review.trip) + '</div>' : "";
+  const location = review.location ? '<span style="color:#829087;font-size:11px;">' + esc(review.location) + '</span>' : "";
+  const avatar = review.avatar_url && /^https:\/\//i.test(review.avatar_url)
+    ? '<img src="' + esc(review.avatar_url) + '" width="42" height="42" alt="" style="width:42px;height:42px;border-radius:50%;object-fit:cover;border:2px solid #dcefe3;" />'
+    : '<span style="display:inline-block;width:42px;height:42px;line-height:42px;text-align:center;border-radius:50%;background:#edf7f1;color:#087d5a;font-weight:800;">' + esc(String(review.name || "A").trim().slice(0,2).toUpperCase()) + '</span>';
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>' +
+    '<body style="margin:0;background:#f4f8f5;font-family:Arial,Helvetica,sans-serif;color:#17392d;">' +
+    '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f8f5;padding:24px 10px;"><tr><td align="center">' +
+    '<table role="presentation" width="580" cellpadding="0" cellspacing="0" style="width:100%;max-width:580px;background:#fff;border:1px solid #e1ece4;border-radius:18px;overflow:hidden;">' +
+    '<tr><td style="padding:18px 24px;background:#064e3b;background-image:linear-gradient(135deg,#063d2e,#087d5a);">' +
+    '<table role="presentation" width="100%"><tr><td width="76"><img src="' + esc(process.env.EMAIL_LOGO_URL || "https://www.altuverasafaris.com/altuvera.png") + '" width="70" height="38" alt="Altuvera" style="display:block;width:70px;height:38px;object-fit:contain;background:#fff;border-radius:7px;padding:3px;"></td><td style="padding-left:12px;color:#fff;font-size:17px;font-weight:800;">Altuvera<span style="display:block;margin-top:4px;color:#b9f2d4;font-size:9px;letter-spacing:1px;">AFRICAN ADVENTURES</span></td></tr></table>' +
+    '</td></tr><tr><td style="padding:28px 28px 12px;"><p style="margin:0 0 8px;color:#087d5a;font-size:10px;font-weight:800;letter-spacing:1.2px;text-transform:uppercase;">Your voice matters</p>' +
+    '<h1 style="margin:0 0 12px;color:#17392d;font-size:25px;line-height:1.25;">Thank you, ' + esc(firstName) + '.</h1>' +
+    '<p style="margin:0;color:#52685d;font-size:14px;line-height:1.75;">We truly appreciate you taking the time to share your experience with Altuvera. Your review has been approved and is now published on our website. Your words help other travellers plan meaningful journeys across Africa.</p>' +
+    '</td></tr><tr><td style="padding:12px 22px 25px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid #e1ece4;border-radius:18px;box-shadow:0 12px 34px rgba(18,59,39,.07);"><tr><td style="padding:22px 22px 10px;">' +
+    '<table role="presentation" width="100%"><tr><td valign="middle"><span style="color:#0b8b62;font-family:Georgia,serif;font-size:40px;line-height:1;">“</span></td><td align="right" valign="middle"><span style="color:#e5a82c;font-size:16px;letter-spacing:2px;">' + stars + '</span></td></tr></table>' +
+    '<p style="margin:8px 0 14px;color:#42564b;font-size:14px;line-height:1.85;">' + esc(review.testimonial_text).replace(/\n/g, "<br>") + '</p>' + trip +
+    '</td></tr><tr><td style="padding:15px 22px 20px;border-top:1px solid #edf2ee;"><table role="presentation"><tr><td valign="middle" width="54">' + avatar + '</td><td valign="middle" style="padding-left:10px;"><strong style="display:block;color:#203d30;font-size:13px;">' + esc(review.name) + '</strong>' + location + '</td></tr></table></td></tr></table>' +
+    '<p style="margin:16px 2px 0;color:#819087;font-size:11px;line-height:1.6;">This is a preview of the testimonial card style used on our website. The live page adapts its layout to each screen size.</p>' +
+    '<p style="margin:22px 0 0;text-align:center;"><a href="' + esc(base + "/services") + '" style="display:inline-block;padding:13px 22px;border-radius:999px;background:#087d5a;color:#fff;text-decoration:none;font-size:13px;font-weight:700;">View your published review</a></p>' +
+    '</td></tr><tr><td style="padding:16px 24px;background:#f7faf8;border-top:1px solid #e5eee8;color:#82938a;font-size:10px;line-height:1.6;">Thank you for travelling with Altuvera. Questions? <a href="mailto:info@altuverasafaris.com" style="color:#087d5a;">info@altuverasafaris.com</a><br>© ' + new Date().getFullYear() + ' Altuvera</td></tr>' +
+    '</table></td></tr></table></body></html>';
+};
+
 /** PATCH /api/testimonials/:id/toggle-active */
 exports.toggleActive = async (req, res, next) => {
   try {
@@ -546,7 +605,7 @@ exports.toggleActive = async (req, res, next) => {
       `UPDATE testimonials
          SET is_active = NOT is_active, updated_at = NOW()
        WHERE id = $1
-       RETURNING ${COLS}`,
+       RETURNING ${COLS}, user_id, approval_email_sent_at`,
       [id],
     );
 
@@ -556,6 +615,30 @@ exports.toggleActive = async (req, res, next) => {
       });
 
     const row = result.rows[0];
+
+    if (row.is_active && row.user_id && !row.approval_email_sent_at && typeof sendEmail === "function") {
+      try {
+        const recipientResult = await query(
+          "SELECT email, full_name FROM users WHERE id = $1 LIMIT 1",
+          [row.user_id],
+        );
+        const recipient = recipientResult.rows[0];
+        if (recipient?.email) {
+          await sendEmail({
+            to: recipient.email,
+            subject: "Your Altuvera review is now published — thank you",
+            html: buildReviewApprovedEmail(row, recipient.full_name || row.name),
+          });
+          await query(
+            "UPDATE testimonials SET approval_email_sent_at = NOW() WHERE id = $1 AND approval_email_sent_at IS NULL",
+            [id],
+          );
+        }
+      } catch (emailError) {
+        logger.warn("[Testimonials] Approval email could not be sent:", emailError.message);
+      }
+    }
+
     res.json({
       success: true,
       data:    row,
