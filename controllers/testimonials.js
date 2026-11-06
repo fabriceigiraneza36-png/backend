@@ -480,12 +480,22 @@ exports.update = async (req, res, next) => {
       });
 
     const existing = await query(
-      "SELECT id FROM testimonials WHERE id = $1", [id],
+      "SELECT id, user_id FROM testimonials WHERE id = $1", [id],
     );
     if (!existing.rows[0])
       return res.status(404).json({
         success: false, error: "Testimonial not found",
       });
+
+    // Public-user submissions are immutable after submission. Admin-authored
+    // testimonials have user_id NULL and remain editable by administrators.
+    if (existing.rows[0].user_id != null) {
+      return res.status(403).json({
+        success: false,
+        error: "User-submitted reviews cannot be edited by administrators. You may approve, feature, deactivate, or remove them.",
+        code: "USER_REVIEW_IMMUTABLE",
+      });
+    }
 
     const updates = {};
     for (const field of ALLOWED_FIELDS) {
