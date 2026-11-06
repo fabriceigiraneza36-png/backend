@@ -134,6 +134,7 @@ const packagePayload = (body = {}, existing = {}) => {
     highlights: jsonList(body.highlights, existing.highlights || []),
     inclusions: jsonList(body.inclusions, existing.inclusions || []),
     exclusions: jsonList(body.exclusions, existing.exclusions || []),
+    review_questions: jsonList(body.review_questions, existing.review_questions || []),
     is_published: body.is_published === undefined ? (existing.is_published ?? false) : Boolean(body.is_published),
     is_featured: body.is_featured === undefined ? (existing.is_featured ?? false) : Boolean(body.is_featured),
   }
@@ -186,6 +187,7 @@ const ensurePackagesSchema = async () => {
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS highlights JSONB DEFAULT '[]'::jsonb`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS inclusions JSONB DEFAULT '[]'::jsonb`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS exclusions JSONB DEFAULT '[]'::jsonb`,
+      `ALTER TABLE packages ADD COLUMN IF NOT EXISTS review_questions JSONB DEFAULT '[]'::jsonb`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS duration_nights INTEGER`,
       `ALTER TABLE packages ADD COLUMN IF NOT EXISTS short_description TEXT`,
     ]
@@ -495,12 +497,12 @@ router.post('/', requireAdmin, async (req, res) => {
     const result = await db(
       `INSERT INTO packages
         (title, slug, description, short_description, cover_image_url, image_gallery, poster_mode,
-         destination_id, price, currency, duration_days, duration_nights, category, highlights, inclusions, exclusions, is_published, is_featured)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17,$18) RETURNING *`,
+         destination_id, price, currency, duration_days, duration_nights, category, highlights, inclusions, exclusions, review_questions, is_published, is_featured)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18,$19) RETURNING *`,
       [payload.title, payload.slug, payload.description, payload.short_description, payload.cover_image_url,
        JSON.stringify(payload.image_gallery), payload.poster_mode, payload.destination_id, payload.price, payload.currency,
        payload.duration_days, payload.duration_nights, payload.category, JSON.stringify(payload.highlights),
-       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), payload.is_published, payload.is_featured],
+       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), JSON.stringify(payload.review_questions), payload.is_published, payload.is_featured],
     )
     return res.status(201).json({ success: true, data: result.rows[0] })
   } catch (err) {
@@ -525,12 +527,12 @@ router.patch('/:id', requireAdmin, async (req, res) => {
       `UPDATE packages SET title=$1, description=$2, short_description=$3, cover_image_url=$4,
        image_gallery=$5::jsonb, poster_mode=$6, destination_id=$7, price=$8, currency=$9,
        duration_days=$10, duration_nights=$11, category=$12, highlights=$13::jsonb,
-       inclusions=$14::jsonb, exclusions=$15::jsonb, is_published=$16, is_featured=$17, updated_at=NOW()
-       WHERE id=$18 RETURNING *`,
+       inclusions=$14::jsonb, exclusions=$15::jsonb, review_questions=$16::jsonb, is_published=$17, is_featured=$18, updated_at=NOW()
+       WHERE id=$19 RETURNING *`,
       [payload.title, payload.description, payload.short_description, payload.cover_image_url,
        JSON.stringify(payload.image_gallery), payload.poster_mode, payload.destination_id, payload.price, payload.currency,
        payload.duration_days, payload.duration_nights, payload.category, JSON.stringify(payload.highlights),
-       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), payload.is_published, payload.is_featured, req.params.id],
+       JSON.stringify(payload.inclusions), JSON.stringify(payload.exclusions), JSON.stringify(payload.review_questions), payload.is_published, payload.is_featured, req.params.id],
     )
     const row = result.rows[0]
     return res.json({
