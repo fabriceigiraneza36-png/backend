@@ -159,7 +159,7 @@ const getResourceId = (path) => {
 }
 
 const isAdminPanelOrigin = (origin) => {
-  if (!origin) return true
+  if (!origin) return false
   try {
     const host = new URL(origin).hostname.toLowerCase()
     return host === 'altuverapanel.vercel.app'
@@ -191,7 +191,7 @@ const adminActivityAudit = (req, res, next) => {
     const token = extractToken(req)
     if (token && process.env.JWT_SECRET) decoded = jwt.verify(token, process.env.JWT_SECRET)
   } catch { /* invalid tokens are never audited */ }
-  if (!decoded || !isAdminDecoded(decoded)) return next()
+  if (!decoded) return next()
 
   let responseBody = null
   const originalJson = res.json
