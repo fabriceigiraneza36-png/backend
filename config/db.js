@@ -96,23 +96,54 @@ const slowQueryThresholdMs = Math.max(
   Number.parseInt(process.env.DB_SLOW_QUERY_MS, 10) || 750,
 );
 
-const query = async (text, params = []) => {
-  const start = Date.now();
+const isTransientConnectionError = (err) =>
+  err?.code === "ECONNRESET" ||
+  err?.code === "57P01" ||
+  err?.code === "57P03" ||
+  err?.message?.includes("Connection terminated");
+
+const query = async (text, params = [], retry = true) => {
+  let client;
+  const acquireStartedAt = Date.now();
+  let acquireMs = 0;
+
   try {
-    const result   = await pool.query(text, params);
-    const duration = Date.now() - start;
-    // This measures end-to-end pool/network round-trip, not server execution
-    // time alone. Keep SQL compact and include pool pressure for diagnosis.
-    if (duration >= slowQueryThresholdMs) {
-      const sqlSummary = String(text).replace(/\s+/g, " ").trim().slice(0, 160);
+    // Measure waiting for an existing client or creating a fresh TCP/TLS
+    // connection separately from the SQL request itself.
+    client = await pool.connect();
+    acquireMs = Date.now() - acquireStartedAt;
+
+    const statementStartedAt = Date.now();
+    const result = await client.query(text, params);
+    const statementMs = Date.now() - statementStartedAt;
+    const totalMs = acquireMs + statementMs;
+    const poolState = `pool=${pool.totalCount}/${poolOptions.max}; waiting=${pool.waitingCount}`;
+    const sqlSummary = String(text).replace(/\\s+/g, " ").trim().slice(0, 160);
+
+    if (acquireMs >= slowQueryThresholdMs) {
       logger.warn(
-        `[DB] Slow database round-trip (${duration}ms; pool=${pool.totalCount}/${poolOptions.max}; waiting=${pool.waitingCount}): ${sqlSummary}`,
+        `[DB] Slow connection acquisition (${acquireMs}ms; statement=${statementMs}ms; total=${totalMs}ms; ${poolState}): ${sqlSummary}`,
       );
-    } else if (duration >= 250) {
-      logger.debug(`[DB] Database round-trip ${duration}ms`);
+    }
+    if (statementMs >= slowQueryThresholdMs) {
+      logger.warn(
+        `[DB] Slow PostgreSQL statement round-trip (${statementMs}ms; acquire=${acquireMs}ms; total=${totalMs}ms; ${poolState}): ${sqlSummary}`,
+      );
+    }
+    if (totalMs >= 250 && acquireMs < slowQueryThresholdMs && statementMs < slowQueryThresholdMs) {
+      logger.debug(
+        `[DB] Database request ${totalMs}ms (acquire=${acquireMs}ms; statement=${statementMs}ms)`,
+      );
     }
     return result;
   } catch (err) {
+    const connectionDropped = isTransientConnectionError(err);
+    if (client) {
+      // Destroy only broken connections. SQL errors must not churn healthy clients.
+      client.release(connectionDropped ? err : undefined);
+      client = null;
+    }
+
     // Permission denied
     if (
       err.code === "42501" ||
@@ -121,11 +152,11 @@ const query = async (text, params = []) => {
     ) {
       const tableMatch = typeof err.message === "string"
         ? err.message.match(
-            /permission denied for (?:relation|table)\s+\"?([a-zA-Z0-9_]+)\"?/i,
+            /permission denied for (?:relation|table)\\s+"?([a-zA-Z0-9_]+)"?/i,
           )
         : null;
-      const table    = tableMatch?.[1] || null;
-      const user     = dbConfig.user     || process.env.DB_USER || "unknown";
+      const table = tableMatch?.[1] || null;
+      const user = dbConfig.user || process.env.DB_USER || "unknown";
       const database = dbConfig.database || process.env.DB_NAME || "unknown";
 
       const permissionError = new Error(
@@ -133,24 +164,20 @@ const query = async (text, params = []) => {
           `Connected as "${user}" to database "${database}". ` +
           `Fix by granting privileges to this role (or run migrations as the table owner).`,
       );
-      permissionError.statusCode  = 403;
-      permissionError.errorCode   = "DB_PERMISSION_DENIED";
+      permissionError.statusCode = 403;
+      permissionError.errorCode = "DB_PERMISSION_DENIED";
       permissionError.originalError = err.message;
       throw permissionError;
     }
 
-    // Retry once on transient connection errors
-    if (
-      err.code === "ECONNRESET" ||
-      err.code === "57P01" ||
-      err.code === "57P03" ||
-      err.message?.includes("Connection terminated")
-    ) {
+    if (connectionDropped && retry) {
       logger.warn("[DB] Connection dropped, retrying query...");
-      return pool.query(text, params);
+      return query(text, params, false);
     }
 
     throw err;
+  } finally {
+    if (client) client.release();
   }
 };
 
