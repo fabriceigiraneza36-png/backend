@@ -889,6 +889,98 @@ app.get('/api/routes', (req, res) => {
 })
 
 // -------------------------------------------------------------------------------
+// ADMIN DELETION AUDIT — persist a clear admin notification after every
+// successful destructive admin API action, including bulk deletes and purges.
+// Notification deletion endpoints are excluded to avoid self-generating noise.
+// -------------------------------------------------------------------------------
+app.use((req, res, next) => {
+  const originalJson = res.json.bind(res)
+  res.json = (body) => {
+    const response = originalJson(body)
+    const method = String(req.method || '').toUpperCase()
+    const endpoint = String(req.originalUrl || req.url || '').split('?')[0]
+    const isPurge = method === 'POST' && /^\\/api\\/maintenance\\/purge\\/[^/]+/i.test(endpoint)
+    const isDelete = method === 'DELETE'
+    const role = String(req.user?.role || req.admin?.role || '').toLowerCase()
+    const isAdminAction = ['admin', 'manager'].includes(role)
+    const isNotificationMaintenance = /^\\/api\\/(?:admin\\/)?notifications(?:\\/|$)/i.test(endpoint)
+
+    if ((isDelete || isPurge) && isAdminAction && !isNotificationMaintenance
+        && res.statusCode >= 200 && res.statusCode < 300
+        && body?.success !== false) {
+      const segments = endpoint.split('/').filter(Boolean)
+      const purgeCategory = isPurge ? segments[segments.length - 1] : ''
+      const routeKey = isPurge ? purgeCategory : (segments[1] || 'records')
+      const labelMap = {
+        bookings: 'bookings', package_bookings: 'package bookings',
+        packages: 'packages', destinations: 'destinations', countries: 'countries',
+        users: 'user accounts', posts: 'posts', testimonials: 'reviews',
+        reviews: 'reviews', contact: 'contact messages', subscribers: 'subscribers',
+        team: 'team members', gallery: 'gallery items', faqs: 'FAQs',
+        services: 'services', tips: 'travel tips', itineraries: 'itineraries',
+      }
+      const entity = labelMap[routeKey] || routeKey.replace(/[-_]/g, ' ')
+      const resultValues = body?.results && typeof body.results === 'object'
+        ? Object.values(body.results) : []
+      const reportedCount = Number(
+        body?.deleted ?? body?.deletedCount ?? body?.affected ?? body?.count
+        ?? resultValues.reduce((sum, item) => sum + Number(item?.deleted || 0), 0)
+      )
+      const affectedCount = Number.isFinite(reportedCount) && reportedCount > 0
+        ? reportedCount : 1
+      const isWholeTable = isPurge || /(?:purge|truncate|delete-all|clear-all)/i.test(endpoint)
+      const operation = isWholeTable ? 'table_purge' : affectedCount > 1 ? 'bulk_delete' : 'single_delete'
+      const actorName = req.user?.full_name || req.user?.name || req.user?.email || 'An administrator'
+      const title = isWholeTable
+        ? `Table purge completed: ${entity}`
+        : affectedCount > 1
+          ? `${affectedCount} ${entity} deleted`
+          : `${entity.charAt(0).toUpperCase() + entity.slice(1)} deleted`
+      const message = isWholeTable
+        ? `${actorName} completed a full purge of the ${entity} data set. ${affectedCount} record(s) were removed.`
+        : affectedCount > 1
+          ? `${actorName} deleted ${affectedCount} ${entity} in one bulk action.`
+          : `${actorName} deleted a ${entity.replace(/s$/, '')} record.`
+      const actionPaths = {
+        bookings: '/bookings', package_bookings: '/bookings',
+        packages: '/packages', destinations: '/destinations', countries: '/countries',
+        users: '/users', posts: '/posts', testimonials: '/testimonials',
+        reviews: '/comments', contact: '/contact', subscribers: '/subscribers',
+        gallery: '/gallery', team: '/team', faqs: '/faqs',
+        services: '/services', tips: '/tips', itineraries: '/itineraries',
+      }
+      const actionUrl = actionPaths[routeKey] || '/notifications'
+      const tables = resultValues.map((item) => ({
+        table: item?.table || item?.name || null,
+        deleted: Number(item?.deleted || 0),
+      })).filter((item) => item.table || item.deleted)
+      try {
+        const { notifyAdminsImmediately } = require('./controllers/notificationsController')
+        Promise.resolve(notifyAdminsImmediately({
+          type: 'admin_data_deleted',
+          category: 'system',
+          title,
+          message,
+          actionUrl,
+          actionLabel: 'Review deletion activity',
+          priority: 'high',
+          user: req.user || null,
+          metadata: {
+            operation, entity, endpoint, affectedCount,
+            actorId: req.user?.id || req.admin?.id || null,
+            actorName, tables, source: 'admin-panel',
+          },
+        })).catch((error) => logger.warn('[Admin deletion audit] notification failed:', error.message))
+      } catch (error) {
+        logger.warn('[Admin deletion audit] could not queue notification:', error.message)
+      }
+    }
+    return response
+  }
+  next()
+})
+
+// -------------------------------------------------------------------------------
 // API ROUTES
 // -------------------------------------------------------------------------------
 
