@@ -889,6 +889,8 @@ app.get('/api/routes', (req, res) => {
 })
 
 // -------------------------------------------------------------------------------
+const pendingAdminDeletionAuditBatches = new Map()
+
 // ADMIN DELETION AUDIT — persist a clear admin notification after every
 // successful destructive admin API action, including bulk deletes and purges.
 // Notification deletion endpoints are excluded to avoid self-generating noise.
@@ -931,16 +933,6 @@ app.use((req, res, next) => {
       const isWholeTable = isPurge || /(?:purge|truncate|delete-all|clear-all)/i.test(endpoint)
       const operation = isWholeTable ? 'table_purge' : affectedCount > 1 ? 'bulk_delete' : 'single_delete'
       const actorName = req.user?.full_name || req.user?.name || req.user?.email || 'An administrator'
-      const title = isWholeTable
-        ? `Table purge completed: ${entity}`
-        : affectedCount > 1
-          ? `${affectedCount} ${entity} deleted`
-          : `${entity.charAt(0).toUpperCase() + entity.slice(1)} deleted`
-      const message = isWholeTable
-        ? `${actorName} completed a full purge of the ${entity} data set. ${affectedCount} record(s) were removed.`
-        : affectedCount > 1
-          ? `${actorName} deleted ${affectedCount} ${entity} in one bulk action.`
-          : `${actorName} deleted a ${entity.replace(/s$/, '')} record.`
       const actionPaths = {
         bookings: '/bookings', package_bookings: '/bookings',
         packages: '/packages', destinations: '/destinations', countries: '/countries',
@@ -954,25 +946,57 @@ app.use((req, res, next) => {
         table: item?.table || item?.name || null,
         deleted: Number(item?.deleted || 0),
       })).filter((item) => item.table || item.deleted)
-      try {
-        const { notifyAdminsImmediately } = require('./controllers/notificationsController')
-        Promise.resolve(notifyAdminsImmediately({
-          type: 'admin_data_deleted',
-          category: 'system',
-          title,
-          message,
-          actionUrl,
-          actionLabel: 'Review deletion activity',
-          priority: 'high',
-          user: req.user || null,
-          metadata: {
-            operation, entity, endpoint, affectedCount,
-            actorId: req.user?.id || req.admin?.id || null,
-            actorName, tables, source: 'admin-panel',
-          },
-        })).catch((error) => logger.warn('[Admin deletion audit] notification failed:', error.message))
-      } catch (error) {
-        logger.warn('[Admin deletion audit] could not queue notification:', error.message)
+      const actorId = req.user?.id || req.admin?.id || null
+      const actorName = req.user?.full_name || req.user?.name || req.user?.email || 'An administrator'
+      const emitAudit = (count, batched = false) => {
+        const bulk = !isWholeTable && (count > 1 || batched)
+        const operation = isWholeTable ? 'table_purge' : bulk ? 'bulk_delete' : 'single_delete'
+        const title = isWholeTable
+          ? `Table purge completed: ${entity}`
+          : bulk
+            ? `${count} ${entity} deleted`
+            : `${entity.charAt(0).toUpperCase() + entity.slice(1)} deleted`
+        const message = isWholeTable
+          ? `${actorName} completed a full purge of the ${entity} data set. ${count} record(s) were removed.`
+          : bulk
+            ? `${actorName} deleted ${count} ${entity} in one bulk action.`
+            : `${actorName} deleted a ${entity.replace(/s$/, '')} record.`
+        try {
+          const { notifyAdminsImmediately } = require('./controllers/notificationsController')
+          Promise.resolve(notifyAdminsImmediately({
+            type: 'admin_data_deleted',
+            category: 'system',
+            title,
+            message,
+            actionUrl,
+            actionLabel: 'Review deletion activity',
+            priority: 'high',
+            user: req.user || null,
+            metadata: {
+              operation, entity, endpoint, affectedCount: count,
+              actorId, actorName, tables, source: 'admin-panel',
+            },
+          })).catch((error) => logger.warn('[Admin deletion audit] notification failed:', error.message))
+        } catch (error) {
+          logger.warn('[Admin deletion audit] could not queue notification:', error.message)
+        }
+      }
+
+      // Bulk selection UIs that call DELETE once per selected row are folded
+      // into one useful admin alert rather than producing a notification flood.
+      if (isWholeTable) {
+        emitAudit(affectedCount)
+      } else {
+        const batchKey = [actorId || 'admin', routeKey, actionUrl].join(':')
+        const pending = pendingAdminDeletionAuditBatches.get(batchKey) || { count: 0, calls: 0, timer: null }
+        pending.count += affectedCount
+        pending.calls += 1
+        if (pending.timer) clearTimeout(pending.timer)
+        pending.timer = setTimeout(() => {
+          pendingAdminDeletionAuditBatches.delete(batchKey)
+          emitAudit(pending.count, pending.calls > 1)
+        }, 900)
+        pendingAdminDeletionAuditBatches.set(batchKey, pending)
       }
     }
     return response
