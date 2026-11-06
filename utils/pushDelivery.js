@@ -6,8 +6,23 @@ const { getUserBrowserPushEnabled } = require("./pushSettings");
 
 const ADMIN_ROLES = ["admin", "manager"];
 
-const absoluteUrl = (base, path) => {
+const normalizeActionUrl = (path) => {
   const value = String(path || "/notifications");
+  try {
+    const parsed = new URL(value, "https://altuverapanel.vercel.app");
+    const bookingMatch = parsed.pathname.match(/^\/bookings\/([^/]+)\/?$/i);
+    if (bookingMatch) {
+      parsed.pathname = "/bookings";
+      parsed.searchParams.set("bookingId", decodeURIComponent(bookingMatch[1]));
+      return /^https?:\/\//i.test(value) ? parsed.toString() : parsed.pathname + parsed.search;
+    }
+    if (/^\/dashboard\/?$/i.test(parsed.pathname)) return "/notifications";
+  } catch { /* keep the supplied safe path */ }
+  return value;
+};
+
+const absoluteUrl = (base, path) => {
+  const value = normalizeActionUrl(path);
   if (/^https?:\/\//i.test(value)) return value;
   const normalizedBase = String(base || "").replace(/\/$/, "");
   return normalizedBase + (value.startsWith("/") ? value : "/" + value);
